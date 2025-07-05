@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     deepseek_api_key: str = "test_key"
     deepseek_model: str = "deepseek-chat"
     
+    # Workflow Configuration
+    workflow_type: str = "sequential"  # Options: "sequential", "tool_calling"
+    
     # Telegram Bot
     telegram_bot_token: str = "test_token"
     telegram_chat_id: str = "test_chat_id"

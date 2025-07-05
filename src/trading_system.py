@@ -8,7 +8,7 @@ from src.apis.alpaca_api import AlpacaAPI
 from src.apis.tiingo_api import TiingoAPI
 from src.apis.telegram_bot import TelegramBot
 from src.events.event_system import EventSystem, event_system
-from src.agents.trading_workflow import TradingWorkflow
+from src.agents.workflow_factory import WorkflowFactory, validate_workflow_config
 from src.scheduler.trading_scheduler import TradingScheduler
 from src.models.trading_models import (
     Order, Portfolio, TradingEvent, OrderSide, OrderType, 
@@ -29,10 +29,21 @@ class TradingSystem:
         self.tiingo_api = TiingoAPI()
         self.telegram_bot = TelegramBot(trading_system=self)
         
+        # Validate workflow configuration
+        if not validate_workflow_config():
+            logger.warning("Workflow configuration validation failed, using default settings")
+        
         # Initialize core components
         self.event_system = event_system
-        self.trading_workflow = TradingWorkflow(self.alpaca_api, self.tiingo_api, self.telegram_bot)
+        self.trading_workflow = WorkflowFactory.create_workflow(
+            self.alpaca_api, 
+            self.tiingo_api, 
+            self.telegram_bot
+        )
         self.scheduler = TradingScheduler(trading_system=self)
+        
+        # Log workflow type being used
+        logger.info(f"Initialized with {self.trading_workflow.get_workflow_type()} workflow")
         
         # System state
         self.is_running = False
@@ -228,19 +239,20 @@ class TradingSystem:
                 "timestamp": datetime.now().isoformat()
             })
             
-            # Handle both dict and TradingState object returns
+            # Extract decision from workflow result
             decision = None
-            if hasattr(result, 'decision'):
-                decision = result.decision
-            elif isinstance(result, dict) and 'decision' in result:
-                decision = result['decision']
+            if isinstance(result, dict):
+                decision = result.get('decision')
+            else:
+                # Handle legacy TradingState objects
+                decision = getattr(result, 'decision', None)
             
             # Update daily stats if trade was executed
             if decision and hasattr(decision, 'action') and decision.action != "HOLD":
                 self.daily_stats['trades_executed'] += 1
             
             # Send rebalancing completed event
-            decision_action = decision.action if (decision and hasattr(decision, 'action')) else 'HOLD'
+            decision_action = decision.action.value if (decision and hasattr(decision, 'action') and hasattr(decision.action, 'value')) else 'HOLD'
             await self.event_system.publish_system_event(
                 "daily_rebalance_completed",
                 f"Daily rebalancing completed. Decision: {decision_action}"
