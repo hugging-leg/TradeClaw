@@ -10,7 +10,10 @@ from src.apis.telegram_bot import TelegramBot
 from src.events.event_system import EventSystem, event_system
 from src.agents.trading_workflow import TradingWorkflow
 from src.scheduler.trading_scheduler import TradingScheduler
-from src.models.trading_models import Order, Portfolio, TradingEvent
+from src.models.trading_models import (
+    Order, Portfolio, TradingEvent, OrderSide, OrderType, 
+    TimeInForce, OrderStatus
+)
 from config import settings
 
 
@@ -181,7 +184,8 @@ class TradingSystem:
             orders = await self.get_active_orders()
             for order in orders:
                 try:
-                    await self._cancel_order(order.id)
+                    if order.id:
+                        await self._cancel_order(order.id)
                 except Exception as e:
                     logger.error(f"Failed to cancel order {order.id}: {e}")
             
@@ -200,14 +204,13 @@ class TradingSystem:
             
             await self.event_system.publish_system_event(
                 "emergency_stop",
-                "Emergency stop activated - all orders cancelled and positions closed",
-                "error"
+                "Emergency stop completed"
             )
             
             logger.warning("Emergency stop completed")
             
         except Exception as e:
-            logger.error(f"Error in emergency stop: {e}")
+            logger.error(f"Error during emergency stop: {e}")
             raise
     
     async def run_daily_rebalance(self):
@@ -259,7 +262,7 @@ class TradingSystem:
                     await self._handle_take_profit(position)
             
             # Check overall portfolio risk
-            if portfolio.day_pnl <= -(portfolio.equity * 0.1):  # 10% daily loss limit
+            if portfolio.day_pnl <= -(portfolio.equity * Decimal('0.1')):  # 10% daily loss limit
                 await self._handle_portfolio_risk(portfolio)
             
         except Exception as e:
@@ -313,7 +316,9 @@ End of Day Summary:
     async def get_portfolio(self) -> Portfolio:
         """Get current portfolio"""
         try:
-            portfolio = self.alpaca_api.get_portfolio()
+            portfolio = await self.alpaca_api.get_portfolio()
+            if portfolio is None:
+                raise Exception("Failed to get portfolio from Alpaca API")
             self.last_portfolio_update = datetime.now()
             return portfolio
         except Exception as e:
@@ -323,7 +328,7 @@ End of Day Summary:
     async def get_active_orders(self) -> List[Order]:
         """Get active orders"""
         try:
-            orders = self.alpaca_api.get_orders(status="open")
+            orders = await self.alpaca_api.get_orders(status="open")
             self.active_orders = orders
             return orders
         except Exception as e:
@@ -333,7 +338,7 @@ End of Day Summary:
     async def is_market_open(self) -> bool:
         """Check if market is open"""
         try:
-            return self.alpaca_api.is_market_open()
+            return await self.alpaca_api.is_market_open()
         except Exception as e:
             logger.error(f"Error checking market status: {e}")
             return False
@@ -372,11 +377,12 @@ End of Day Summary:
             order_data = event.data
             order = Order(
                 id=order_data.get("order_id"),
-                symbol=order_data.get("symbol"),
-                side=order_data.get("side"),
+                symbol=order_data.get("symbol", "UNKNOWN"),
+                side=order_data.get("side", OrderSide.BUY),
+                order_type=order_data.get("order_type", OrderType.MARKET),
                 quantity=Decimal(order_data.get("quantity", "0")),
                 price=Decimal(order_data.get("price", "0")) if order_data.get("price") else None,
-                status=order_data.get("status")
+                status=order_data.get("status", OrderStatus.PENDING)
             )
             
             await self.telegram_bot.send_order_notification(order, "order_created")
@@ -390,12 +396,13 @@ End of Day Summary:
             order_data = event.data
             order = Order(
                 id=order_data.get("order_id"),
-                symbol=order_data.get("symbol"),
-                side=order_data.get("side"),
+                symbol=order_data.get("symbol", "UNKNOWN"),
+                side=order_data.get("side", OrderSide.BUY),
+                order_type=order_data.get("order_type", OrderType.MARKET),
                 quantity=Decimal(order_data.get("quantity", "0")),
                 filled_quantity=Decimal(order_data.get("filled_quantity", "0")),
                 filled_price=Decimal(order_data.get("filled_price", "0")) if order_data.get("filled_price") else None,
-                status=order_data.get("status")
+                status=order_data.get("status", OrderStatus.FILLED)
             )
             
             await self.telegram_bot.send_order_notification(order, "order_filled")
@@ -412,10 +419,11 @@ End of Day Summary:
             order_data = event.data
             order = Order(
                 id=order_data.get("order_id"),
-                symbol=order_data.get("symbol"),
-                side=order_data.get("side"),
+                symbol=order_data.get("symbol", "UNKNOWN"),
+                side=order_data.get("side", OrderSide.BUY),
+                order_type=order_data.get("order_type", OrderType.MARKET),
                 quantity=Decimal(order_data.get("quantity", "0")),
-                status=order_data.get("status")
+                status=order_data.get("status", OrderStatus.CANCELLED)
             )
             
             await self.telegram_bot.send_order_notification(order, "order_canceled")
@@ -429,10 +437,11 @@ End of Day Summary:
             order_data = event.data
             order = Order(
                 id=order_data.get("order_id"),
-                symbol=order_data.get("symbol"),
-                side=order_data.get("side"),
+                symbol=order_data.get("symbol", "UNKNOWN"),
+                side=order_data.get("side", OrderSide.BUY),
+                order_type=order_data.get("order_type", OrderType.MARKET),
                 quantity=Decimal(order_data.get("quantity", "0")),
-                status=order_data.get("status")
+                status=order_data.get("status", OrderStatus.REJECTED)
             )
             
             await self.telegram_bot.send_order_notification(order, "order_rejected")
@@ -493,18 +502,25 @@ End of Day Summary:
     async def _place_market_order(self, symbol: str, side: str, quantity: Decimal):
         """Place a market order"""
         try:
+            order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+            
             order = Order(
                 symbol=symbol,
-                side=side,
-                order_type="market",
+                side=order_side,
+                order_type=OrderType.MARKET,
                 quantity=quantity,
-                time_in_force="day"
+                time_in_force=TimeInForce.DAY
             )
             
-            placed_order = self.alpaca_api.place_order(order)
-            await self.event_system.publish_order_event(placed_order, "order_created")
+            order_id = await self.alpaca_api.submit_order(order)
+            if order_id:
+                # Get the full order details
+                placed_order = await self.alpaca_api.get_order(order_id)
+                if placed_order:
+                    await self.event_system.publish_order_event(placed_order, "order_created")
+                    return placed_order
             
-            return placed_order
+            return None
             
         except Exception as e:
             logger.error(f"Error placing market order: {e}")
@@ -513,7 +529,7 @@ End of Day Summary:
     async def _cancel_order(self, order_id: str):
         """Cancel an order"""
         try:
-            success = self.alpaca_api.cancel_order(order_id)
+            success = await self.alpaca_api.cancel_order(order_id)
             if success:
                 await self.event_system.publish_system_event(
                     "order_canceled",

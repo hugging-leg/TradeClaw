@@ -1,7 +1,8 @@
 import asyncio
 import schedule
 import logging
-from datetime import datetime, time, timedelta
+import time
+from datetime import datetime, time as datetime_time, timedelta
 from typing import Optional, Callable, Dict, Any
 from threading import Thread
 import pytz
@@ -96,10 +97,10 @@ class TradingScheduler:
         while self.is_running:
             try:
                 schedule.run_pending()
-                asyncio.sleep(1)
+                time.sleep(1)
             except Exception as e:
                 logger.error(f"Error in scheduler loop: {e}")
-                asyncio.sleep(5)
+                time.sleep(5)
     
     def _safe_run_async(self, async_func):
         """Safely run async function in scheduler"""

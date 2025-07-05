@@ -243,29 +243,27 @@ class TelegramBot:
     
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /help command"""
-        help_text = """
-🤖 **Trading Bot Commands**
+        help_text = """🤖 *Trading Bot Commands*
 
-**Basic Controls:**
+*Basic Controls:*
 /start - Start trading system
 /stop - Stop trading system
 /status - Get system status
 
-**Information:**
+*Information:*
 /portfolio - View portfolio
 /orders - View active orders
 
-**Emergency:**
-/emergency_stop - Emergency stop (cancel all orders & close positions)
+*Emergency:*
+/emergency\\_stop - Emergency stop (cancel all orders & close positions)
 
-**Other:**
+*Other:*
 /help - Show this help message
 
-**Note:** This bot will automatically send notifications for:
-• Order executions
-• Portfolio updates
-• System alerts
-        """
+*Note:* This bot will automatically send notifications for:
+- Order executions
+- Portfolio updates
+- System alerts"""
         
         await update.message.reply_text(help_text, parse_mode="Markdown")
     
