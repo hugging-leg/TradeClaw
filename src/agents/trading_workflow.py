@@ -4,8 +4,6 @@ import logging
 from typing import Dict, List, Any, Optional, Annotated, Union
 from datetime import datetime, timedelta
 from decimal import Decimal
-from queue import Queue, Empty
-import threading
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
@@ -19,6 +17,7 @@ from pydantic import BaseModel, Field
 from config import settings
 from src.apis.alpaca_api import AlpacaAPI
 from src.apis.tiingo_api import TiingoAPI
+from src.apis.telegram_message_queue import TelegramMessageQueue
 from src.models.trading_models import (
     Order, Portfolio, TradingDecision, OrderSide, OrderType, TimeInForce, TradingAction
 )
@@ -216,146 +215,6 @@ Market Data for {symbol}:
                 
         except Exception as e:
             return f"Error checking market status: {e}"
-
-
-class TelegramMessageQueue:
-    """Message queue for Telegram notifications during workflow execution"""
-    
-    def __init__(self, telegram_bot=None):
-        self.telegram_bot = telegram_bot
-        self.message_queue = Queue()
-        self.is_processing = False
-        self._processor_task = None
-    
-    async def send_message(self, message: str, message_type: str = "info"):
-        """Add message to queue for sending"""
-        if not self.telegram_bot:
-            logger.info(f"Telegram message ({message_type}): {message}")
-            return
-        
-        emoji_map = {
-            "info": "ℹ️",
-            "success": "✅", 
-            "warning": "⚠️",
-            "error": "❌",
-            "news": "📰",
-            "analysis": "🔍",
-            "decision": "🤔",
-            "trade": "💼"
-        }
-        
-        emoji = emoji_map.get(message_type, "📢")
-        formatted_message = f"{emoji} {message}"
-        
-        # Add to queue
-        self.message_queue.put({
-            "message": formatted_message,
-            "timestamp": datetime.now(),
-            "type": message_type
-        })
-        
-        # Start processor if not running
-        if not self.is_processing:
-            await self._start_processor()
-    
-    async def _start_processor(self):
-        """Start processing messages from queue"""
-        if self.is_processing:
-            return
-            
-        self.is_processing = True
-        
-        try:
-            while not self.message_queue.empty():
-                try:
-                    msg_data = self.message_queue.get_nowait()
-                    await self.telegram_bot.send_message(
-                        msg_data["message"], 
-                        parse_mode="Markdown"
-                    )
-                    # Small delay to avoid flooding
-                    await asyncio.sleep(1)
-                except Empty:
-                    break
-                except Exception as e:
-                    logger.error(f"Error sending Telegram message: {e}")
-        finally:
-            self.is_processing = False
-    
-    async def send_news_summary(self, news_items: List[Dict], limit: int = 5):
-        """Send formatted news summary"""
-        if not news_items:
-            return
-        
-        message = "📰 **Latest Market News**\n\n"
-        
-        for i, news in enumerate(news_items[:limit], 1):
-            message += f"**{i}.** {news['title'][:80]}{'...' if len(news['title']) > 80 else ''}\n"
-            message += f"   *Source: {news['source']}*\n\n"
-        
-        if len(news_items) > limit:
-            message += f"*...and {len(news_items) - limit} more articles*"
-        
-        await self.send_message(message, "news")
-    
-    async def send_analysis_summary(self, analysis: str):
-        """Send formatted analysis summary"""
-        if not analysis:
-            return
-        
-        # Extract key points from analysis
-        lines = analysis.split('\n')
-        key_points = []
-        
-        for line in lines:
-            line = line.strip()
-            if line and (line.startswith('-') or line.startswith('•') or 
-                        'sentiment' in line.lower() or 'trend' in line.lower() or
-                        'risk' in line.lower() or 'opportunity' in line.lower()):
-                key_points.append(line)
-        
-        message = "🔍 **Market Analysis Summary**\n\n"
-        
-        if key_points:
-            for point in key_points[:5]:  # Limit to 5 key points
-                message += f"• {point}\n"
-        else:
-            # Fallback to first few sentences
-            sentences = analysis.split('.')[:3]
-            for sentence in sentences:
-                if sentence.strip():
-                    message += f"• {sentence.strip()}.\n"
-        
-        if len(analysis) > 500:
-            message += f"\n*Full analysis: {len(analysis)} characters*"
-        
-        await self.send_message(message, "analysis")
-    
-    async def send_decision_summary(self, decision: TradingDecision):
-        """Send formatted trading decision"""
-        if not decision:
-            await self.send_message("**Decision:** HOLD - No trading action recommended", "decision")
-            return
-        
-        message = f"🤔 **Trading Decision**\n\n"
-        message += f"**Action:** {decision.action.upper()}\n"
-        
-        # Only show symbol and quantity for BUY/SELL decisions
-        if decision.action.lower() in ["buy", "sell"]:
-            message += f"**Symbol:** {decision.symbol or 'Not specified'}\n"
-            if decision.quantity:
-                message += f"**Quantity:** {decision.quantity}\n"
-        
-        message += f"**Confidence:** {decision.confidence:.1%}\n"
-        
-        # Truncate reasoning if too long
-        reasoning = decision.reasoning[:200]
-        if len(decision.reasoning) > 200:
-            reasoning += "..."
-        
-        message += f"**Reasoning:** {reasoning}"
-        
-        await self.send_message(message, "decision")
 
 
 class TradingWorkflow:
@@ -673,10 +532,10 @@ IMPORTANT:
             
             action = decision_data.get('decision', 'hold').lower()  # Use lowercase for enum
             
-            # Handle symbol - for HOLD decisions, ignore N/A or empty values
+            # Handle symbol - for HOLD decisions, use placeholder since symbol is required
             symbol = decision_data.get('symbol', '')
             if symbol.upper() in ['N/A', 'NA', 'NONE', 'NULL'] or action.lower() == 'hold':
-                symbol = None  # Set to None for HOLD decisions or N/A values
+                symbol = ""  # Use empty string for HOLD decisions or N/A values
             
             quantity = None
             if 'quantity' in decision_data and action.lower() in ['buy', 'sell']:
@@ -700,21 +559,21 @@ IMPORTANT:
                     confidence = 0.5
             
             return TradingDecision(
-                action=action,
+                action=TradingAction(action),
                 symbol=symbol,
                 quantity=quantity,
                 reasoning=reasoning,
-                confidence=confidence
+                confidence=Decimal(str(confidence))
             )
             
         except Exception as e:
             logger.error(f"Error parsing decision: {e}")
             logger.error(f"Decision text was: {decision_text}")
             return TradingDecision(
-                action="hold",  # Use lowercase for enum
-                symbol=None,
+                action=TradingAction.HOLD,
+                symbol="",
                 reasoning="Error parsing decision from LLM response",
-                confidence=0.0
+                confidence=Decimal('0.0')
             )
     
     async def run_workflow(self, initial_context: Dict[str, Any] = None) -> TradingState:
