@@ -31,7 +31,7 @@ class TradingSystem:
         
         # Initialize core components
         self.event_system = event_system
-        self.trading_workflow = TradingWorkflow(self.alpaca_api, self.tiingo_api)
+        self.trading_workflow = TradingWorkflow(self.alpaca_api, self.tiingo_api, self.telegram_bot)
         self.scheduler = TradingScheduler(trading_system=self)
         
         # System state
@@ -228,14 +228,22 @@ class TradingSystem:
                 "timestamp": datetime.now().isoformat()
             })
             
-            # Update daily stats
-            if result.decision and result.decision.action != "HOLD":
+            # Handle both dict and TradingState object returns
+            decision = None
+            if hasattr(result, 'decision'):
+                decision = result.decision
+            elif isinstance(result, dict) and 'decision' in result:
+                decision = result['decision']
+            
+            # Update daily stats if trade was executed
+            if decision and hasattr(decision, 'action') and decision.action != "HOLD":
                 self.daily_stats['trades_executed'] += 1
             
             # Send rebalancing completed event
+            decision_action = decision.action if (decision and hasattr(decision, 'action')) else 'HOLD'
             await self.event_system.publish_system_event(
                 "daily_rebalance_completed",
-                f"Daily rebalancing completed. Decision: {result.decision.action if result.decision else 'HOLD'}"
+                f"Daily rebalancing completed. Decision: {decision_action}"
             )
             
             logger.info("Daily rebalancing completed")
@@ -247,6 +255,62 @@ class TradingSystem:
                 f"Error in daily rebalancing: {e}",
                 "error"
             )
+    
+    async def run_manual_analysis(self):
+        """Manually trigger the LLM trading workflow"""
+        try:
+            if not self.is_trading_enabled:
+                logger.info("Trading is disabled, skipping manual analysis")
+                return {
+                    "success": False,
+                    "message": "Trading is currently disabled"
+                }
+            
+            logger.info("Starting manual LLM trading analysis")
+            
+            # Run the trading workflow
+            result = await self.trading_workflow.run_workflow({
+                "trigger": "manual_analysis",
+                "timestamp": datetime.now().isoformat()
+            })
+            
+            # Handle both dict and TradingState object returns
+            decision = None
+            if hasattr(result, 'decision'):
+                decision = result.decision
+            elif isinstance(result, dict) and 'decision' in result:
+                decision = result['decision']
+            
+            # Update daily stats if trade was executed
+            if decision and hasattr(decision, 'action') and decision.action != "HOLD":
+                self.daily_stats['trades_executed'] += 1
+            
+            # Send manual analysis completed event
+            decision_action = decision.action if (decision and hasattr(decision, 'action')) else 'HOLD'
+            await self.event_system.publish_system_event(
+                "manual_analysis_completed",
+                f"Manual analysis completed. Decision: {decision_action}"
+            )
+            
+            logger.info("Manual analysis completed")
+            
+            return {
+                "success": True,
+                "result": result,
+                "message": f"Analysis completed. Decision: {decision_action}"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error in manual analysis: {e}")
+            await self.event_system.publish_system_event(
+                "manual_analysis_error",
+                f"Error in manual analysis: {e}",
+                "error"
+            )
+            return {
+                "success": False,
+                "message": f"Error during analysis: {str(e)}"
+            }
     
     async def run_risk_checks(self):
         """Run risk management checks"""

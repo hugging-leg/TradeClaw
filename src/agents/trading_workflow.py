@@ -4,6 +4,8 @@ import logging
 from typing import Dict, List, Any, Optional, Annotated, Union
 from datetime import datetime, timedelta
 from decimal import Decimal
+from queue import Queue, Empty
+import threading
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
@@ -18,7 +20,7 @@ from config import settings
 from src.apis.alpaca_api import AlpacaAPI
 from src.apis.tiingo_api import TiingoAPI
 from src.models.trading_models import (
-    Order, Portfolio, TradingDecision, OrderSide, OrderType, TimeInForce
+    Order, Portfolio, TradingDecision, OrderSide, OrderType, TimeInForce, TradingAction
 )
 
 
@@ -55,7 +57,7 @@ def create_llm_client():
 
 class TradingState(BaseModel):
     """State for the trading workflow"""
-    messages: Annotated[List[Dict], add_messages]
+    messages: List[Dict[str, str]] = Field(default_factory=list)
     portfolio: Optional[Portfolio] = None
     market_data: Dict[str, Any] = Field(default_factory=dict)
     news: List[Dict[str, Any]] = Field(default_factory=list)
@@ -71,10 +73,12 @@ class TradingTools:
         self.tiingo_api = tiingo_api
     
     @tool
-    def get_portfolio_info(self) -> str:
+    async def get_portfolio_info(self) -> str:
         """Get current portfolio information including positions and P&L"""
         try:
-            portfolio = self.alpaca_api.get_portfolio()
+            portfolio = await self.alpaca_api.get_portfolio()
+            if not portfolio:
+                return "Error: Unable to retrieve portfolio information"
             
             info = f"""
 Current Portfolio:
@@ -100,10 +104,10 @@ Current Positions:
             return f"Error getting portfolio info: {e}"
     
     @tool
-    def get_market_data(self, symbol: str) -> str:
+    async def get_market_data(self, symbol: str) -> str:
         """Get current market data for a symbol"""
         try:
-            market_data = self.alpaca_api.get_market_data(symbol)
+            market_data = await self.alpaca_api.get_market_data(symbol)
             
             return f"""
 Market Data for {symbol}:
@@ -117,30 +121,18 @@ Market Data for {symbol}:
             return f"Error getting market data for {symbol}: {e}"
     
     @tool
-    def get_historical_data(self, symbol: str, days: int = 30) -> str:
+    async def get_historical_data(self, symbol: str, days: int = 30) -> str:
         """Get historical price data for a symbol"""
         try:
-            historical_data = self.alpaca_api.get_historical_data(symbol, limit=days)
+            historical_data = await self.alpaca_api.get_market_data(symbol, limit=days)
             
             if not historical_data:
                 return f"No historical data found for {symbol}"
             
-            recent_data = historical_data[-5:]  # Last 5 days
-            
-            info = f"Recent Historical Data for {symbol}:\n"
-            for data in recent_data:
-                info += f"- {data['timestamp'].date()}: Open=${data['open']:.2f}, "
-                info += f"High=${data['high']:.2f}, Low=${data['low']:.2f}, "
-                info += f"Close=${data['close']:.2f}, Volume={data['volume']:,}\n"
-            
-            # Calculate basic statistics
-            closes = [data['close'] for data in historical_data]
-            avg_price = sum(closes) / len(closes)
-            price_change = ((closes[-1] - closes[0]) / closes[0]) * 100
-            
-            info += f"\nStatistics over {days} days:\n"
-            info += f"- Average Close: ${avg_price:.2f}\n"
-            info += f"- Price Change: {price_change:.2f}%\n"
+            # Since get_market_data returns single data point, let's adjust this
+            info = f"Market Data for {symbol}:\n"
+            info += f"- Current Price: ${historical_data.price:.2f}\n"
+            info += f"- Volume: {historical_data.volume:,}\n"
             
             return info
             
@@ -148,13 +140,13 @@ Market Data for {symbol}:
             return f"Error getting historical data for {symbol}: {e}"
     
     @tool
-    def get_news(self, symbol: str = None, limit: int = 10) -> str:
+    async def get_news(self, symbol: str = None, limit: int = 10) -> str:
         """Get recent news for a symbol or general market news"""
         try:
             if symbol:
-                news_items = self.tiingo_api.get_symbol_news(symbol, limit=limit)
+                news_items = await self.tiingo_api.get_symbol_news(symbol, limit=limit)
             else:
-                news_items = self.tiingo_api.get_news(limit=limit)
+                news_items = await self.tiingo_api.get_news(limit=limit)
             
             if not news_items:
                 return "No recent news found"
@@ -176,38 +168,10 @@ Market Data for {symbol}:
             return f"Error getting news: {e}"
     
     @tool
-    def place_order(self, symbol: str, side: str, quantity: int, order_type: str = "market", price: float = None) -> str:
-        """Place a trading order"""
-        try:
-            order = Order(
-                symbol=symbol,
-                side=OrderSide(side.lower()),
-                order_type=OrderType(order_type.lower()),
-                quantity=Decimal(str(quantity)),
-                price=Decimal(str(price)) if price else None,
-                time_in_force=TimeInForce.DAY
-            )
-            
-            placed_order = self.alpaca_api.place_order(order)
-            
-            return f"""
-Order placed successfully:
-- Order ID: {placed_order.id}
-- Symbol: {placed_order.symbol}
-- Side: {placed_order.side.value.upper()}
-- Quantity: {placed_order.quantity}
-- Type: {placed_order.order_type.value.upper()}
-- Price: ${placed_order.price:.2f}" if placed_order.price else "Market"
-- Status: {placed_order.status.value.upper()}
-"""
-        except Exception as e:
-            return f"Error placing order: {e}"
-    
-    @tool
-    def get_active_orders(self) -> str:
+    async def get_active_orders(self) -> str:
         """Get all active orders"""
         try:
-            orders = self.alpaca_api.get_orders(status="open")
+            orders = await self.alpaca_api.get_orders(status="open")
             
             if not orders:
                 return "No active orders"
@@ -226,10 +190,10 @@ Order placed successfully:
             return f"Error getting active orders: {e}"
     
     @tool
-    def cancel_order(self, order_id: str) -> str:
+    async def cancel_order(self, order_id: str) -> str:
         """Cancel an order by ID"""
         try:
-            success = self.alpaca_api.cancel_order(order_id)
+            success = await self.alpaca_api.cancel_order(order_id)
             
             if success:
                 return f"Order {order_id} cancelled successfully"
@@ -240,10 +204,10 @@ Order placed successfully:
             return f"Error cancelling order {order_id}: {e}"
     
     @tool
-    def check_market_status(self) -> str:
+    async def check_market_status(self) -> str:
         """Check if the market is currently open"""
         try:
-            is_open = self.alpaca_api.is_market_open()
+            is_open = await self.alpaca_api.is_market_open()
             
             if is_open:
                 return "Market is currently OPEN"
@@ -254,15 +218,157 @@ Order placed successfully:
             return f"Error checking market status: {e}"
 
 
+class TelegramMessageQueue:
+    """Message queue for Telegram notifications during workflow execution"""
+    
+    def __init__(self, telegram_bot=None):
+        self.telegram_bot = telegram_bot
+        self.message_queue = Queue()
+        self.is_processing = False
+        self._processor_task = None
+    
+    async def send_message(self, message: str, message_type: str = "info"):
+        """Add message to queue for sending"""
+        if not self.telegram_bot:
+            logger.info(f"Telegram message ({message_type}): {message}")
+            return
+        
+        emoji_map = {
+            "info": "ℹ️",
+            "success": "✅", 
+            "warning": "⚠️",
+            "error": "❌",
+            "news": "📰",
+            "analysis": "🔍",
+            "decision": "🤔",
+            "trade": "💼"
+        }
+        
+        emoji = emoji_map.get(message_type, "📢")
+        formatted_message = f"{emoji} {message}"
+        
+        # Add to queue
+        self.message_queue.put({
+            "message": formatted_message,
+            "timestamp": datetime.now(),
+            "type": message_type
+        })
+        
+        # Start processor if not running
+        if not self.is_processing:
+            await self._start_processor()
+    
+    async def _start_processor(self):
+        """Start processing messages from queue"""
+        if self.is_processing:
+            return
+            
+        self.is_processing = True
+        
+        try:
+            while not self.message_queue.empty():
+                try:
+                    msg_data = self.message_queue.get_nowait()
+                    await self.telegram_bot.send_message(
+                        msg_data["message"], 
+                        parse_mode="Markdown"
+                    )
+                    # Small delay to avoid flooding
+                    await asyncio.sleep(1)
+                except Empty:
+                    break
+                except Exception as e:
+                    logger.error(f"Error sending Telegram message: {e}")
+        finally:
+            self.is_processing = False
+    
+    async def send_news_summary(self, news_items: List[Dict], limit: int = 5):
+        """Send formatted news summary"""
+        if not news_items:
+            return
+        
+        message = "📰 **Latest Market News**\n\n"
+        
+        for i, news in enumerate(news_items[:limit], 1):
+            message += f"**{i}.** {news['title'][:80]}{'...' if len(news['title']) > 80 else ''}\n"
+            message += f"   *Source: {news['source']}*\n\n"
+        
+        if len(news_items) > limit:
+            message += f"*...and {len(news_items) - limit} more articles*"
+        
+        await self.send_message(message, "news")
+    
+    async def send_analysis_summary(self, analysis: str):
+        """Send formatted analysis summary"""
+        if not analysis:
+            return
+        
+        # Extract key points from analysis
+        lines = analysis.split('\n')
+        key_points = []
+        
+        for line in lines:
+            line = line.strip()
+            if line and (line.startswith('-') or line.startswith('•') or 
+                        'sentiment' in line.lower() or 'trend' in line.lower() or
+                        'risk' in line.lower() or 'opportunity' in line.lower()):
+                key_points.append(line)
+        
+        message = "🔍 **Market Analysis Summary**\n\n"
+        
+        if key_points:
+            for point in key_points[:5]:  # Limit to 5 key points
+                message += f"• {point}\n"
+        else:
+            # Fallback to first few sentences
+            sentences = analysis.split('.')[:3]
+            for sentence in sentences:
+                if sentence.strip():
+                    message += f"• {sentence.strip()}.\n"
+        
+        if len(analysis) > 500:
+            message += f"\n*Full analysis: {len(analysis)} characters*"
+        
+        await self.send_message(message, "analysis")
+    
+    async def send_decision_summary(self, decision: TradingDecision):
+        """Send formatted trading decision"""
+        if not decision:
+            await self.send_message("**Decision:** HOLD - No trading action recommended", "decision")
+            return
+        
+        message = f"🤔 **Trading Decision**\n\n"
+        message += f"**Action:** {decision.action.upper()}\n"
+        
+        # Only show symbol and quantity for BUY/SELL decisions
+        if decision.action.lower() in ["buy", "sell"]:
+            message += f"**Symbol:** {decision.symbol or 'Not specified'}\n"
+            if decision.quantity:
+                message += f"**Quantity:** {decision.quantity}\n"
+        
+        message += f"**Confidence:** {decision.confidence:.1%}\n"
+        
+        # Truncate reasoning if too long
+        reasoning = decision.reasoning[:200]
+        if len(decision.reasoning) > 200:
+            reasoning += "..."
+        
+        message += f"**Reasoning:** {reasoning}"
+        
+        await self.send_message(message, "decision")
+
+
 class TradingWorkflow:
     """LangGraph workflow for trading decisions"""
     
-    def __init__(self, alpaca_api: AlpacaAPI, tiingo_api: TiingoAPI):
+    def __init__(self, alpaca_api: AlpacaAPI, tiingo_api: TiingoAPI, telegram_bot=None):
         self.alpaca_api = alpaca_api
         self.tiingo_api = tiingo_api
+        self.telegram_bot = telegram_bot
         self.tools = TradingTools(alpaca_api, tiingo_api)
         self.llm = create_llm_client()
         self.workflow = None
+        self.message_queue = TelegramMessageQueue(telegram_bot)
         self._build_workflow()
     
     def _build_workflow(self):
@@ -289,20 +395,22 @@ class TradingWorkflow:
     async def _gather_data(self, state: TradingState) -> TradingState:
         """Gather market data and portfolio information"""
         try:
+            await self.message_queue.send_message("**Starting Data Collection**\n\nGathering portfolio, market data, and news...", "info")
+            
             # Get portfolio
-            portfolio = self.alpaca_api.get_portfolio()
+            portfolio = await self.alpaca_api.get_portfolio()
             state.portfolio = portfolio
             
             # Get market overview
-            market_data = self.tiingo_api.get_market_overview()
+            market_data = await self.tiingo_api.get_market_overview()
             state.market_data = market_data
             
             # Get recent news
-            news = self.tiingo_api.get_news(limit=20)
+            news = await self.tiingo_api.get_news(limit=20)
             state.news = [
                 {
                     "title": item.title,
-                    "description": item.description,
+                    "description": item.description or "",
                     "source": item.source,
                     "published_at": item.published_at.isoformat(),
                     "symbols": item.symbols
@@ -311,7 +419,7 @@ class TradingWorkflow:
             ]
             
             # Add context
-            state.context["market_open"] = self.alpaca_api.is_market_open()
+            state.context["market_open"] = await self.alpaca_api.is_market_open()
             state.context["timestamp"] = datetime.now().isoformat()
             
             state.messages.append({
@@ -319,10 +427,18 @@ class TradingWorkflow:
                 "content": "Data gathering completed. Portfolio, market data, and news have been collected."
             })
             
+            # Send data summary to Telegram
+            portfolio_msg = f"**Portfolio Status**\n\n• Equity: ${portfolio.equity:,.2f}\n• Cash: ${portfolio.cash:,.2f}\n• Day P&L: ${portfolio.day_pnl:,.2f}\n• Positions: {len(portfolio.positions)}"
+            await self.message_queue.send_message(portfolio_msg, "info")
+            
+            # Send news summary
+            await self.message_queue.send_news_summary(state.news, limit=3)
+            
             return state
             
         except Exception as e:
             logger.error(f"Error gathering data: {e}")
+            await self.message_queue.send_message(f"**Data Collection Error**\n\n{str(e)}", "error")
             state.messages.append({
                 "role": "system",
                 "content": f"Error gathering data: {e}"
@@ -332,6 +448,8 @@ class TradingWorkflow:
     async def _analyze_market(self, state: TradingState) -> TradingState:
         """Analyze market conditions and portfolio performance"""
         try:
+            await self.message_queue.send_message("**Starting Market Analysis**\n\nAnalyzing market conditions and portfolio performance...", "info")
+            
             # Prepare analysis prompt
             analysis_prompt = f"""
 You are a professional trading analyst. Analyze the current market conditions and portfolio performance.
@@ -374,10 +492,14 @@ Keep your analysis concise but thorough.
             
             state.context["market_analysis"] = response.content
             
+            # Send analysis summary to Telegram
+            await self.message_queue.send_analysis_summary(response.content)
+            
             return state
             
         except Exception as e:
             logger.error(f"Error analyzing market: {e}")
+            await self.message_queue.send_message(f"**Market Analysis Error**\n\n{str(e)}", "error")
             state.messages.append({
                 "role": "system",
                 "content": f"Error analyzing market: {e}"
@@ -387,6 +509,8 @@ Keep your analysis concise but thorough.
     async def _make_decision(self, state: TradingState) -> TradingState:
         """Make trading decisions based on analysis"""
         try:
+            await self.message_queue.send_message("**Making Trading Decision**\n\nEvaluating trading opportunities based on analysis...", "info")
+            
             # Prepare decision prompt
             decision_prompt = f"""
 Based on the market analysis, portfolio status, and current conditions, make trading decisions.
@@ -406,9 +530,9 @@ Risk Management Rules:
 
 Please provide trading decisions in the following format:
 DECISION: [BUY/SELL/HOLD]
-SYMBOL: [Stock symbol if applicable]
-QUANTITY: [Number of shares if applicable]
-REASONING: [Detailed reasoning for the decision]
+SYMBOL: [Stock symbol if BUY/SELL, or N/A if HOLD]
+QUANTITY: [Number of shares if BUY/SELL, or N/A if HOLD]
+REASONING: [Always provide detailed reasoning regardless of decision]
 CONFIDENCE: [Confidence level 0.0-1.0]
 
 Consider:
@@ -418,7 +542,11 @@ Consider:
 4. News impact
 5. Technical indicators from historical data
 
-Only recommend trades if you have high confidence and clear reasoning.
+IMPORTANT: 
+- Always provide detailed reasoning, even for HOLD decisions
+- For HOLD decisions, explain why no action is recommended
+- Only recommend trades if you have high confidence and clear reasoning
+- Be conservative and prioritize capital preservation
 """
             
             # Get decision from LLM
@@ -437,10 +565,14 @@ Only recommend trades if you have high confidence and clear reasoning.
                 "content": decision_text
             })
             
+            # Send decision to Telegram
+            await self.message_queue.send_decision_summary(decision)
+            
             return state
             
         except Exception as e:
             logger.error(f"Error making decision: {e}")
+            await self.message_queue.send_message(f"**Decision Making Error**\n\n{str(e)}", "error")
             state.messages.append({
                 "role": "system",
                 "content": f"Error making decision: {e}"
@@ -450,7 +582,8 @@ Only recommend trades if you have high confidence and clear reasoning.
     async def _execute_trades(self, state: TradingState) -> TradingState:
         """Execute trading decisions"""
         try:
-            if not state.decision or state.decision.action.upper() == "HOLD":
+            if not state.decision or state.decision.action.lower() == "hold":
+                await self.message_queue.send_message("**Trade Execution**\n\nNo trades to execute. Decision was to HOLD.", "trade")
                 state.messages.append({
                     "role": "system",
                     "content": "No trades to execute. Decision was to HOLD."
@@ -459,44 +592,68 @@ Only recommend trades if you have high confidence and clear reasoning.
             
             # Check if market is open
             if not state.context.get("market_open", False):
+                await self.message_queue.send_message("**Trade Execution**\n\nMarket is closed. Cannot execute trades at this time.", "warning")
                 state.messages.append({
                     "role": "system",
                     "content": "Market is closed. Cannot execute trades."
                 })
                 return state
             
+            await self.message_queue.send_message("**Executing Trade**\n\nSubmitting order to market...", "trade")
+            
             # Execute the trade
             decision = state.decision
             
-            if decision.action.upper() in ["BUY", "SELL"] and decision.symbol and decision.quantity:
+            if decision.action.lower() in ["buy", "sell"] and decision.symbol and decision.quantity:
                 order = Order(
                     symbol=decision.symbol,
-                    side=OrderSide.BUY if decision.action.upper() == "BUY" else OrderSide.SELL,
+                    side=OrderSide.BUY if decision.action.lower() == "buy" else OrderSide.SELL,
                     order_type=OrderType.MARKET,  # Use market orders for simplicity
                     quantity=decision.quantity,
                     time_in_force=TimeInForce.DAY
                 )
                 
-                placed_order = self.alpaca_api.place_order(order)
-                
-                state.messages.append({
-                    "role": "system",
-                    "content": f"Order executed: {placed_order.symbol} {placed_order.side.value.upper()} {placed_order.quantity} shares"
-                })
-                
-                # Store executed order in context
-                state.context["executed_order"] = {
-                    "id": placed_order.id,
-                    "symbol": placed_order.symbol,
-                    "side": placed_order.side.value,
-                    "quantity": str(placed_order.quantity),
-                    "status": placed_order.status.value
-                }
+                order_id = await self.alpaca_api.submit_order(order)
+                if order_id:
+                    placed_order = await self.alpaca_api.get_order(order_id)
+                    if placed_order:
+                        success_msg = f"**Trade Executed**\n\n✅ {placed_order.symbol} {placed_order.side.value.upper()} {placed_order.quantity} shares\n📋 Order ID: {placed_order.id}"
+                        await self.message_queue.send_message(success_msg, "success")
+                        
+                        state.messages.append({
+                            "role": "system",
+                            "content": f"Order executed: {placed_order.symbol} {placed_order.side.value.upper()} {placed_order.quantity} shares"
+                        })
+                        
+                        # Store executed order in context
+                        state.context["executed_order"] = {
+                            "id": placed_order.id,
+                            "symbol": placed_order.symbol,
+                            "side": placed_order.side.value,
+                            "quantity": str(placed_order.quantity),
+                            "status": placed_order.status.value
+                        }
+                    else:
+                        await self.message_queue.send_message(f"**Trade Status**\n\nOrder submitted but could not retrieve details.\nOrder ID: {order_id}", "warning")
+                        state.messages.append({
+                            "role": "system",
+                            "content": f"Order submitted but could not retrieve details. Order ID: {order_id}"
+                        })
+                else:
+                    await self.message_queue.send_message("**Trade Failed**\n\nFailed to submit order to market", "error")
+                    state.messages.append({
+                        "role": "system",
+                        "content": "Failed to submit order"
+                    })
+            
+            # Send workflow completion message
+            await self.message_queue.send_message("**Workflow Complete**\n\n🎯 Trading analysis and execution cycle finished successfully!", "success")
             
             return state
             
         except Exception as e:
             logger.error(f"Error executing trades: {e}")
+            await self.message_queue.send_message(f"**Trade Execution Error**\n\n{str(e)}", "error")
             state.messages.append({
                 "role": "system",
                 "content": f"Error executing trades: {e}"
@@ -514,22 +671,31 @@ Only recommend trades if you have high confidence and clear reasoning.
                     key, value = line.split(':', 1)
                     decision_data[key.strip().lower()] = value.strip()
             
-            action = decision_data.get('decision', 'HOLD').upper()
-            symbol = decision_data.get('symbol', '')
-            quantity = None
+            action = decision_data.get('decision', 'hold').lower()  # Use lowercase for enum
             
-            if 'quantity' in decision_data:
+            # Handle symbol - for HOLD decisions, ignore N/A or empty values
+            symbol = decision_data.get('symbol', '')
+            if symbol.upper() in ['N/A', 'NA', 'NONE', 'NULL'] or action.lower() == 'hold':
+                symbol = None  # Set to None for HOLD decisions or N/A values
+            
+            quantity = None
+            if 'quantity' in decision_data and action.lower() in ['buy', 'sell']:
                 try:
-                    quantity = Decimal(str(decision_data['quantity']))
+                    quantity_str = decision_data['quantity']
+                    if quantity_str.upper() not in ['N/A', 'NA', 'NONE', 'NULL']:
+                        quantity = Decimal(str(quantity_str))
                 except:
                     quantity = None
             
-            reasoning = decision_data.get('reasoning', 'No reasoning provided')
+            reasoning = decision_data.get('reasoning', 'No specific reasoning provided')
             
             confidence = 0.5  # Default confidence
             if 'confidence' in decision_data:
                 try:
-                    confidence = float(decision_data['confidence'])
+                    confidence_str = decision_data['confidence']
+                    confidence = float(confidence_str)
+                    # Ensure confidence is between 0 and 1
+                    confidence = max(0.0, min(1.0, confidence))
                 except:
                     confidence = 0.5
             
@@ -543,10 +709,11 @@ Only recommend trades if you have high confidence and clear reasoning.
             
         except Exception as e:
             logger.error(f"Error parsing decision: {e}")
+            logger.error(f"Decision text was: {decision_text}")
             return TradingDecision(
-                action="HOLD",
-                symbol="",
-                reasoning="Error parsing decision",
+                action="hold",  # Use lowercase for enum
+                symbol=None,
+                reasoning="Error parsing decision from LLM response",
                 confidence=0.0
             )
     

@@ -32,6 +32,7 @@ class TelegramBot:
         self.application.add_handler(CommandHandler("status", self.status_command))
         self.application.add_handler(CommandHandler("portfolio", self.portfolio_command))
         self.application.add_handler(CommandHandler("orders", self.orders_command))
+        self.application.add_handler(CommandHandler("analyze", self.analyze_command))
         self.application.add_handler(CommandHandler("help", self.help_command))
         self.application.add_handler(CommandHandler("emergency_stop", self.emergency_stop_command))
         
@@ -222,6 +223,56 @@ class TelegramBot:
         except Exception as e:
             await update.message.reply_text(f"❌ Error getting orders: {e}")
     
+    async def analyze_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /analyze command - manually trigger LLM trading workflow"""
+        try:
+            if not self.trading_system:
+                await update.message.reply_text("❌ Trading system not available")
+                return
+            
+            # Send initial message
+            await update.message.reply_text("🤖 Starting LLM trading analysis...")
+            
+            # Run the manual analysis
+            result = await self.trading_system.run_manual_analysis()
+            
+            if result["success"]:
+                # Create detailed response message
+                analysis_result = result.get("result")
+                message = "✅ **Analysis Complete**\n\n"
+                
+                # Handle both TradingState object and dict formats
+                decision = None
+                if analysis_result:
+                    if hasattr(analysis_result, 'decision'):
+                        decision = analysis_result.decision
+                    elif isinstance(analysis_result, dict) and 'decision' in analysis_result:
+                        decision = analysis_result['decision']
+                
+                if decision and hasattr(decision, 'action'):
+                    message += f"**Decision:** {decision.action.upper()}\n"
+                    message += f"**Symbol:** {decision.symbol or 'N/A'}\n"
+                    message += f"**Confidence:** {decision.confidence:.2%}\n"
+                    message += f"**Reasoning:** {decision.reasoning[:200]}{'...' if len(decision.reasoning) > 200 else ''}\n"
+                    
+                    if decision.quantity:
+                        message += f"**Quantity:** {decision.quantity}\n"
+                    if hasattr(decision, 'price') and decision.price:
+                        message += f"**Target Price:** ${decision.price:.2f}\n"
+                else:
+                    message += "**Decision:** HOLD\n"
+                    message += "**Reasoning:** No trading opportunity found or analysis incomplete\n"
+                
+                message += f"\n**Triggered:** Manual analysis"
+                
+                await update.message.reply_text(message, parse_mode="Markdown")
+            else:
+                await update.message.reply_text(f"❌ Analysis failed: {result['message']}")
+                
+        except Exception as e:
+            await update.message.reply_text(f"❌ Error running analysis: {e}")
+            logger.error(f"Error in analyze_command: {e}")
+    
     async def emergency_stop_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /emergency_stop command"""
         keyboard = [
@@ -253,6 +304,9 @@ class TelegramBot:
 *Information:*
 /portfolio - View portfolio
 /orders - View active orders
+
+*Trading:*
+/analyze - Manually trigger LLM trading analysis
 
 *Emergency:*
 /emergency\\_stop - Emergency stop (cancel all orders & close positions)

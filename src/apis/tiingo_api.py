@@ -1,5 +1,6 @@
 import requests
 import logging
+import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from config import settings
@@ -19,7 +20,7 @@ class TiingoAPI:
             'Authorization': f'Token {settings.tiingo_api_key}'
         }
         
-    def get_news(self, 
+    async def get_news(self, 
                  symbols: Optional[List[str]] = None,
                  tags: Optional[List[str]] = None,
                  sources: Optional[List[str]] = None,
@@ -59,11 +60,16 @@ class TiingoAPI:
             news_items = []
             
             for item in news_data:
+                # Ensure description is never None
+                description = item.get('description') or item.get('summary') or ""
+                if not description:
+                    description = f"News article from {item.get('source', 'Unknown source')}"
+                
                 news_item = NewsItem(
-                    title=item.get('title', ''),
-                    description=item.get('description', ''),
+                    title=item.get('title', 'No Title'),
+                    description=description,
                     url=item.get('url', ''),
-                    source=item.get('source', ''),
+                    source=item.get('source', 'Unknown'),
                     published_at=datetime.fromisoformat(item.get('publishedDate', '').replace('Z', '+00:00')),
                     symbols=item.get('tickers', [])
                 )
@@ -74,9 +80,9 @@ class TiingoAPI:
             
         except Exception as e:
             logger.error(f"Failed to get news: {e}")
-            raise
+            return []  # Return empty list instead of raising exception
     
-    def get_market_overview(self) -> Dict[str, Any]:
+    async def get_market_overview(self) -> Dict[str, Any]:
         """Get market overview data"""
         try:
             # Get major indices data
@@ -106,31 +112,31 @@ class TiingoAPI:
             
         except Exception as e:
             logger.error(f"Failed to get market overview: {e}")
-            raise
+            return {}  # Return empty dict instead of raising exception
     
-    def get_symbol_news(self, symbol: str, limit: int = 50) -> List[NewsItem]:
+    async def get_symbol_news(self, symbol: str, limit: int = 50) -> List[NewsItem]:
         """Get news for a specific symbol"""
         try:
-            return self.get_news(symbols=[symbol], limit=limit)
+            return await self.get_news(symbols=[symbol], limit=limit)
         except Exception as e:
             logger.error(f"Failed to get news for {symbol}: {e}")
-            raise
+            return []
     
-    def get_sector_news(self, sector: str, limit: int = 50) -> List[NewsItem]:
+    async def get_sector_news(self, sector: str, limit: int = 50) -> List[NewsItem]:
         """Get news for a specific sector"""
         try:
-            return self.get_news(tags=[sector], limit=limit)
+            return await self.get_news(tags=[sector], limit=limit)
         except Exception as e:
             logger.error(f"Failed to get sector news for {sector}: {e}")
-            raise
+            return []
     
-    def get_crypto_news(self, limit: int = 50) -> List[NewsItem]:
+    async def get_crypto_news(self, limit: int = 50) -> List[NewsItem]:
         """Get cryptocurrency news"""
         try:
-            return self.get_news(tags=['Cryptocurrency'], limit=limit)
+            return await self.get_news(tags=['Cryptocurrency'], limit=limit)
         except Exception as e:
             logger.error(f"Failed to get crypto news: {e}")
-            raise
+            return []
     
     def get_eod_prices(self, symbol: str, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
         """Get end-of-day prices for a symbol"""
