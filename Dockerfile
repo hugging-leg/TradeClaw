@@ -28,11 +28,6 @@ COPY . .
 # Create logs directory
 RUN mkdir -p /app/logs /app/data
 
-# Create non-root user for security
-RUN useradd -m -u 1000 trader && \
-    chown -R trader:trader /app
-USER trader
-
 # Expose port
 EXPOSE 8000
 
