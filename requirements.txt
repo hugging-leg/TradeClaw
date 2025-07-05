@@ -1,46 +1,44 @@
 # Core trading APIs
-alpaca-py==0.21.0
-openai==1.3.0
-python-telegram-bot==20.6
-requests==2.31.0
+alpaca-py
+openai
+python-telegram-bot
+requests
 
 # Data processing
-pandas==2.0.3
-numpy==1.24.3
+pandas
+numpy
 
 # Configuration and environment
-python-dotenv==1.0.0
-pydantic==2.4.2
-schedule==1.2.0
+python-dotenv
+pydantic
+pydantic_settings
+schedule
 
 # Async support
-asyncio==3.4.3
-websockets==11.0.3
+asyncio
+websockets
 
 # LangGraph and AI
-langgraph==0.0.40
-langchain==0.1.0
-langchain-openai==0.0.5
-langchain-deepseek==0.1.0
+langgraph
+langchain
+langchain-openai
+langchain-deepseek
 
 # Web framework
-fastapi==0.104.1
-uvicorn==0.24.0
+fastapi
+uvicorn
 
 # Database
-sqlalchemy==2.0.23
-alembic==1.12.1
-
-# Redis removed - using in-memory events only
-# redis==5.0.1  # Not needed
+sqlalchemy
+alembic
 
 # Utilities
-python-multipart==0.0.6
-aiofiles==23.2.1
-httpx==0.25.2
+python-multipart
+aiofiles
+httpx
 
 # Testing
-pytest==7.4.0
-pytest-asyncio==0.21.0
-pytest-mock==3.11.0
-pytest-cov==4.1.0 
+pytest
+pytest-asyncio
+pytest-mock
+pytest-cov
