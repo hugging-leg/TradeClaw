@@ -3,7 +3,7 @@ import json
 import logging
 from typing import Dict, List, Callable, Any, Optional
 from datetime import datetime
-import redis.asyncio as redis
+import os
 from src.models.trading_models import TradingEvent, Order, Portfolio
 from config import settings
 
@@ -20,30 +20,42 @@ class EventSystem:
         self.event_handlers: Dict[str, List[Callable]] = {}
         self.is_running = False
         self.event_queue = asyncio.Queue()
+        self.use_redis = os.getenv('USE_REDIS', 'true').lower() == 'true'
         
     async def initialize(self):
-        """Initialize Redis connection and pubsub"""
-        try:
-            self.redis_client = redis.from_url(settings.redis_url)
-            self.pubsub = self.redis_client.pubsub()
-            logger.info("Event system initialized")
-        except Exception as e:
-            logger.error(f"Failed to initialize event system: {e}")
-            raise
+        """Initialize Redis connection and pubsub if Redis is enabled"""
+        if self.use_redis and settings.redis_url:
+            try:
+                import redis.asyncio as redis
+                self.redis_client = redis.from_url(settings.redis_url)
+                self.pubsub = self.redis_client.pubsub()
+                logger.info("Event system initialized with Redis")
+            except Exception as e:
+                logger.warning(f"Failed to initialize Redis, falling back to in-memory events: {e}")
+                self.use_redis = False
+        else:
+            if not settings.redis_url:
+                logger.info("Redis URL not provided, using in-memory events")
+            self.use_redis = False
+        
+        if not self.use_redis:
+            logger.info("Event system initialized with in-memory events")
     
     async def start(self):
         """Start the event system"""
-        if not self.redis_client:
+        if not self.redis_client and self.use_redis:
             await self.initialize()
         
         self.is_running = True
         
-        # Subscribe to all trading events
-        await self.pubsub.subscribe("trading_events")
+        if self.use_redis and self.redis_client:
+            # Subscribe to all trading events
+            await self.pubsub.subscribe("trading_events")
+            # Start Redis pubsub handler
+            asyncio.create_task(self._handle_pubsub_messages())
         
         # Start event processing tasks
         asyncio.create_task(self._process_events())
-        asyncio.create_task(self._handle_pubsub_messages())
         
         logger.info("Event system started")
     
@@ -80,19 +92,21 @@ class EventSystem:
     async def publish_event(self, event: TradingEvent):
         """Publish an event to the system"""
         try:
-            # Serialize event data
-            event_data = {
-                "event_type": event.event_type,
-                "timestamp": event.timestamp.isoformat(),
-                "data": event.data,
-                "processed": event.processed
-            }
-            
-            # Publish to Redis
-            await self.redis_client.publish("trading_events", json.dumps(event_data))
-            
-            # Add to local queue for immediate processing
+            # Always add to local queue for processing
             await self.event_queue.put(event)
+            
+            # Also publish to Redis if enabled
+            if self.use_redis and self.redis_client:
+                # Serialize event data
+                event_data = {
+                    "event_type": event.event_type,
+                    "timestamp": event.timestamp.isoformat(),
+                    "data": event.data,
+                    "processed": event.processed
+                }
+                
+                # Publish to Redis
+                await self.redis_client.publish("trading_events", json.dumps(event_data))
             
             logger.debug(f"Published event: {event.event_type}")
             
@@ -116,8 +130,8 @@ class EventSystem:
                 logger.error(f"Error processing event: {e}")
     
     async def _handle_pubsub_messages(self):
-        """Handle messages from Redis pubsub"""
-        while self.is_running:
+        """Handle messages from Redis pubsub (only used when Redis is enabled)"""
+        while self.is_running and self.use_redis:
             try:
                 message = await self.pubsub.get_message(timeout=1.0)
                 
@@ -199,19 +213,14 @@ class EventSystem:
                 "market_value": str(portfolio.market_value),
                 "day_pnl": str(portfolio.day_pnl),
                 "total_pnl": str(portfolio.total_pnl),
-                "buying_power": str(portfolio.buying_power),
-                "position_count": len(portfolio.positions),
                 "positions": [
                     {
                         "symbol": pos.symbol,
                         "quantity": str(pos.quantity),
                         "market_value": str(pos.market_value),
-                        "unrealized_pnl": str(pos.unrealized_pnl),
-                        "side": pos.side
-                    }
-                    for pos in portfolio.positions
-                ],
-                "last_updated": portfolio.last_updated.isoformat()
+                        "unrealized_pnl": str(pos.unrealized_pnl)
+                    } for pos in portfolio.positions
+                ]
             }
         )
         
@@ -239,18 +248,11 @@ class EventSystem:
         await self.publish_event(event)
     
     async def get_event_history(self, event_type: Optional[str] = None, limit: int = 100) -> List[TradingEvent]:
-        """Get event history from storage"""
-        try:
-            # This is a simplified implementation
-            # In a production system, you'd want to store events in a database
-            # and implement proper pagination and filtering
-            
-            # For now, return empty list
-            return []
-            
-        except Exception as e:
-            logger.error(f"Failed to get event history: {e}")
-            return []
+        """Get event history (simplified for in-memory version)"""
+        # In the in-memory version, we don't store history
+        # This would typically be implemented with a database
+        logger.warning("Event history not available in lightweight mode")
+        return []
 
 
 # Global event system instance

@@ -6,8 +6,8 @@ This guide explains how to deploy the LLM Trading Agent using Docker and Docker 
 
 - Docker 20.10+
 - Docker Compose 2.0+
-- At least 4GB RAM
-- At least 10GB free disk space
+- At least 2GB RAM
+- At least 5GB free disk space
 
 ## Quick Start
 
@@ -23,14 +23,11 @@ This guide explains how to deploy the LLM Trading Agent using Docker and Docker 
 
 3. **Start the services**:
    ```bash
-   # Basic deployment (trading agent, Redis, PostgreSQL)
+   # Basic deployment (trading agent + PostgreSQL, no Redis)
    docker-compose up -d
    
-   # With monitoring (adds Prometheus and Grafana)
-   docker-compose --profile monitoring up -d
-   
-   # Production deployment (adds Nginx reverse proxy)
-   docker-compose --profile production up -d
+   # With Redis (for distributed events and caching)
+   docker-compose --profile redis up -d
    ```
 
 4. **Check service status**:
@@ -54,40 +51,54 @@ OPENAI_API_KEY=your_openai_api_key
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=your_telegram_chat_id
 
-# Database Passwords
+# Database Configuration
 POSTGRES_PASSWORD=secure_postgres_password
-REDIS_PASSWORD=secure_redis_password
 
-# Optional Monitoring
-GRAFANA_PASSWORD=grafana_admin_password
+# Redis Configuration (Optional)
+REDIS_URL=redis://redis:6379/0
+REDIS_PASSWORD=secure_redis_password
+USE_REDIS=true  # Set to false to use in-memory events
 ```
 
 ### Service Profiles
 
 The docker-compose.yml includes different service profiles:
 
-- **Default**: Core services (trading-agent, redis, postgres)
-- **production**: Adds Nginx reverse proxy
-- **monitoring**: Adds Prometheus and Grafana
+- **Default**: Core services (trading-agent, postgres)
+- **redis**: Adds Redis for distributed events and caching
 
 ## Service Architecture
 
+### Basic Deployment (Default)
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Docker Network                           │
 │                                                             │
-│  ┌─────────────┐    ┌─────────────────┐    ┌─────────────┐ │
-│  │    Nginx    │    │  Trading Agent  │    │   Redis     │ │
-│  │   (proxy)   │◄──►│   (main app)    │◄──►│  (events)   │ │
-│  │    :80/443  │    │      :8000      │    │    :6379    │ │
-│  └─────────────┘    └─────────────────┘    └─────────────┘ │
-│                             │                              │
-│                             ▼                              │
-│  ┌─────────────┐    ┌─────────────────┐    ┌─────────────┐ │
-│  │  Grafana    │    │   PostgreSQL    │    │ Prometheus  │ │
-│  │ (dashboard) │    │   (database)    │    │ (metrics)   │ │
-│  │    :3000    │    │      :5432      │    │    :9090    │ │
-│  └─────────────┘    └─────────────────┘    └─────────────┘ │
+│       ┌─────────────────────────────────────────────┐       │
+│       │              Trading Agent                  │       │
+│       │            (main application)               │       │
+│       │                  :8000                      │       │
+│       └─────────────────────┬───────────────────────┘       │
+│                             │                               │
+│                             ▼                               │
+│       ┌─────────────────────────────────────────────┐       │
+│       │              PostgreSQL                     │       │
+│       │              (database)                     │       │
+│       │                :5432                        │       │
+│       └─────────────────────────────────────────────┘       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### With Redis Profile
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Docker Network                           │
+│                                                             │
+│  ┌─────────────────┐    ┌─────────────────┐    ┌─────────────┐ │
+│  │  Trading Agent  │    │     Redis       │    │ PostgreSQL  │ │
+│  │  (main app)     │◄──►│   (events)      │    │ (database)  │ │
+│  │     :8000       │    │    :6379        │    │   :5432     │ │
+│  └─────────────────┘    └─────────────────┘    └─────────────┘ │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -95,7 +106,7 @@ The docker-compose.yml includes different service profiles:
 
 ### Basic Deployment
 ```bash
-# Start core services
+# Start core services (Trading Agent + PostgreSQL)
 docker-compose up -d
 
 # View logs
@@ -105,31 +116,16 @@ docker-compose logs -f trading-agent
 docker-compose down
 ```
 
-### Production Deployment
+### With Redis
 ```bash
-# Start with reverse proxy
-docker-compose --profile production up -d
+# Start with Redis for distributed events
+docker-compose --profile redis up -d
 
-# Scale trading agent (if needed)
-docker-compose --profile production up -d --scale trading-agent=2
+# View all logs
+docker-compose --profile redis logs -f
 
-# Update services
-docker-compose --profile production pull
-docker-compose --profile production up -d
-```
-
-### Monitoring Deployment
-```bash
-# Start with monitoring
-docker-compose --profile monitoring up -d
-
-# Access Grafana
-# URL: http://localhost:3000
-# Username: admin
-# Password: <GRAFANA_PASSWORD from .env>
-
-# Access Prometheus
-# URL: http://localhost:9090
+# Stop services
+docker-compose --profile redis down
 ```
 
 ## Volume Management
@@ -137,16 +133,14 @@ docker-compose --profile monitoring up -d
 The system uses Docker volumes for data persistence:
 
 - `postgres_data`: Database files
-- `redis_data`: Redis persistence
-- `prometheus_data`: Metrics data
-- `grafana_data`: Dashboard configuration
+- `redis_data`: Redis persistence (when using Redis profile)
 
 ### Backup Data
 ```bash
 # Backup PostgreSQL
 docker exec trading-postgres pg_dump -U trader trading_agent > backup.sql
 
-# Backup Redis
+# Backup Redis (only when using Redis profile)
 docker exec trading-redis redis-cli SAVE
 docker cp trading-redis:/data/dump.rdb ./redis_backup.rdb
 
@@ -159,7 +153,7 @@ docker volume ls
 # Restore PostgreSQL
 docker exec -i trading-postgres psql -U trader trading_agent < backup.sql
 
-# Restore Redis
+# Restore Redis (only when using Redis profile)
 docker cp ./redis_backup.rdb trading-redis:/data/dump.rdb
 docker restart trading-redis
 ```
@@ -198,21 +192,22 @@ docker inspect trading-agent | grep -A 10 Health
    docker exec -it trading-postgres psql -U trader -d trading_agent
    ```
 
-3. **Redis connection issues**:
+3. **Redis connection issues** (when using Redis profile):
    ```bash
    # Check Redis logs
-   docker-compose logs redis
+   docker-compose --profile redis logs redis
    
    # Test connection
    docker exec -it trading-redis redis-cli ping
    ```
 
-4. **Out of memory**:
+4. **Events not working**:
    ```bash
-   # Check resource usage
-   docker stats
+   # Check USE_REDIS environment variable
+   docker-compose exec trading-agent env | grep USE_REDIS
    
-   # Increase memory limits in docker-compose.yml
+   # Check Redis URL if using Redis
+   docker-compose exec trading-agent env | grep REDIS_URL
    ```
 
 ### Debug Mode
@@ -225,12 +220,15 @@ echo "LOG_LEVEL=DEBUG" >> .env
 
 # Restart services
 docker-compose restart trading-agent
+
+# For Redis profile
+docker-compose --profile redis restart trading-agent
 ```
 
 ## Security Considerations
 
-1. **Use strong passwords** for all services
-2. **Enable SSL/TLS** for production deployments
+1. **Use strong passwords** for database and Redis
+2. **Secure environment variables** in .env file
 3. **Configure firewall** rules to restrict access
 4. **Regular security updates**:
    ```bash
@@ -238,45 +236,9 @@ docker-compose restart trading-agent
    docker-compose pull
    docker-compose up -d
    ```
+5. **Network isolation** - services communicate through Docker internal network
 
-## Performance Tuning
 
-### Resource Limits
-```yaml
-# Add to docker-compose.yml services
-deploy:
-  resources:
-    limits:
-      cpus: '0.5'
-      memory: 512M
-    reservations:
-      cpus: '0.25'
-      memory: 256M
-```
-
-### Database Optimization
-```bash
-# Tune PostgreSQL settings in docker/postgres/postgresql.conf
-shared_buffers = 256MB
-effective_cache_size = 1GB
-```
-
-## Scaling
-
-### Horizontal Scaling
-```bash
-# Scale trading agent
-docker-compose up -d --scale trading-agent=3
-
-# Use load balancer
-docker-compose --profile production up -d
-```
-
-### Vertical Scaling
-```bash
-# Increase resource limits
-# Edit docker-compose.yml memory and CPU limits
-```
 
 ## Maintenance
 
@@ -303,24 +265,84 @@ logging:
     max-file: "3"
 ```
 
-## Monitoring and Alerting
+## Performance Tuning
 
-### Grafana Dashboards
-- System metrics (CPU, memory, disk)
-- Trading performance
-- Database performance
-- Redis metrics
+### Resource Usage
+- **Basic**: ~500MB RAM, minimal CPU
+- **With Redis**: ~1GB RAM, moderate CPU
 
-### Prometheus Alerts
-- High error rates
-- System resource usage
-- Database connection issues
-- Trading anomalies
+### Database Optimization
+The PostgreSQL configuration is already optimized for trading workloads. You can further tune settings in `docker/postgres/postgresql.conf`.
+
+## Accessing the Application
+
+- **Trading Agent**: http://localhost:8000
+- **PostgreSQL**: localhost:5432 (for database access)
+- **Redis**: localhost:6379 (when using Redis profile)
+
+## Differences Between Deployment Options
+
+### Basic Deployment (Default)
+- ✅ **All trading functionality**
+- ✅ **AI decision making**
+- ✅ **Telegram bot**
+- ✅ **Data persistence**
+- ✅ **In-memory events**
+- ❌ **No distributed events**
+- ❌ **No event history**
+
+### With Redis Profile
+- ✅ **All basic features**
+- ✅ **Distributed events**
+- ✅ **Event history**
+- ✅ **Better performance for multiple instances**
+- ✅ **Caching capabilities**
+
+## When to Use Each Option
+
+### Use Basic Deployment When:
+- Development/testing
+- Single instance deployment
+- Limited resources
+- Simple setup preferred
+
+### Use Redis Profile When:
+- Production deployment
+- Need event history
+- Multiple instances
+- Better performance requirements
 
 ## Support
 
 For issues and questions:
-1. Check the logs: `docker-compose logs`
+1. Check the logs: 
+   - Basic: `docker-compose logs`
+   - With Redis: `docker-compose --profile redis logs`
 2. Review the troubleshooting section
 3. Check the main documentation
-4. Submit an issue with log files and configuration details 
+4. Submit an issue with log files and configuration details
+
+## Migration Between Deployment Options
+
+### From Basic to Redis Profile
+```bash
+# Stop current deployment
+docker-compose down
+
+# Start with Redis
+docker-compose --profile redis up -d
+
+# Data is preserved (PostgreSQL volume is shared)
+```
+
+### From Redis Profile to Basic
+```bash
+# Stop Redis deployment
+docker-compose --profile redis down
+
+# Start basic deployment
+docker-compose up -d
+
+# Update environment variables if needed
+# Set USE_REDIS=false in .env
+``` 

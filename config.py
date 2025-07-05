@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(..., env="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: str = Field(..., env="TELEGRAM_CHAT_ID")
     
-    # Redis for event system
-    redis_url: str = Field("redis://localhost:6379/0", env="REDIS_URL")
+    # Redis for event system (optional - will use in-memory events if not provided)
+    redis_url: Optional[str] = Field(None, env="REDIS_URL")
     
     # Database
     database_url: str = Field("sqlite:///./trading_agent.db", env="DATABASE_URL")

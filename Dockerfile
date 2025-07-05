@@ -10,7 +10,6 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     curl \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -34,7 +33,7 @@ RUN useradd -m -u 1000 trader && \
     chown -R trader:trader /app
 USER trader
 
-# Expose port (for health checks and potential web interface)
+# Expose port
 EXPOSE 8000
 
 # Health check
