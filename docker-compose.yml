@@ -1,9 +1,7 @@
-version: '3.8'
-
 services:
   # Main Trading Application
   trading-agent:
-    build: .
+    image: brerudike/trading-agent:latest
     container_name: trading-agent
     restart: unless-stopped
     depends_on:
