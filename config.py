@@ -13,9 +13,16 @@ class Settings(BaseSettings):
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
     tiingo_api_key: str = "test_key"
     
+    # LLM Configuration
+    llm_provider: str = "openai"  # Options: "openai", "deepseek"
+    
     # OpenAI API
     openai_api_key: str = "test_key"
     openai_model: str = "gpt-4o"
+    
+    # DeepSeek API
+    deepseek_api_key: str = "test_key"
+    deepseek_model: str = "deepseek-chat"
     
     # Telegram Bot
     telegram_bot_token: str = "test_token"
@@ -25,10 +32,7 @@ class Settings(BaseSettings):
     postgres_password: Optional[str] = None
     database_url: str = "sqlite:///./trading_agent.db"
     
-    # Redis for event system (optional - will use in-memory events if not provided)
-    redis_url: Optional[str] = None
-    redis_password: Optional[str] = None
-    use_redis: bool = False
+    # Event system uses in-memory events only
     
     # Trading Parameters
     paper_trading: bool = True

@@ -20,17 +20,25 @@ def setup_logging():
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    # Setup file handler
+    # Setup file handler with UTF-8 encoding
     file_handler = logging.FileHandler(
-        log_dir / f"trading_agent_{datetime.now().strftime('%Y%m%d')}.log"
+        log_dir / f"trading_agent_{datetime.now().strftime('%Y%m%d')}.log",
+        encoding='utf-8'
     )
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.INFO)
     
-    # Setup console handler
+    # Setup console handler with UTF-8 encoding
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     console_handler.setLevel(logging.INFO)
+    
+    # Force UTF-8 encoding for Windows
+    if hasattr(console_handler.stream, 'reconfigure'):
+        try:
+            console_handler.stream.reconfigure(encoding='utf-8')
+        except Exception:
+            pass  # Fallback to default encoding
     
     # Setup root logger
     root_logger = logging.getLogger()
@@ -71,7 +79,11 @@ async def main():
         # Print system info
         logger.info(f"Environment: {settings.environment}")
         logger.info(f"Alpaca Base URL: {settings.alpaca_base_url}")
-        logger.info(f"OpenAI Model: {settings.openai_model}")
+        logger.info(f"LLM Provider: {settings.llm_provider}")
+        if settings.llm_provider.lower() == "openai":
+            logger.info(f"OpenAI Model: {settings.openai_model}")
+        elif settings.llm_provider.lower() == "deepseek":
+            logger.info(f"DeepSeek Model: {settings.deepseek_model}")
         logger.info(f"Rebalance Time: {settings.rebalance_time}")
         logger.info(f"Max Position Size: {settings.max_position_size * 100}%")
         logger.info(f"Stop Loss: {settings.stop_loss_percentage * 100}%")
@@ -108,7 +120,7 @@ if __name__ == "__main__":
     ║                                                                ║
     ║                    🤖 LLM Trading Agent                        ║
     ║                                                                ║
-    ║    Powered by OpenAI O3 • Alpaca API • Tiingo News • Redis    ║
+    ║   Powered by OpenAI/DeepSeek • Alpaca API • Tiingo           ║
     ║                                                                ║
     ║                     Built with LangGraph                       ║
     ║                                                                ║

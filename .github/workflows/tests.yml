@@ -13,16 +13,7 @@ jobs:
       matrix:
         python-version: [3.8, 3.9, '3.10', '3.11']
 
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+
 
     steps:
     - uses: actions/checkout@v4
@@ -54,7 +45,7 @@ jobs:
         echo "OPENAI_API_KEY=test_key" >> .env
         echo "TELEGRAM_BOT_TOKEN=test_token" >> .env
         echo "TELEGRAM_CHAT_ID=test_chat_id" >> .env
-        echo "REDIS_URL=redis://localhost:6379/0" >> .env
+        
 
     - name: Run unit tests
       run: |

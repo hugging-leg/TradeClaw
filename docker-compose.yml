@@ -11,9 +11,7 @@ services:
     env_file:
       - .env
     environment:
-      - REDIS_URL=${REDIS_URL:-}
       - DATABASE_URL=postgresql://trader:${POSTGRES_PASSWORD}@postgres:5432/trading_agent
-      - USE_REDIS=${USE_REDIS:-true}
     volumes:
       - ./logs:/app/logs
       - ./data:/app/data
@@ -27,26 +25,7 @@ services:
       retries: 3
       start_period: 30s
 
-  # Redis for Event System and Caching (Optional)
-  redis:
-    image: redis:7-alpine
-    container_name: trading-redis
-    restart: unless-stopped
-    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis123}
-    environment:
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-redis123}
-    volumes:
-      - redis_data:/data
-      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    profiles:
-      - redis
+
 
   # PostgreSQL Database
   postgres:
@@ -72,7 +51,5 @@ services:
 
 # Volumes for data persistence
 volumes:
-  redis_data:
-    driver: local
   postgres_data:
     driver: local 

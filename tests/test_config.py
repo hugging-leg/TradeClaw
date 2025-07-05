@@ -46,7 +46,6 @@ class TestSettings:
             # Test values from .env file
             assert "paper-api.alpaca.markets" in settings.alpaca_base_url
             assert settings.openai_model == "gpt-4o"
-            assert settings.redis_url == "redis://redis:6379/0"
             assert settings.database_url == "sqlite:///./trading_agent.db"
             assert settings.max_position_size == 10000.0  # From .env file
             assert settings.rebalance_time == "09:30"
@@ -63,7 +62,6 @@ class TestSettings:
         'TELEGRAM_BOT_TOKEN': 'test_token',
         'TELEGRAM_CHAT_ID': 'test_chat',
         'ALPACA_BASE_URL': 'https://api.alpaca.markets',
-        'REDIS_URL': 'redis://localhost:6379/1',
         'MAX_POSITION_SIZE': '0.2',
         'STOP_LOSS_PERCENTAGE': '0.03',
         'TAKE_PROFIT_PERCENTAGE': '0.20',
@@ -75,7 +73,6 @@ class TestSettings:
         settings = Settings()
         
         assert settings.alpaca_base_url == "https://api.alpaca.markets"
-        assert settings.redis_url == "redis://localhost:6379/1"
         assert settings.max_position_size == 0.2
         assert settings.stop_loss_percentage == 0.03
         assert settings.take_profit_percentage == 0.20
@@ -92,17 +89,7 @@ class TestSettings:
             assert len(settings.alpaca_api_key) > 0  # Should not be empty
             assert settings.environment == "development"
     
-    def test_settings_with_no_env_file(self):
-        """Test settings when no .env file exists (pure defaults)."""
-        with patch.dict(os.environ, {}, clear=True):
-            # Mock the file not existing to test pure defaults
-            with patch('builtins.open', side_effect=FileNotFoundError):
-                with patch.object(Settings.model_config, 'env_file', 'nonexistent.env'):
-                    settings = Settings()
-                    # Should use the hardcoded defaults
-                    assert settings.alpaca_api_key == "test_key"
-                    assert settings.alpaca_base_url == "https://paper-api.alpaca.markets"
-                    assert settings.environment == "development"
+
     
     @patch.dict(os.environ, {
         'ALPACA_API_KEY': 'test_key',

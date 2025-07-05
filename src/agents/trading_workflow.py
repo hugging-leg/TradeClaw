@@ -1,15 +1,16 @@
 import asyncio
 import json
 import logging
-from typing import Dict, List, Any, Optional, Annotated
+from typing import Dict, List, Any, Optional, Annotated, Union
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from langchain.schema import HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
+from langchain_deepseek import ChatDeepSeek
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
-from langgraph.prebuilt import ToolExecutor, ToolInvocation
+# from langgraph.prebuilt import ToolExecutor, ToolInvocation  # Not needed for current implementation
 from langchain.tools import tool
 from pydantic import BaseModel, Field
 
@@ -22,6 +23,34 @@ from src.models.trading_models import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def create_llm_client():
+    """
+    Factory function to create LLM client based on provider setting.
+    
+    Returns:
+        Chat client instance configured for the specified provider
+    """
+    if settings.llm_provider.lower() == "deepseek":
+        return ChatDeepSeek(
+            model=settings.deepseek_model,
+            api_key=settings.deepseek_api_key,
+            temperature=0.1
+        )
+    elif settings.llm_provider.lower() == "openai":
+        return ChatOpenAI(
+            model=settings.openai_model,
+            api_key=settings.openai_api_key,
+            temperature=0.1
+        )
+    else:
+        logger.warning(f"Unknown LLM provider: {settings.llm_provider}. Defaulting to OpenAI.")
+        return ChatOpenAI(
+            model=settings.openai_model,
+            api_key=settings.openai_api_key,
+            temperature=0.1
+        )
 
 
 class TradingState(BaseModel):
@@ -186,8 +215,9 @@ Order placed successfully:
             orders_info = f"Active Orders ({len(orders)}):\n\n"
             
             for order in orders:
+                price_str = f"${order.price:.2f}" if order.price else "Market"
                 orders_info += f"- {order.symbol} {order.side.value.upper()} {order.quantity} "
-                orders_info += f"@ ${order.price:.2f} if order.price else 'Market'}"
+                orders_info += f"@ {price_str}"
                 orders_info += f" (Status: {order.status.value.upper()})\n"
             
             return orders_info
@@ -231,11 +261,7 @@ class TradingWorkflow:
         self.alpaca_api = alpaca_api
         self.tiingo_api = tiingo_api
         self.tools = TradingTools(alpaca_api, tiingo_api)
-        self.llm = ChatOpenAI(
-            model=settings.openai_model,
-            api_key=settings.openai_api_key,
-            temperature=0.1  # Lower temperature for more consistent trading decisions
-        )
+        self.llm = create_llm_client()
         self.workflow = None
         self._build_workflow()
     

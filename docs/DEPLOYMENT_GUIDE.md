@@ -13,7 +13,7 @@ This guide covers deploying the LLM Trading Agent in production environments wit
 └─────────────────┴─────────────────┴─────────────────────────────┘
 ├─────────────────┬─────────────────┬─────────────────────────────┤
 │   Database      │   Cache Layer   │      Message Queue          │
-│  (PostgreSQL)   │    (Redis)      │      (Redis/RabbitMQ)       │
+│  (PostgreSQL)   │    (Events)     │      (Message Queue)        │
 └─────────────────┴─────────────────┴─────────────────────────────┘
 ├─────────────────┬─────────────────┬─────────────────────────────┤
 │   Monitoring    │     Logging     │       Backup & Recovery     │
@@ -47,7 +47,7 @@ Suitable for:
 - Load balancer
 - Multiple application servers
 - Dedicated database server
-- Redis cluster
+
 - Monitoring infrastructure
 
 ### Option 3: Cloud Deployment (AWS/GCP/Azure)
@@ -116,7 +116,6 @@ services:
     env_file:
       - .env.production
     depends_on:
-      - redis
       - postgres
     restart: unless-stopped
     volumes:
@@ -125,16 +124,7 @@ services:
     networks:
       - trading-network
 
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    restart: unless-stopped
-    networks:
-      - trading-network
-    command: redis-server --appendonly yes
+
 
   postgres:
     image: postgres:15-alpine
@@ -164,7 +154,6 @@ services:
       - trading-network
 
 volumes:
-  redis_data:
   postgres_data:
 
 networks:
@@ -314,8 +303,7 @@ TELEGRAM_CHAT_ID=prod_chat_id
 # Database
 DATABASE_URL=postgresql://trader:secure_password@postgres:5432/trading_agent
 
-# Redis
-REDIS_URL=redis://redis:6379/0
+
 
 # Security
 ENVIRONMENT=production
@@ -493,30 +481,7 @@ CREATE INDEX idx_trades_created_at ON trades(created_at);
 CREATE INDEX idx_portfolio_created_at ON portfolio_history(created_at);
 ```
 
-### 2. Redis Configuration
 
-**redis.conf:**
-```bash
-# Network
-bind 0.0.0.0
-port 6379
-
-# Persistence
-save 900 1
-save 300 10
-save 60 10000
-
-# Security
-requirepass your_redis_password
-
-# Memory
-maxmemory 256mb
-maxmemory-policy allkeys-lru
-
-# Logging
-loglevel notice
-logfile /var/log/redis/redis-server.log
-```
 
 ## 🔐 Backup and Recovery
 
@@ -543,32 +508,12 @@ aws s3 cp $BACKUP_DIR/backup_$DATE.sql.gz s3://your-backup-bucket/
 find $BACKUP_DIR -name "backup_*.sql.gz" -mtime +30 -delete
 ```
 
-### 2. Redis Backup
-
-```bash
-#!/bin/bash
-# redis_backup.sh
-
-REDIS_DATA_DIR="/var/lib/redis"
-BACKUP_DIR="/backups/redis"
-DATE=$(date +%Y%m%d_%H%M%S)
-
-# Create backup
-cp $REDIS_DATA_DIR/dump.rdb $BACKUP_DIR/dump_$DATE.rdb
-
-# Compress
-gzip $BACKUP_DIR/dump_$DATE.rdb
-```
-
-### 3. Automated Backup Schedule
+### 2. Automated Backup Schedule
 
 **crontab:**
 ```bash
 # Database backup every 6 hours
 0 */6 * * * /scripts/backup.sh
-
-# Redis backup daily at 2 AM
-0 2 * * * /scripts/redis_backup.sh
 
 # Log rotation
 0 1 * * * /usr/sbin/logrotate /etc/logrotate.conf
@@ -590,7 +535,6 @@ async def health_check():
     """Health check endpoint"""
     try:
         # Check database connection
-        # Check Redis connection
         # Check API connections
         return {"status": "healthy", "timestamp": datetime.now()}
     except Exception as e:
@@ -658,15 +602,7 @@ ALTER SYSTEM SET wal_buffers = '16MB';
 SELECT pg_reload_conf();
 ```
 
-### 3. Redis Optimization
 
-```bash
-# In redis.conf
-tcp-keepalive 300
-timeout 0
-tcp-backlog 511
-databases 16
-```
 
 ## 📈 Scaling Considerations
 
@@ -675,7 +611,7 @@ databases 16
 - Use load balancer (nginx/HAProxy)
 - Deploy multiple application instances
 - Implement sticky sessions for Telegram bot
-- Use Redis for shared state
+
 
 ### 2. Vertical Scaling
 

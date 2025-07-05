@@ -1,12 +1,13 @@
 # 🤖 LLM Trading Agent
 
-A sophisticated, event-driven trading system that uses OpenAI's LLM (O3) to make intelligent trading decisions for US stocks. The system integrates multiple APIs and uses LangGraph for orchestrating complex trading workflows.
+A sophisticated, event-driven trading system that uses advanced LLMs (OpenAI or DeepSeek) to make intelligent trading decisions for US stocks. The system integrates multiple APIs and uses LangGraph for orchestrating complex trading workflows.
 
 ## ⚡ Key Features
 
-- **🧠 AI-Powered Trading**: Uses OpenAI O3 for intelligent trading decisions
+- **🧠 AI-Powered Trading**: Uses OpenAI GPT-4o/O3 or DeepSeek models for intelligent trading decisions
+- **💰 Cost-Effective Options**: Choose between OpenAI (premium) or DeepSeek (cost-effective) LLM providers
 - **📊 Real-Time Data**: Integrates Alpaca API for trading and Tiingo for news/market data
-- **🔄 Event-Driven Architecture**: Redis-based pub/sub system for real-time event handling
+- **🔄 Event-Driven Architecture**: In-memory event system for real-time event handling
 - **📱 Telegram Control**: Complete remote control and notifications via Telegram bot
 - **⏰ Automated Scheduling**: Daily rebalancing and risk management
 - **🛡️ Risk Management**: Built-in stop-loss, take-profit, and portfolio risk controls
@@ -17,7 +18,7 @@ A sophisticated, event-driven trading system that uses OpenAI's LLM (O3) to make
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
-│   Telegram Bot  │    │   OpenAI O3     │    │   Alpaca API    │
+│   Telegram Bot  │    │ OpenAI/DeepSeek │    │   Alpaca API    │
 │   (Control)     │    │   (Decisions)   │    │   (Trading)     │
 └─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
           │                      │                      │
@@ -32,7 +33,7 @@ A sophisticated, event-driven trading system that uses OpenAI's LLM (O3) to make
           │                      │                      │
 ┌─────────▼───────┐    ┌─────────▼───────┐    ┌─────────▼───────┐
 │  Event System   │    │   LangGraph     │    │   Scheduler     │
-│  (Redis)        │    │   (Workflow)    │    │   (Daily Jobs)  │
+│  (In-Memory)    │    │   (Workflow)    │    │   (Daily Jobs)  │
 └─────────────────┘    └─────────────────┘    └─────────────────┘
           │                      │                      │
           └──────────────────────┼──────────────────────┘
@@ -46,11 +47,10 @@ A sophisticated, event-driven trading system that uses OpenAI's LLM (O3) to make
 ## 📋 Prerequisites
 
 - Python 3.8+
-- Redis server
 - API keys for:
   - Alpaca Trading API
   - Tiingo News API
-  - OpenAI API
+  - OpenAI API OR DeepSeek API
   - Telegram Bot
 
 ## 🚀 Installation
@@ -66,24 +66,14 @@ cd Agent_Trader
 pip install -r requirements.txt
 ```
 
-3. **Setup Redis** (if not already installed):
-```bash
-# Ubuntu/Debian
-sudo apt-get install redis-server
 
-# macOS
-brew install redis
 
-# Windows
-# Download from https://redis.io/download
-```
-
-4. **Create environment file**:
+3. **Create environment file**:
 ```bash
 cp .env.example .env
 ```
 
-5. **Configure your API keys** in `.env`:
+4. **Configure your API keys** in `.env`:
 ```bash
 # Trading APIs
 ALPACA_API_KEY=your_alpaca_api_key_here
@@ -91,16 +81,20 @@ ALPACA_SECRET_KEY=your_alpaca_secret_key_here
 ALPACA_BASE_URL=https://paper-api.alpaca.markets
 TIINGO_API_KEY=your_tiingo_api_key_here
 
-# OpenAI API
+# LLM Provider Selection
+LLM_PROVIDER=openai  # Options: openai, deepseek
+
+# OpenAI Configuration
 OPENAI_API_KEY=your_openai_api_key_here
 OPENAI_MODEL=gpt-4o
+
+# DeepSeek Configuration (Alternative to OpenAI)
+DEEPSEEK_API_KEY=your_deepseek_api_key_here
+DEEPSEEK_MODEL=deepseek-chat
 
 # Telegram Bot
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 TELEGRAM_CHAT_ID=your_telegram_chat_id_here
-
-# Redis
-REDIS_URL=redis://localhost:6379/0
 ```
 
 ## 🔧 Configuration
@@ -134,23 +128,59 @@ LOG_LEVEL=INFO                # DEBUG, INFO, WARNING, ERROR
 - Sign up at [tiingo.com](https://tiingo.com)
 - Get your free API key from the dashboard
 
-#### 3. OpenAI API
+#### 3. LLM Provider (Choose One)
+
+**Option A: OpenAI API**
 - Sign up at [openai.com](https://openai.com)
 - Create API key with access to GPT-4o or O3
+- Higher quality, premium pricing
+
+**Option B: DeepSeek API**
+- Sign up at [platform.deepseek.com](https://platform.deepseek.com)
+- Create API key for DeepSeek models
+- Cost-effective alternative (~90% cheaper than OpenAI)
 
 #### 4. Telegram Bot
 - Create a bot via [@BotFather](https://t.me/BotFather)
 - Get your bot token
 - Find your chat ID by messaging [@userinfobot](https://t.me/userinfobot)
 
+## 🧠 LLM Provider Options
+
+The system supports two LLM providers:
+
+### OpenAI (Premium)
+- **Models**: GPT-4o, GPT-4, GPT-3.5-turbo
+- **Pros**: Highest quality reasoning, fastest responses
+- **Cons**: Higher cost
+- **Best For**: Production trading with premium requirements
+
+### DeepSeek (Cost-Effective)
+- **Models**: deepseek-chat, deepseek-coder
+- **Pros**: ~90% cheaper than OpenAI, good performance
+- **Cons**: Slightly less nuanced reasoning
+- **Best For**: Development, testing, cost-conscious production
+
+### Switching Providers
+
+Simply update your `.env` file:
+```bash
+# Switch to DeepSeek
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your_deepseek_key
+
+# Switch to OpenAI
+LLM_PROVIDER=openai
+OPENAI_API_KEY=your_openai_key
+```
+
+For detailed LLM configuration, see [LLM Provider Guide](docs/LLM_PROVIDER_GUIDE.md).
+
 ## 🏃 Usage
 
 ### Starting the System
 
 ```bash
-# Start Redis server
-redis-server
-
 # Start the trading system
 python main.py
 ```
@@ -187,7 +217,7 @@ Main orchestrator that coordinates all components:
 - Manages emergency procedures
 
 ### 2. Event System (`src/events/event_system.py`)
-Redis-based pub/sub system for real-time events:
+In-memory event system for real-time events:
 - Order events (created, filled, canceled)
 - Portfolio updates
 - System alerts
@@ -386,8 +416,7 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 For issues and questions:
 1. Check the logs in `logs/` directory
 2. Review the Telegram bot messages
-3. Check Redis connection
-4. Verify API keys and permissions
+3. Verify API keys and permissions
 
 ## 🙏 Acknowledgments
 
@@ -395,7 +424,6 @@ For issues and questions:
 - **Alpaca** for the trading API
 - **Tiingo** for market data and news
 - **LangGraph** for workflow orchestration
-- **Redis** for event handling
 
 ---
 

@@ -1,185 +1,212 @@
-# Docker Setup Summary
+# 🐳 Docker Setup Summary
 
-## 🚀 统一后的Docker部署架构
-
-经过整理后，LLM Trading Agent现在提供了一个统一的Docker部署方案，支持灵活的组件配置。
-
-## 📁 文件结构
+## 📋 Architecture Overview
 
 ```
-Agent_Trader/
-├── docker-compose.yml          # 统一的Docker编排文件
-├── Dockerfile                  # 应用程序容器镜像
-├── requirements.txt           # Python依赖包
-├── env.template              # 环境变量模板
-├── .dockerignore             # Docker构建忽略文件
-├── DOCKER_DEPLOYMENT.md      # 完整部署指南
-├── docker/
-│   ├── postgres/
-│   │   ├── init.sql          # 数据库初始化脚本
-│   │   └── postgresql.conf   # PostgreSQL配置
-│   └── redis/
-│       └── redis.conf        # Redis配置
-└── src/                      # 应用程序源代码
+┌─────────────────────────────────────────────────────┐
+│                LLM Trading Agent                    │
+│          (In-Memory Event System)                   │
+└─────────────────┬───────────────────────────────────┘
+                  │
+┌─────────────────▼───────────────────────────────────┐
+│                PostgreSQL                           │
+│              (Data Storage)                         │
+└─────────────────────────────────────────────────────┘
 ```
 
-## 🔧 部署选项
+## 🚀 Quick Start
 
-### 1. 基础部署 (推荐用于开发)
+### 1. Basic Deployment
 ```bash
-# 启动: Trading Agent + PostgreSQL
+# Clone and navigate
+git clone <repository>
+cd Agent_Trader
+
+# Build and start
 docker-compose up -d
 
-# 特点:
-# - 内存事件系统
-# - 最小资源占用 (~500MB RAM)
-# - 快速启动
+# Check status
+docker-compose ps
 ```
 
-### 2. 完整部署 (推荐用于生产)
-```bash
-# 启动: Trading Agent + PostgreSQL + Redis
-docker-compose --profile redis up -d
+## 📁 Project Structure
 
-# 特点:
-# - 分布式事件系统
-# - 事件历史记录
-# - 缓存支持
-# - 更好的性能 (~1GB RAM)
+```
+docker/
+│   └── postgres/
+│       ├── init.sql          # Database initialization
+│       └── postgresql.conf   # PostgreSQL configuration
+
+└── src/                      # Application source code
 ```
 
-## 🗂️ 核心组件
+## 🐳 Docker Services
 
-| 组件 | 作用 | 端口 | 状态 |
-|------|------|------|------|
-| **Trading Agent** | 主应用程序 | 8000 | 必需 |
-| **PostgreSQL** | 数据库 | 5432 | 必需 |
-| **Redis** | 事件系统/缓存 | 6379 | 可选 |
+| Service | Purpose | Port | Status |
+|---------|---------|------|--------|
+| **Trading Agent** | Main application | 8000 | Required |
+| **PostgreSQL** | Database | 5432 | Required |
 
-## ❌ 已移除的组件
+## ❌ Removed Components
 
-为了简化部署，以下组件已被移除:
-- ~~Nginx~~ (直接访问8000端口)
-- ~~Prometheus~~ (无监控指标)
-- ~~Grafana~~ (无仪表板)
-- ~~Celery~~ (简化后台任务)
+The following components have been removed in favor of simpler in-memory alternatives:
+- Redis (replaced with in-memory event system)
+- Complex caching layers
+- Distributed event handling
 
-## 📋 环境变量配置
+## 🔧 Environment Configuration
+
+Copy and configure your environment:
 
 ```bash
-# 必需API密钥
+cp env.template .env
+```
+
+Required configuration:
+```bash
+# Trading APIs
 ALPACA_API_KEY=your_key
 ALPACA_SECRET_KEY=your_secret
 TIINGO_API_KEY=your_key
-OPENAI_API_KEY=your_key
+
+# LLM Provider
+LLM_PROVIDER=openai  # or deepseek
+OPENAI_API_KEY=your_key  # if using OpenAI
+DEEPSEEK_API_KEY=your_key  # if using DeepSeek
+
+# Telegram
 TELEGRAM_BOT_TOKEN=your_token
 TELEGRAM_CHAT_ID=your_chat_id
 
-# 数据库配置
+# Database
 POSTGRES_PASSWORD=secure_password
 
-# Redis配置 (可选)
-REDIS_URL=redis://redis:6379/0
-REDIS_PASSWORD=secure_password
-USE_REDIS=true  # 设为false使用内存事件
 ```
 
-## 🚦 快速启动指南
+## 🚀 Deployment Commands
 
-1. **准备环境**:
-   ```bash
-   cp env.template .env
-   # 编辑 .env 文件填入你的API密钥
-   ```
-
-2. **选择部署模式**:
-   ```bash
-   # 基础部署
-   docker-compose up -d
-   
-   # 或完整部署
-   docker-compose --profile redis up -d
-   ```
-
-3. **检查状态**:
-   ```bash
-   docker-compose ps
-   docker-compose logs -f trading-agent
-   ```
-
-## 📊 资源使用对比
-
-| 部署模式 | RAM使用 | 磁盘占用 | 容器数量 | 启动时间 |
-|----------|---------|----------|----------|----------|
-| **基础** | ~500MB | ~2GB | 2个 | ~30秒 |
-| **完整** | ~1GB | ~3GB | 3个 | ~45秒 |
-| ~~原完整~~ | ~~~2GB~~ | ~~~5GB~~ | ~~6个~~ | ~~~2分钟~~ |
-
-## 🔄 迁移指南
-
-### 从基础到完整部署:
+### Start Services
 ```bash
-docker-compose down
-docker-compose --profile redis up -d
-```
-
-### 从完整到基础部署:
-```bash
-docker-compose --profile redis down
-echo "USE_REDIS=false" >> .env
-docker-compose up -d
-```
-
-## 🛠️ 维护操作
-
-```bash
-# 更新镜像
-docker-compose pull
+# Start all services
 docker-compose up -d
 
-# 备份数据库
-docker exec trading-postgres pg_dump -U trader trading_agent > backup.sql
+# Start with logs
+docker-compose up
 
-# 查看日志
+# Scale the application
+docker-compose up -d --scale app=2
+```
+
+### Management
+```bash
+# View logs
 docker-compose logs -f
 
-# 清理系统
-docker system prune -a
+# Restart application
+docker-compose restart app
+
+# Stop services
+docker-compose down
+
+# Clean up (removes volumes)
+docker-compose down -v
 ```
 
-## 🎯 适用场景
+### Monitoring
+```bash
+# Check service status
+docker-compose ps
 
-### 使用基础部署:
-- ✅ 开发和测试
-- ✅ 个人使用
-- ✅ 资源有限的环境
-- ✅ 简单的交易策略
+# Monitor resource usage
+docker stats
 
-### 使用完整部署:
-- ✅ 生产环境
-- ✅ 需要事件历史
-- ✅ 多实例部署
-- ✅ 复杂的交易策略
+# View application logs
+docker-compose logs app
 
-## 🔐 安全要点
+# View database logs
+docker-compose logs postgres
+```
 
-1. **环境变量安全**: 使用强密码，不要提交.env文件
-2. **网络隔离**: 服务间通过Docker内网通信
-3. **用户权限**: 容器内使用非root用户运行
-4. **定期更新**: 定期更新Docker镜像和依赖
+## 🔍 Troubleshooting
 
-## 💡 最佳实践
+### Common Issues
 
-1. **开发阶段**: 使用基础部署进行快速迭代
-2. **测试阶段**: 使用完整部署验证功能
-3. **生产部署**: 使用完整部署确保稳定性
-4. **监控**: 通过日志监控系统状态
-5. **备份**: 定期备份数据库和配置
+1. **Application won't start**:
+   ```bash
+   # Check logs
+   docker-compose logs app
+   
+   # Verify environment
+   docker-compose exec app env | grep API
+   ```
 
-## 🆘 故障排除
+2. **Database connection issues**:
+   ```bash
+   # Check database status
+   docker-compose logs postgres
+   
+   # Test connection
+   docker-compose exec postgres psql -U trader -d trading_agent
+   ```
 
-常见问题及解决方案请参考 [DOCKER_DEPLOYMENT.md](DOCKER_DEPLOYMENT.md) 中的故障排除章节。
+3. **API authentication errors**:
+   - Verify API keys in `.env`
+   - Check API key permissions
+   - Ensure no trailing spaces in environment variables
+
+### Health Checks
+```bash
+# Application health
+curl http://localhost:8000/health
+
+# Database connection
+docker-compose exec postgres pg_isready -U trader
+```
+
+## 📊 Performance
+
+### Resource Requirements
+- **Minimal**: 512MB RAM, 1 CPU core
+- **Recommended**: 1GB RAM, 2 CPU cores
+- **Storage**: 5GB minimum for logs and database
+
+### Ports Used
+- **Application**: localhost:8000
+- **PostgreSQL**: localhost:5432
+
+## 🔄 Updates and Maintenance
+
+### Update Application
+```bash
+# Pull latest changes
+git pull
+
+# Rebuild and restart
+docker-compose build
+docker-compose up -d
+```
+
+### Backup Database
+```bash
+# Create backup
+docker-compose exec postgres pg_dump -U trader trading_agent > backup.sql
+
+# Restore backup
+docker-compose exec -T postgres psql -U trader trading_agent < backup.sql
+```
+
+## 📈 Scaling
+
+### Horizontal Scaling
+- Deploy multiple application instances
+- Use load balancer (nginx)
+- Shared database for state
+
+### Monitoring
+- Built-in health checks
+- Application metrics via logs
+- Database monitoring with PostgreSQL tools
 
 ---
 
-这个统一的Docker设置提供了灵活性和简便性的完美平衡，让你可以根据需要选择合适的部署模式。🎉 
+**Note**: This setup uses in-memory events for simplicity. For distributed deployments, consider implementing database-backed event storage if needed. 

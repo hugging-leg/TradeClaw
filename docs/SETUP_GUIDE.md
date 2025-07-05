@@ -5,7 +5,7 @@ This guide will walk you through setting up the LLM Trading Agent system step by
 ## 📋 Prerequisites Checklist
 
 - [ ] Python 3.8 or higher installed
-- [ ] Redis server (we'll install this)
+
 - [ ] Git installed
 - [ ] Text editor or IDE
 
@@ -50,38 +50,11 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Install Redis Server
-
-#### Ubuntu/Debian:
-```bash
-sudo apt-get update
-sudo apt-get install redis-server
-sudo systemctl start redis
-sudo systemctl enable redis
-```
-
-#### macOS:
-```bash
-brew install redis
-brew services start redis
-```
-
-#### Windows:
-1. Download Redis from https://redis.io/download
-2. Follow Windows installation instructions
-3. Start Redis server
-
-**Test Redis Installation:**
-```bash
-redis-cli ping
-# Should return: PONG
-```
-
-### 4. API Keys Setup
+### 3. API Keys Setup
 
 You'll need to obtain API keys from four services:
 
-#### 4.1 Alpaca Trading API
+#### 3.1 Alpaca Trading API
 
 1. **Sign up** at [alpaca.markets](https://alpaca.markets)
 2. **Verify your identity** (required for trading)
@@ -90,14 +63,14 @@ You'll need to obtain API keys from four services:
 5. **Copy** both API Key and Secret Key
 6. **Note:** Start with paper trading URL: `https://paper-api.alpaca.markets`
 
-#### 4.2 Tiingo News API
+#### 3.2 Tiingo News API
 
 1. **Sign up** at [tiingo.com](https://tiingo.com)
 2. **Go to** your dashboard
 3. **Copy** your API key
 4. **Note:** Free tier includes 1000 requests/day
 
-#### 4.3 OpenAI API
+#### 3.3 OpenAI API
 
 1. **Sign up** at [openai.com](https://openai.com)
 2. **Add billing information** (required for API access)
@@ -105,7 +78,7 @@ You'll need to obtain API keys from four services:
 4. **Copy** your API key
 5. **Note:** Make sure you have access to GPT-4o or O3
 
-#### 4.4 Telegram Bot
+#### 3.4 Telegram Bot
 
 1. **Open Telegram** and search for [@BotFather](https://t.me/BotFather)
 2. **Send** `/newbot` command
@@ -115,7 +88,7 @@ You'll need to obtain API keys from four services:
    - Send a message to [@userinfobot](https://t.me/userinfobot)
    - Copy your chat ID number
 
-### 5. Environment Configuration
+### 4. Environment Configuration
 
 Create a `.env` file in the project root:
 
@@ -144,9 +117,6 @@ OPENAI_MODEL=gpt-4o
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 TELEGRAM_CHAT_ID=your_telegram_chat_id_here
 
-# Redis
-REDIS_URL=redis://localhost:6379/0
-
 # Database
 DATABASE_URL=sqlite:///./trading_agent.db
 
@@ -163,22 +133,19 @@ ENVIRONMENT=development
 LOG_LEVEL=INFO
 ```
 
-### 6. Test Your Setup
+### 5. Test Your Setup
 
-#### 6.1 Test API Connections
+#### 5.1 Test API Connections
 
 ```bash
 # Test the configuration
 python -c "from config import settings; print('Config loaded successfully')"
 
-# Test Redis connection
-redis-cli ping
-
 # Test APIs (create a simple test script)
 python test_apis.py
 ```
 
-#### 6.2 Create Test Script
+#### 5.2 Create Test Script
 
 Create `test_apis.py`:
 
@@ -224,19 +191,9 @@ Run the test:
 python test_apis.py
 ```
 
-### 7. First Run
+### 6. First Run
 
-#### 7.1 Start Redis
-
-```bash
-# Start Redis server
-redis-server
-
-# Or if installed as service:
-# sudo systemctl start redis
-```
-
-#### 7.2 Start the Trading System
+#### 6.1 Start the Trading System
 
 ```bash
 # Start the system
@@ -249,7 +206,7 @@ You should see:
 ║                                                                ║
 ║                    🤖 LLM Trading Agent                        ║
 ║                                                                ║
-║    Powered by OpenAI O3 • Alpaca API • Tiingo News • Redis    ║
+║    Powered by OpenAI O3 • Alpaca API • Tiingo News           ║
 ║                                                                ║
 ║                     Built with LangGraph                       ║
 ║                                                                ║
@@ -272,15 +229,7 @@ You should see:
 
 ### Common Issues
 
-#### 1. Redis Connection Error
-```
-Error: Could not connect to Redis
-```
-**Solution:**
-- Make sure Redis is running: `redis-server`
-- Check Redis status: `redis-cli ping`
-
-#### 2. API Key Errors
+#### 1. API Key Errors
 ```
 Error: Invalid API key
 ```
@@ -289,7 +238,7 @@ Error: Invalid API key
 - Ensure no extra spaces or quotes
 - Verify keys are active on respective platforms
 
-#### 3. Telegram Bot Not Responding
+#### 2. Telegram Bot Not Responding
 ```
 Error: Unauthorized
 ```
@@ -298,7 +247,7 @@ Error: Unauthorized
 - Verify your chat ID is correct
 - Make sure you've sent at least one message to the bot
 
-#### 4. Permission Errors
+#### 3. Permission Errors
 ```
 Error: Insufficient permissions
 ```
@@ -307,7 +256,7 @@ Error: Insufficient permissions
 - Ensure API keys have trading permissions
 - Verify paper trading is enabled
 
-### 5. Module Import Errors
+#### 4. Module Import Errors
 ```
 Error: No module named 'src'
 ```
@@ -345,21 +294,13 @@ LOG_LEVEL=DEBUG python main.py
 DATABASE_URL=postgresql://user:password@localhost/trading_agent
 ```
 
-2. **Configure Redis persistence**:
-```bash
-# In redis.conf
-save 900 1
-save 300 10
-save 60 10000
-```
-
-3. **Set up log rotation**:
+2. **Set up log rotation**:
 ```bash
 # Create logrotate configuration
 sudo nano /etc/logrotate.d/trading-agent
 ```
 
-4. **Use process manager**:
+3. **Use process manager**:
 ```bash
 # Install PM2
 npm install -g pm2

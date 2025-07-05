@@ -30,7 +30,7 @@ def mock_settings():
     settings.telegram_bot_token = "test_bot_token"
     settings.telegram_chat_id = "test_chat_id"
     settings.database_url = "sqlite:///./test_trading_agent.db"
-    settings.redis_url = None
+
     settings.max_position_size = 0.1
     settings.stop_loss_percentage = 0.05
     settings.take_profit_percentage = 0.15
@@ -83,7 +83,7 @@ def clean_environment():
     test_vars = [
         'ALPACA_API_KEY', 'ALPACA_SECRET_KEY', 'TIINGO_API_KEY',
         'OPENAI_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID',
-        'DATABASE_URL', 'REDIS_URL'
+        'DATABASE_URL'
     ]
     
     for var in test_vars:

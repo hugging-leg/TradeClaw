@@ -7,7 +7,7 @@ This document provides detailed information about the APIs and interfaces in the
 The system is organized into several key components:
 
 - **Trading System**: Main orchestrator (`TradingSystem`)
-- **Event System**: Redis-based event handling (`EventSystem`)
+- **Event System**: In-memory event handling (`EventSystem`)
 - **APIs**: External service integrations
 - **Workflow**: LangGraph-based decision making
 - **Scheduler**: Automated job management
@@ -210,7 +210,7 @@ Sends portfolio update notification.
 
 ### EventSystem
 
-Redis-based event handling system.
+In-memory event handling system.
 
 ```python
 from src.events.event_system import event_system
@@ -599,7 +599,7 @@ The system tracks various performance metrics:
 
 - Built-in logging
 - Telegram notifications
-- Redis monitoring
+
 - Custom metrics collection
 
 ---

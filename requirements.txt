@@ -21,6 +21,7 @@ websockets==11.0.3
 langgraph==0.0.40
 langchain==0.1.0
 langchain-openai==0.0.5
+langchain-deepseek==0.1.0
 
 # Web framework
 fastapi==0.104.1
@@ -30,8 +31,8 @@ uvicorn==0.24.0
 sqlalchemy==2.0.23
 alembic==1.12.1
 
-# Redis (optional)
-redis==5.0.1
+# Redis removed - using in-memory events only
+# redis==5.0.1  # Not needed
 
 # Utilities
 python-multipart==0.0.6

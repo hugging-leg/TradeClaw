@@ -12,64 +12,29 @@ logger = logging.getLogger(__name__)
 
 
 class EventSystem:
-    """Event-driven system for trading events"""
+    """In-memory event-driven system for trading events (Redis support removed)"""
     
     def __init__(self):
-        self.redis_client = None
-        self.pubsub = None
         self.event_handlers: Dict[str, List[Callable]] = {}
         self.is_running = False
         self.event_queue = asyncio.Queue()
-        self.use_redis = os.getenv('USE_REDIS', 'true').lower() == 'true'
         
     async def initialize(self):
-        """Initialize Redis connection and pubsub if Redis is enabled"""
-        if self.use_redis and settings.redis_url:
-            try:
-                import redis.asyncio as redis
-                self.redis_client = redis.from_url(settings.redis_url)
-                self.pubsub = self.redis_client.pubsub()
-                logger.info("Event system initialized with Redis")
-            except Exception as e:
-                logger.warning(f"Failed to initialize Redis, falling back to in-memory events: {e}")
-                self.use_redis = False
-        else:
-            if not settings.redis_url:
-                logger.info("Redis URL not provided, using in-memory events")
-            self.use_redis = False
-        
-        if not self.use_redis:
-            logger.info("Event system initialized with in-memory events")
+        """Initialize event system with in-memory events"""
+        logger.info("Event system initialized with in-memory events")
     
     async def start(self):
-        """Start the event system"""
-        if not self.redis_client and self.use_redis:
-            await self.initialize()
-        
+        """Start the event system (in-memory only)"""
+        await self.initialize()
         self.is_running = True
-        
-        if self.use_redis and self.redis_client:
-            # Subscribe to all trading events
-            await self.pubsub.subscribe("trading_events")
-            # Start Redis pubsub handler
-            asyncio.create_task(self._handle_pubsub_messages())
         
         # Start event processing tasks
         asyncio.create_task(self._process_events())
-        
-        logger.info("Event system started")
+        logger.info("Event system started with in-memory events")
     
     async def stop(self):
         """Stop the event system"""
         self.is_running = False
-        
-        if self.pubsub:
-            await self.pubsub.unsubscribe("trading_events")
-            await self.pubsub.close()
-        
-        if self.redis_client:
-            await self.redis_client.close()
-        
         logger.info("Event system stopped")
     
     def register_handler(self, event_type: str, handler: Callable):
@@ -90,24 +55,10 @@ class EventSystem:
                 logger.warning(f"Handler not found for event type: {event_type}")
     
     async def publish_event(self, event: TradingEvent):
-        """Publish an event to the system"""
+        """Publish an event to the in-memory system"""
         try:
-            # Always add to local queue for processing
+            # Add to local queue for processing
             await self.event_queue.put(event)
-            
-            # Also publish to Redis if enabled
-            if self.use_redis and self.redis_client:
-                # Serialize event data
-                event_data = {
-                    "event_type": event.event_type,
-                    "timestamp": event.timestamp.isoformat(),
-                    "data": event.data,
-                    "processed": event.processed
-                }
-                
-                # Publish to Redis
-                await self.redis_client.publish("trading_events", json.dumps(event_data))
-            
             logger.debug(f"Published event: {event.event_type}")
             
         except Exception as e:
@@ -129,32 +80,7 @@ class EventSystem:
             except Exception as e:
                 logger.error(f"Error processing event: {e}")
     
-    async def _handle_pubsub_messages(self):
-        """Handle messages from Redis pubsub (only used when Redis is enabled)"""
-        while self.is_running and self.use_redis:
-            try:
-                message = await self.pubsub.get_message(timeout=1.0)
-                
-                if message and message['type'] == 'message':
-                    # Deserialize event data
-                    event_data = json.loads(message['data'])
-                    
-                    # Create event object
-                    event = TradingEvent(
-                        event_type=event_data['event_type'],
-                        timestamp=datetime.fromisoformat(event_data['timestamp']),
-                        data=event_data['data'],
-                        processed=event_data['processed']
-                    )
-                    
-                    # Process the event
-                    await self._handle_event(event)
-                    
-            except asyncio.TimeoutError:
-                # No message received within timeout, continue loop
-                continue
-            except Exception as e:
-                logger.error(f"Error handling pubsub message: {e}")
+
     
     async def _handle_event(self, event: TradingEvent):
         """Handle a single event"""
@@ -164,19 +90,18 @@ class EventSystem:
             
             if not handlers:
                 logger.warning(f"No handlers registered for event type: {event.event_type}")
-                return
+            else:
+                # Execute all handlers
+                for handler in handlers:
+                    try:
+                        if asyncio.iscoroutinefunction(handler):
+                            await handler(event)
+                        else:
+                            handler(event)
+                    except Exception as e:
+                        logger.error(f"Error in event handler: {e}")
             
-            # Execute all handlers
-            for handler in handlers:
-                try:
-                    if asyncio.iscoroutinefunction(handler):
-                        await handler(event)
-                    else:
-                        handler(event)
-                except Exception as e:
-                    logger.error(f"Error in event handler: {e}")
-            
-            # Mark event as processed
+            # Mark event as processed (regardless of whether handlers exist)
             event.processed = True
             
         except Exception as e:
