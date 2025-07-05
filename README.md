@@ -288,6 +288,67 @@ To add custom trading strategies:
 
 ### Testing
 
+The system includes comprehensive unit tests for all components:
+
+#### Run All Tests
+```bash
+python run_tests.py
+```
+
+#### Test Options
+```bash
+# Run with coverage reporting
+python run_tests.py --coverage
+
+# Run only unit tests (fast)
+python run_tests.py --unit
+
+# Run only integration tests
+python run_tests.py --integration
+
+# Skip slow tests
+python run_tests.py --fast
+
+# Run specific test file
+python run_tests.py tests/test_config.py
+```
+
+#### Direct pytest Commands
+```bash
+# Basic test run
+pytest tests/
+
+# With coverage
+pytest tests/ --cov=src --cov-report=html
+
+# Specific test markers
+pytest tests/ -m "not integration"  # Skip integration tests
+pytest tests/ -m "unit"             # Only unit tests
+```
+
+#### Test Structure
+```
+tests/
+├── conftest.py              # Pytest configuration and fixtures
+├── test_config.py           # Configuration tests
+├── test_trading_models.py   # Data model tests
+├── test_event_system.py     # Event system tests
+├── test_alpaca_api.py       # Alpaca API tests
+├── test_telegram_bot.py     # Telegram bot tests
+└── test_tiingo_api.py       # Tiingo API tests
+```
+
+#### Test Categories
+- **Unit Tests**: Test individual components in isolation
+- **Integration Tests**: Test component interactions (requires real API credentials)
+- **Slow Tests**: Tests that take longer to run (marked with `@pytest.mark.slow`)
+
+#### Coverage Goals
+- Target: 80%+ code coverage
+- HTML coverage reports generated in `htmlcov/`
+
+### Manual Testing
+
 ```bash
 # Run with paper trading (default)
 ALPACA_BASE_URL=https://paper-api.alpaca.markets python main.py

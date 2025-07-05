@@ -13,16 +13,12 @@ class OrderSide(str, Enum):
 class OrderType(str, Enum):
     MARKET = "market"
     LIMIT = "limit"
-    STOP = "stop"
+    STOP_LOSS = "stop_loss"
+    TAKE_PROFIT = "take_profit"
     STOP_LIMIT = "stop_limit"
 
 
-class OrderStatus(str, Enum):
-    NEW = "new"
-    PARTIALLY_FILLED = "partially_filled"
-    FILLED = "filled"
-    CANCELED = "canceled"
-    REJECTED = "rejected"
+
 
 
 class TimeInForce(str, Enum):
@@ -32,15 +28,36 @@ class TimeInForce(str, Enum):
     FOK = "fok"
 
 
+class OrderStatus(str, Enum):
+    PENDING = "pending"
+    SUBMITTED = "submitted"
+    PARTIALLY_FILLED = "partially_filled"
+    FILLED = "filled"
+    CANCELLED = "cancelled"
+    REJECTED = "rejected"
+
+
+class PositionSide(str, Enum):
+    LONG = "long"
+    SHORT = "short"
+
+
+class TradingAction(str, Enum):
+    BUY = "buy"
+    SELL = "sell"
+    HOLD = "hold"
+
+
 class Position(BaseModel):
     """Portfolio position model"""
     symbol: str
     quantity: Decimal
     market_value: Decimal
-    cost_basis: Decimal
-    unrealized_pnl: Decimal
-    unrealized_pnl_percentage: Decimal
-    side: str  # "long" or "short"
+    cost_basis: Decimal = Decimal('0')
+    unrealized_pnl: Decimal = Decimal('0')
+    unrealized_pnl_percentage: Decimal = Decimal('0')
+    side: PositionSide
+    avg_entry_price: Optional[Decimal] = None
     
 
 class Order(BaseModel):
@@ -52,13 +69,27 @@ class Order(BaseModel):
     quantity: Decimal
     price: Optional[Decimal] = None
     stop_price: Optional[Decimal] = None
+    stop_loss: Optional[Decimal] = None
+    take_profit: Optional[Decimal] = None
     time_in_force: TimeInForce = TimeInForce.DAY
-    status: OrderStatus = OrderStatus.NEW
+    status: OrderStatus = OrderStatus.PENDING
     filled_quantity: Decimal = Decimal('0')
     filled_price: Optional[Decimal] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
     client_order_id: Optional[str] = None
+    
+    @property
+    def filled_percentage(self) -> Decimal:
+        """Calculate filled percentage"""
+        if self.quantity == 0:
+            return Decimal('0')
+        return (self.filled_quantity / self.quantity) * Decimal('100')
+    
+    @property
+    def is_filled(self) -> bool:
+        """Check if order is completely filled"""
+        return self.status == OrderStatus.FILLED
 
 
 class Portfolio(BaseModel):
@@ -66,8 +97,8 @@ class Portfolio(BaseModel):
     equity: Decimal
     cash: Decimal
     market_value: Decimal
-    day_trade_count: int
-    buying_power: Decimal
+    day_trade_count: int = 0
+    buying_power: Decimal = Decimal('0')
     positions: List[Position] = []
     total_pnl: Decimal = Decimal('0')
     day_pnl: Decimal = Decimal('0')
@@ -92,7 +123,8 @@ class NewsItem(BaseModel):
     source: str
     published_at: datetime
     symbols: List[str] = []
-    sentiment: Optional[str] = None  # "positive", "negative", "neutral"
+    sentiment: Optional[Decimal] = None  # -1.0 to 1.0 sentiment score
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 class TradingEvent(BaseModel):
@@ -105,11 +137,12 @@ class TradingEvent(BaseModel):
 
 class TradingDecision(BaseModel):
     """Trading decision from LLM"""
-    action: str  # "buy", "sell", "hold"
+    action: TradingAction
     symbol: str
     quantity: Optional[Decimal] = None
     price: Optional[Decimal] = None
     reasoning: str
-    confidence: float = Field(ge=0.0, le=1.0)
+    confidence: Decimal = Field(ge=Decimal('0.0'), le=Decimal('1.0'))
     stop_loss: Optional[Decimal] = None
-    take_profit: Optional[Decimal] = None 
+    take_profit: Optional[Decimal] = None
+    created_at: datetime = Field(default_factory=datetime.now) 

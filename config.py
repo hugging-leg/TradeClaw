@@ -1,44 +1,55 @@
 import os
 from typing import Optional
-from pydantic import BaseSettings, Field
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings with environment variable support"""
     
     # Trading APIs
-    alpaca_api_key: str = Field(..., env="ALPACA_API_KEY")
-    alpaca_secret_key: str = Field(..., env="ALPACA_SECRET_KEY")
-    alpaca_base_url: str = Field("https://paper-api.alpaca.markets", env="ALPACA_BASE_URL")
-    tiingo_api_key: str = Field(..., env="TIINGO_API_KEY")
+    alpaca_api_key: str = "test_key"
+    alpaca_secret_key: str = "test_secret"
+    alpaca_base_url: str = "https://paper-api.alpaca.markets"
+    tiingo_api_key: str = "test_key"
     
     # OpenAI API
-    openai_api_key: str = Field(..., env="OPENAI_API_KEY")
-    openai_model: str = Field("gpt-4o", env="OPENAI_MODEL")
+    openai_api_key: str = "test_key"
+    openai_model: str = "gpt-4o"
     
     # Telegram Bot
-    telegram_bot_token: str = Field(..., env="TELEGRAM_BOT_TOKEN")
-    telegram_chat_id: str = Field(..., env="TELEGRAM_CHAT_ID")
-    
-    # Redis for event system (optional - will use in-memory events if not provided)
-    redis_url: Optional[str] = Field(None, env="REDIS_URL")
+    telegram_bot_token: str = "test_token"
+    telegram_chat_id: str = "test_chat_id"
     
     # Database
-    database_url: str = Field("sqlite:///./trading_agent.db", env="DATABASE_URL")
+    postgres_password: Optional[str] = None
+    database_url: str = "sqlite:///./trading_agent.db"
+    
+    # Redis for event system (optional - will use in-memory events if not provided)
+    redis_url: Optional[str] = None
+    redis_password: Optional[str] = None
+    use_redis: bool = False
     
     # Trading Parameters
-    max_position_size: float = Field(0.1, env="MAX_POSITION_SIZE")
-    rebalance_time: str = Field("09:30", env="REBALANCE_TIME")
-    stop_loss_percentage: float = Field(0.05, env="STOP_LOSS_PERCENTAGE")
-    take_profit_percentage: float = Field(0.15, env="TAKE_PROFIT_PERCENTAGE")
+    paper_trading: bool = True
+    max_position_size: float = 0.1
+    max_positions: int = 10
+    rebalance_time: str = "09:30"
+    daily_rebalance_time: str = "09:30"  # Alias for rebalance_time
+    stop_loss_percentage: float = 0.05
+    take_profit_percentage: float = 0.15
     
     # Environment
-    environment: str = Field("development", env="ENVIRONMENT")
-    log_level: str = Field("INFO", env="LOG_LEVEL")
+    environment: str = "development"
+    log_level: str = "INFO"
+    log_to_file: bool = True
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",  # Ignore extra environment variables
+        frozen=True  # Make settings immutable
+    )
 
 
 # Global settings instance
