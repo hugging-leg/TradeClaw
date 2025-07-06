@@ -134,37 +134,37 @@ MESSAGE_PROVIDER=telegram       # Messaging: telegram
 ```
 src/
 ├── adapters/                   # API Adapters
-    │   ├── brokers/
-│   │   └── alpaca_adapter.py   # Alpaca broker interface
-    │   ├── market_data/
-│   │   └── tiingo_market_data_adapter.py  # Tiingo market data
-    │   ├── news/
-│   │   └── tiingo_news_adapter.py         # Tiingo news
-    │   └── transports/
-│       └── telegram_service.py            # Telegram service
+|   │   ├── brokers/
+│   │   │   └── alpaca_adapter.py   # Alpaca broker interface
+|   │   ├── market_data/
+│   │   │   └── tiingo_market_data_adapter.py  # Tiingo market data
+|   │   ├── news/
+│   │   │   └── tiingo_news_adapter.py         # Tiingo news
+|   │   └── transports/
+│   │   │   └── telegram_service.py            # Telegram service
 ├── interfaces/                 # Abstract Interfaces
-│   ├── broker_api.py          # Broker interface definition
-│   ├── market_data_api.py     # Market data interface
-│   ├── news_api.py            # News interface
-│   ├── message_transport.py   # Message transport interface
-│   └── factory.py             # Service creation
+│   │   ├── broker_api.py          # Broker interface definition
+│   │   ├── market_data_api.py     # Market data interface
+│   │   ├── news_api.py            # News interface
+│   │   ├── message_transport.py   # Message transport interface
+│   │   └── factory.py             # Service creation
 ├── agents/                     # AI Workflows
-│   ├── workflow_factory.py    # Workflow creation
-│   ├── workflow_base.py       # Base class
-│   ├── sequential_workflow.py # Sequential workflow
-│   └── tool_calling_workflow.py # Tool calling workflow
-    ├── events/
-│   └── event_system.py        # Event system
-    ├── messaging/
-│   └── message_manager.py     # Message management
-    ├── scheduler/
-│   └── trading_scheduler.py   # Task scheduling
+│   │   ├── workflow_factory.py    # Workflow creation
+│   │   ├── workflow_base.py       # Base class
+│   │   ├── sequential_workflow.py # Sequential workflow
+│   │   └── tool_calling_workflow.py # Tool calling workflow
+├── events/
+│   │   └── event_system.py        # Event system
+├── messaging/
+│   │   └── message_manager.py     # Message management
+├── scheduler/
+│   │   └── trading_scheduler.py   # Task scheduling
 ├── models/
-│   └── trading_models.py      # Data models
+│   │   └── trading_models.py      # Data models
 ├── utils/                      # Utility functions
-│   ├── string_utils.py        
-│   ├── telegram_utils.py      
-│   └── message_formatters.py  
+│   │   ├── string_utils.py        
+│   │   ├── telegram_utils.py      
+│   │   └── message_formatters.py  
 └── trading_system.py          # Main system
 ```
 
