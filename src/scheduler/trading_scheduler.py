@@ -26,28 +26,63 @@ class TradingScheduler:
         """Set the trading system reference"""
         self.trading_system = trading_system
     
-    def start(self):
-        """Start the scheduler"""
-        if self.is_running:
-            logger.warning("Scheduler is already running")
+    def start(self, force_restart=False):
+        """Start the scheduler, with optional force restart"""
+        if self.is_running and not force_restart:
+            logger.warning("Scheduler is already running. Use force_restart=True to restart.")
             return
+        
+        # If we're forcing a restart or if there's a stale thread, stop first
+        if force_restart or (self.scheduler_thread and self.scheduler_thread.is_alive()):
+            logger.info("Stopping existing scheduler before restart...")
+            self.stop()
+            # Give it a moment to fully stop
+            time.sleep(0.5)
+        
+        # Check if previous thread has finished
+        if self.scheduler_thread and self.scheduler_thread.is_alive():
+            logger.warning("Previous scheduler thread is still running, forcing stop...")
+            self.is_running = False
+            # Wait a bit more for thread to finish
+            time.sleep(1)
+            if self.scheduler_thread.is_alive():
+                logger.error("Unable to stop previous scheduler thread")
+                return
         
         self.is_running = True
         self._setup_default_schedule()
         
-        # Start scheduler in a separate thread
+        # Create a new scheduler thread
         self.scheduler_thread = Thread(target=self._run_scheduler, daemon=True)
         self.scheduler_thread.start()
         
-        logger.info("Trading scheduler started")
+        logger.info("Trading scheduler started successfully")
     
     def stop(self):
         """Stop the scheduler"""
-        self.is_running = False
-        schedule.clear()
+        if not self.is_running:
+            logger.info("Scheduler is not running")
+            return
         
+        logger.info("Stopping trading scheduler...")
+        self.is_running = False
+        
+        # Clear all scheduled jobs
+        schedule.clear()
+        self.scheduled_jobs.clear()
+        
+        # Wait for scheduler thread to finish
         if self.scheduler_thread and self.scheduler_thread.is_alive():
-            self.scheduler_thread.join(timeout=5)
+            logger.debug("Waiting for scheduler thread to finish...")
+            self.scheduler_thread.join(timeout=10)
+            
+            if self.scheduler_thread.is_alive():
+                logger.warning("Scheduler thread did not finish within timeout")
+            else:
+                logger.debug("Scheduler thread finished successfully")
+        
+        # Reset thread reference
+        self.scheduler_thread = None
         
         logger.info("Trading scheduler stopped")
     
@@ -297,6 +332,14 @@ class TradingScheduler:
             logger.error(f"Error getting next run time: {e}")
             return None
     
+
+    
+    def is_scheduler_running(self) -> bool:
+        """Check if the scheduler is actually running"""
+        return (self.is_running and 
+                self.scheduler_thread and 
+                self.scheduler_thread.is_alive())
+    
     def get_schedule_status(self) -> Dict[str, Any]:
         """Get current schedule status"""
         try:
@@ -304,6 +347,8 @@ class TradingScheduler:
             
             status = {
                 "is_running": self.is_running,
+                "thread_alive": self.scheduler_thread.is_alive() if self.scheduler_thread else False,
+                "actually_running": self.is_scheduler_running(),
                 "current_time": current_time.isoformat(),
                 "timezone": str(self.timezone),
                 "total_jobs": len(schedule.jobs),

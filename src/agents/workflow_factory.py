@@ -24,7 +24,7 @@ from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.news_api import NewsAPI
 from src.messaging.message_manager import MessageManager
 from src.interfaces.factory import (
-    get_broker_api, get_market_data_api, get_news_api, get_message_manager
+    get_broker_api, get_market_data_api, get_news_api
 )
 from src.agents.workflow_base import WorkflowBase
 from src.agents.sequential_workflow import SequentialWorkflow
@@ -81,7 +81,7 @@ class WorkflowFactory:
             broker_api: Broker API instance (optional)
             market_data_api: Market data API instance (optional)
             news_api: News API instance (optional)
-            message_manager: Message manager instance (optional)
+            message_manager: Message manager instance (required)
             **kwargs: Additional keyword arguments for workflow configuration
             
         Returns:
@@ -90,6 +90,8 @@ class WorkflowFactory:
         try:
             # Determine workflow type
             workflow_type = workflow_type or getattr(settings, 'workflow_type', 'sequential')
+            if workflow_type is None:
+                workflow_type = 'sequential'
             
             # Create API instances if not provided
             if broker_api is None:
@@ -99,7 +101,7 @@ class WorkflowFactory:
             if news_api is None:
                 news_api = get_news_api()
             if message_manager is None:
-                message_manager = get_message_manager()
+                raise ValueError("message_manager is required. Please provide a MessageManager instance.")
             
             # Create workflow instance
             if workflow_type.lower() == 'sequential':
@@ -336,23 +338,6 @@ class WorkflowFactory:
 
 # Convenience functions for common operations
 
-def create_default_workflow(broker_api: BrokerAPI = None, market_data_api: MarketDataAPI = None, 
-                           news_api: NewsAPI = None, message_manager: MessageManager = None) -> WorkflowBase:
-    """
-    Create a workflow using the default configuration.
-    
-    Args:
-        broker_api: Optional broker API client
-        market_data_api: Optional market data API client
-        news_api: Optional news API client
-        message_manager: Optional message manager
-        
-    Returns:
-        Configured workflow instance
-    """
-    return WorkflowFactory.create_workflow(broker_api, market_data_api, news_api, message_manager)
-
-
 def get_workflow_choices() -> list[str]:
     """
     Get a list of available workflow type choices.
@@ -378,54 +363,4 @@ def validate_workflow_config() -> bool:
     for warning in result["warnings"]:
         logger.warning(f"Configuration warning: {warning}")
     
-    return result["valid"]
-
-
-@staticmethod
-def create_base_workflow(workflow_type: str, broker_api: BrokerAPI = None, market_data_api: MarketDataAPI = None, 
-                        news_api: NewsAPI = None, message_manager: MessageManager = None) -> WorkflowBase:
-    """
-    Create a base workflow instance.
-    
-    Args:
-        workflow_type: Type of workflow to create
-        broker_api: Broker API instance (optional)
-        market_data_api: Market data API instance (optional)
-        news_api: News API instance (optional)
-        message_manager: Message manager instance (optional)
-        
-    Returns:
-        WorkflowBase instance
-    """
-    try:
-        # Create API instances if not provided
-        if broker_api is None:
-            broker_api = get_broker_api()
-        if market_data_api is None:
-            market_data_api = get_market_data_api()
-        if news_api is None:
-            news_api = get_news_api()
-        if message_manager is None:
-            message_manager = get_message_manager()
-        
-        # Create workflow based on type
-        if workflow_type.lower() == 'sequential':
-            return SequentialWorkflow(
-                broker_api=broker_api,
-                market_data_api=market_data_api,
-                news_api=news_api,
-                message_manager=message_manager
-            )
-        elif workflow_type.lower() == 'tool_calling':
-            return ToolCallingWorkflow(
-                broker_api=broker_api,
-                market_data_api=market_data_api,
-                news_api=news_api,
-                message_manager=message_manager
-            )
-        else:
-            raise ValueError(f"Unknown workflow type: {workflow_type}")
-            
-    except Exception as e:
-        logger.error(f"Failed to create base workflow: {e}")
-        raise RuntimeError(f"Base workflow creation failed: {e}") from e 
+    return result["valid"] 

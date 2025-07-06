@@ -252,69 +252,6 @@ class NewsFactory:
         logger.info(f"Registered news provider: {provider}")
 
 
-# Message Manager Creation (Direct Implementation)
-async def create_message_manager(transport=None, **kwargs):
-    """
-    Create a message manager.
-    
-    Args:
-        transport: MessageTransport instance (if not provided, will create one)
-        **kwargs: Additional arguments passed to the manager constructor
-        
-    Returns:
-        MessageManager instance
-    """
-    try:
-        # Import MessageManager directly
-        from src.messaging.message_manager import MessageManager
-        
-        # Create transport if not provided
-        if transport is None:
-            transport = MessageTransportFactory.create_message_transport()
-            
-            # Initialize and start the transport
-            if not await transport.initialize():
-                logger.error("Failed to initialize message transport")
-                raise RuntimeError("Message transport initialization failed")
-            
-            if not await transport.start():
-                logger.error("Failed to start message transport")
-                raise RuntimeError("Message transport start failed")
-        
-        logger.info("Creating message manager")
-        return MessageManager(transport=transport, **kwargs)
-        
-    except Exception as e:
-        logger.error(f"Failed to create message manager: {e}")
-        raise RuntimeError(f"Message manager creation failed: {e}") from e
-
-
-def get_message_manager(transport=None, trading_system=None, **kwargs):
-    """Convenience function to create a message manager"""
-    from src.messaging.message_manager import MessageManager
-    
-    if transport is None:
-        # Create transport using factory with trading_system parameter
-        transport = MessageTransportFactory.create_message_transport(
-            trading_system=trading_system, **kwargs
-        )
-        
-        # Store initialization flag for later async setup
-        transport._needs_async_init = True
-    
-    # Create message manager with transport
-    manager = MessageManager(transport=transport, **kwargs)
-    
-    logger.info("Message manager created with transport that will be initialized on start")
-    return manager
-
-
-# Legacy support - redirect to new manager
-def get_message_queue(transport=None, trading_system=None, **kwargs):
-    """Convenience function to create a message manager (legacy name)"""
-    return get_message_manager(transport, trading_system, **kwargs)
-
-
 # Convenience functions for easy API creation
 def get_broker_api(provider: Optional[str] = None):
     """Convenience function to create a broker API"""

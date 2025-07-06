@@ -10,7 +10,7 @@ import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
-from src.interfaces.news_api import NewsAPI, NewsProvider, NewsFactory
+from src.interfaces.news_api import NewsAPI, NewsProvider
 from src.models.trading_models import NewsItem
 from config import settings
 
@@ -298,8 +298,4 @@ class TiingoNewsAdapter(NewsAPI):
             return await self.get_news(tags=['Cryptocurrency'], limit=limit)
         except Exception as e:
             logger.error(f"Failed to get crypto news: {e}")
-            return []
-
-
-# Register the Tiingo adapter with the NewsFactory
-NewsFactory.register_provider(NewsProvider.TIINGO, TiingoNewsAdapter) 
+            return [] 

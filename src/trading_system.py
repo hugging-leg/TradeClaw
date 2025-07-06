@@ -10,7 +10,7 @@ from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.news_api import NewsAPI
 from src.messaging.message_manager import MessageManager
-from src.interfaces.factory import get_broker_api, get_market_data_api, get_news_api, get_message_manager
+from src.interfaces.factory import get_broker_api, get_market_data_api, get_news_api, MessageTransportFactory
 from src.events.event_system import EventSystem, event_system
 from src.agents.workflow_factory import WorkflowFactory, validate_workflow_config
 from src.scheduler.trading_scheduler import TradingScheduler
@@ -33,8 +33,11 @@ class TradingSystem:
         self.market_data_api = get_market_data_api()
         self.news_api = get_news_api()
         
-        # Initialize message manager with factory pattern (pass self for command handling)
-        self.message_manager = get_message_manager(trading_system=self)
+        # Initialize message manager with transport
+        # Create transport using factory
+        transport = MessageTransportFactory.create_message_transport(trading_system=self)
+        transport._needs_async_init = True
+        self.message_manager = MessageManager(transport=transport)
         
         # Log provider information
         logger.info(f"Broker Provider: {self.broker_api.get_provider_name()}")
@@ -48,7 +51,9 @@ class TradingSystem:
         
         # Initialize core components
         self.event_system = event_system
-        self.trading_workflow = WorkflowFactory.create_workflow()
+        self.trading_workflow = WorkflowFactory.create_workflow(
+            message_manager=self.message_manager
+        )
         self.scheduler = TradingScheduler(trading_system=self)
         
         # Log workflow type being used
@@ -109,7 +114,7 @@ class TradingSystem:
         try:
             if self.is_running:
                 logger.warning("Trading system is already running")
-                return
+                return False  # Return False to indicate no action taken
             
             logger.info("Starting trading system...")
             
@@ -134,8 +139,9 @@ class TradingSystem:
             # Start message manager processing
             await self.message_manager.start_processing()
             
-            # Start scheduler
-            self.scheduler.start()
+            # Start scheduler with force restart to ensure clean start
+            logger.info("Starting scheduler...")
+            self.scheduler.start(force_restart=True)
             
             # Initialize daily stats
             await self._initialize_daily_stats()
@@ -144,21 +150,17 @@ class TradingSystem:
             self.is_running = True
             self.is_trading_enabled = True
             
-            # Send system started event
+            # Send system started event - this will trigger _handle_system_started which sends the message
             await self.event_system.publish_system_event(
                 "system_started",
                 "Trading system started successfully"
             )
             
-            # Send startup message via transport if available
-            try:
-                if hasattr(self.message_manager.transport, 'is_available') and self.message_manager.transport.is_available():
-                    await self._send_startup_message()
-                    logger.info("Startup message sent via message transport")
-            except Exception as e:
-                logger.warning(f"Failed to send startup message: {e}")
+            # Don't send startup message here - it's handled by _handle_system_started event handler
+            # This avoids duplicate messages
             
             logger.info("Trading system started successfully")
+            return True  # Return True to indicate successful start
             
         except Exception as e:
             logger.error(f"Failed to start trading system: {e}")
@@ -203,17 +205,9 @@ class TradingSystem:
             # Stop scheduler
             self.scheduler.stop()
             
-            # Stop message transport (which includes Telegram service if configured)
-            try:
-                if hasattr(self.message_manager.transport, 'stop'):
-                    if await self.message_manager.transport.stop():
-                        logger.info("Message transport stopped successfully")
-                    else:
-                        logger.warning("Failed to stop message transport")
-            except Exception as e:
-                logger.error(f"Error stopping message transport: {e}")
-            
-            # Stop message manager processing
+            # Note: We DON'T stop the message transport (Telegram service) so it can still receive commands like /start
+            # Only stop the message manager's automated processing
+            logger.info("Stopping message manager processing (keeping transport active for commands)")
             await self.message_manager.stop_processing()
             
             # Stop event system
@@ -223,46 +217,14 @@ class TradingSystem:
             self.is_running = False
             self.is_shutting_down = False
             
-            # Send system stopped event
-            await self.event_system.publish_system_event(
-                "system_stopped",
-                "Trading system stopped"
-            )
+            # Don't send system_stopped event since event system is already stopped
+            # The _handle_stop command in Telegram service will handle user notification
             
-            logger.info("Trading system stopped")
+            logger.info("Trading system stopped (Telegram commands still available)")
             
         except Exception as e:
             logger.error(f"Error stopping trading system: {e}")
 
-    async def _send_startup_message(self):
-        """Send startup notification via message transport"""
-        startup_message = """🚀 *LLM Trading Agent Started*
-
-System is now running and ready for trading operations!
-
-🤖 *Available Commands:*
-/help - Show available commands
-/status - Get system status
-/portfolio - View portfolio
-/analyze - Trigger AI analysis
-/start_trading - Start trading
-/stop_trading - Stop trading
-/emergency_stop - Emergency stop
-
-💰 *Current Status*: ✅ Active
-📈 *Trading*: Enabled
-🔔 *Notifications*: Active
-
-Ready to trade! 📊
-"""
-        try:
-            if hasattr(self.message_manager.transport, 'send_startup_message'):
-                await self.message_manager.transport.send_startup_message()
-            else:
-                await self.message_manager.send_system_alert(startup_message, "success")
-        except Exception as e:
-            logger.warning(f"Failed to send startup message: {e}")
-    
     async def start_trading(self):
         """Start trading operations"""
         try:
@@ -338,6 +300,8 @@ Ready to trade! 📊
         except Exception as e:
             logger.error(f"Error during emergency stop: {e}")
             raise
+    
+
     
     async def run_daily_rebalance(self):
         """Run daily portfolio rebalancing"""
@@ -575,6 +539,9 @@ End of Day Summary:
             portfolio = await self.get_portfolio()
             active_orders = await self.get_active_orders()
             
+            # Get scheduler status
+            scheduler_status = self.scheduler.get_schedule_status()
+            
             return {
                 "status": "running" if self.is_running else "stopped",
                 "trading_enabled": self.is_trading_enabled,
@@ -583,7 +550,13 @@ End of Day Summary:
                 "day_pnl": str(portfolio.day_pnl),
                 "active_orders": len(active_orders),
                 "positions": len(portfolio.positions),
-                "last_update": datetime.now().isoformat()
+                "last_update": datetime.now().isoformat(),
+                "scheduler": {
+                    "is_running": scheduler_status.get("is_running", False),
+                    "actually_running": scheduler_status.get("actually_running", False),
+                    "total_jobs": scheduler_status.get("total_jobs", 0),
+                    "next_run": scheduler_status.get("next_run")
+                }
             }
         except Exception as e:
             logger.error(f"Error getting system status: {e}")
@@ -666,7 +639,7 @@ End of Day Summary:
         """Handle system started event"""
         try:
             await self.message_manager.send_system_alert(
-                "Trading system started successfully", 
+                "🚀 **Trading System Online**\n\nAll components initialized successfully. Ready for trading operations!", 
                 "success"
             )
         except Exception as e:

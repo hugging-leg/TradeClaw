@@ -5,8 +5,10 @@ Unit tests for News API and adapters.
 import pytest
 from unittest.mock import Mock, patch, AsyncMock
 from datetime import datetime, timezone
-from src.apis.news_api import NewsAPI, NewsProvider, NewsFactory, get_news_api
-from src.apis.tiingo_news_adapter import TiingoNewsAdapter
+
+from src.interfaces.news_api import NewsAPI, NewsProvider
+from src.interfaces.factory import get_news_api
+from src.adapters.news.tiingo_news_adapter import TiingoNewsAdapter
 from src.models.trading_models import NewsItem
 from config import Settings
 
@@ -22,29 +24,6 @@ class TestNewsAPI:
         assert NewsProvider.CUSTOM.value == "custom"
 
 
-class TestNewsFactory:
-    """Test NewsFactory class."""
-    
-    def test_get_available_providers(self):
-        """Test getting available providers."""
-        providers = NewsFactory.get_available_providers()
-        assert isinstance(providers, list)
-        assert "tiingo" in providers  # Should be registered by default
-    
-    @patch('src.apis.news_api.settings')
-    def test_create_news_api_default(self, mock_settings):
-        """Test creating news API with default settings."""
-        mock_settings.news_provider = "tiingo"
-        
-        news_api = NewsFactory.create_news_api()
-        assert isinstance(news_api, TiingoNewsAdapter)
-    
-    def test_create_news_api_invalid_provider(self):
-        """Test creating news API with invalid provider."""
-        with pytest.raises(RuntimeError, match="News API creation failed"):
-            NewsFactory.create_news_api("invalid_provider")
-
-
 class TestTiingoNewsAdapter:
     """Test TiingoNewsAdapter class."""
     
@@ -58,7 +37,7 @@ class TestTiingoNewsAdapter:
     @pytest.fixture
     def tiingo_adapter(self, mock_settings):
         """Create TiingoNewsAdapter instance with mocked dependencies."""
-        with patch('src.apis.tiingo_news_adapter.settings', mock_settings):
+        with patch('src.adapters.news.tiingo_news_adapter.settings', mock_settings):
             adapter = TiingoNewsAdapter()
             return adapter
     
@@ -141,7 +120,7 @@ class TestTiingoNewsAdapter:
 class TestNewsAPIConvenience:
     """Test convenience functions."""
     
-    @patch('src.apis.news_api.NewsFactory.create_news_api')
+    @patch('src.interfaces.factory.NewsFactory.create_news_api')
     def test_get_news_api_convenience(self, mock_create):
         """Test convenience function get_news_api."""
         mock_api = Mock()

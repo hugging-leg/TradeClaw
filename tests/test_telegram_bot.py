@@ -34,9 +34,23 @@ class TestTelegramService:
             'day_pnl': Decimal('500.00'),
             'active_orders': 2,
             'positions': 5,
-            'last_update': '2023-01-01 12:00:00'
+            'last_update': '2023-01-01 12:00:00',
+            'scheduler': {
+                'is_running': True,
+                'actually_running': True,
+                'total_jobs': 10,
+                'next_run': '2023-01-01 13:00:00'
+            }
         })
-        trading_system.get_portfolio = AsyncMock()
+        
+        # Mock portfolio data
+        portfolio = Mock()
+        portfolio.equity = Decimal('100000.00')
+        portfolio.cash = Decimal('50000.00')
+        portfolio.day_pnl = Decimal('500.00')
+        portfolio.positions = []
+        
+        trading_system.get_portfolio = AsyncMock(return_value=portfolio)
         trading_system.get_active_orders = AsyncMock(return_value=[])
         trading_system.start_trading = AsyncMock()
         trading_system.stop_trading = AsyncMock()
@@ -53,6 +67,8 @@ class TestTelegramService:
                     service = TelegramService(trading_system=mock_trading_system)
                     service.bot = mock_bot.return_value
                     service.application = mock_app.return_value
+                    # Mock the send_message method to return True
+                    service.send_message = AsyncMock(return_value=True)
                     return service
     
     @pytest.fixture
@@ -143,13 +159,16 @@ class TestTelegramService:
         """Test /status command handler."""
         await telegram_service._handle_status(mock_update, mock_context)
         
-        mock_update.message.reply_text.assert_called_once()
-        call_args = mock_update.message.reply_text.call_args
+        # Check that send_message was called instead of reply_text
+        telegram_service.send_message.assert_called_once()
+        call_args = telegram_service.send_message.call_args
         message_text = call_args[0][0]
         
         assert "Trading System Status" in message_text
-        assert "100000.00" in message_text
+        assert "100,000.00" in message_text
         assert "500.00" in message_text
+        assert "Scheduler" in message_text
+        assert "✅ Running" in message_text
         telegram_service.trading_system.get_status.assert_called_once()
     
     @pytest.mark.asyncio
@@ -325,7 +344,13 @@ class TestTelegramServiceIntegration:
                 'day_pnl': Decimal('500.00'),
                 'active_orders': 0,
                 'positions': 0,
-                'last_update': '2023-01-01 12:00:00'
+                'last_update': '2023-01-01 12:00:00',
+                'scheduler': {
+                    'is_running': True,
+                    'actually_running': True,
+                    'total_jobs': 5,
+                    'next_run': '2023-01-01 13:00:00'
+                }
             })
             
             service = TelegramService(trading_system=trading_system)

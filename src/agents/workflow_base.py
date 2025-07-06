@@ -16,7 +16,7 @@ from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.news_api import NewsAPI
 from src.interfaces.factory import (
-    get_broker_api, get_market_data_api, get_news_api, get_message_manager
+    get_broker_api, get_market_data_api, get_news_api
 )
 from src.messaging.message_manager import MessageManager
 from src.models.trading_models import TradingDecision, Portfolio, Order, TradingEvent
@@ -43,12 +43,15 @@ class WorkflowBase(ABC):
             broker_api: Broker API client for trading operations
             market_data_api: Market data API client for market data
             news_api: News API client for news operations
-            message_manager: Message manager instance for notifications
+            message_manager: Message manager instance for notifications (required)
         """
+        if message_manager is None:
+            raise ValueError("MessageManager is required")
+        
         self.broker_api = broker_api or get_broker_api()
         self.market_data_api = market_data_api or get_market_data_api()
         self.news_api = news_api or get_news_api()
-        self.message_manager = message_manager or get_message_manager()
+        self.message_manager = message_manager
         
         # Common workflow state
         self.current_context = {}

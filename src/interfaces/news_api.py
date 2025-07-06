@@ -1,21 +1,16 @@
 """
-Abstract news API interface and factory for news providers.
+Abstract news API interface for news providers.
 
 This module provides a unified interface for news data across different providers,
 using the adapter pattern to decouple the system from specific news APIs.
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Union
-from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional
+from datetime import datetime
 from enum import Enum
-import logging
 
 from src.models.trading_models import NewsItem
-from config import settings
-
-
-logger = logging.getLogger(__name__)
 
 
 class NewsProvider(Enum):
@@ -131,128 +126,4 @@ class NewsAPI(ABC):
         Returns:
             Dictionary with provider information
         """
-        pass
-
-
-class NewsFactory:
-    """
-    Factory class for creating news API instances.
-    
-    This factory creates different news providers based on configuration
-    and provides a unified interface for news data access.
-    """
-    
-    _provider_registry: Dict[NewsProvider, type] = {}
-    
-    @classmethod
-    def register_provider(cls, provider: NewsProvider, provider_class: type):
-        """
-        Register a new news provider.
-        
-        Args:
-            provider: Provider enum value
-            provider_class: Class implementing NewsAPI interface
-        """
-        cls._provider_registry[provider] = provider_class
-        logger.info(f"Registered news provider: {provider.value}")
-    
-    @classmethod
-    def create_news_api(cls, provider: Optional[Union[str, NewsProvider]] = None) -> NewsAPI:
-        """
-        Create a news API instance based on provider.
-        
-        Args:
-            provider: Optional provider override. If not provided, 
-                     uses NEWS_PROVIDER from settings
-            
-        Returns:
-            NewsAPI instance
-            
-        Raises:
-            ValueError: If provider is not supported
-            RuntimeError: If provider creation fails
-        """
-        try:
-            # Determine provider
-            if provider is None:
-                provider_name = getattr(settings, 'news_provider', 'tiingo')
-            elif isinstance(provider, str):
-                provider_name = provider
-            else:
-                provider_name = provider.value
-            
-            # Get provider enum
-            try:
-                provider_enum = NewsProvider(provider_name.lower())
-            except ValueError:
-                raise ValueError(f"Unsupported news provider: {provider_name}")
-            
-            # Get provider class
-            if provider_enum not in cls._provider_registry:
-                raise ValueError(f"News provider not registered: {provider_enum.value}")
-            
-            provider_class = cls._provider_registry[provider_enum]
-            
-            # Create and return provider instance
-            news_api = provider_class()
-            logger.info(f"Created news API: {provider_enum.value}")
-            return news_api
-            
-        except Exception as e:
-            logger.error(f"Failed to create news API: {e}")
-            raise RuntimeError(f"News API creation failed: {e}")
-    
-    @classmethod
-    def get_available_providers(cls) -> List[str]:
-        """
-        Get list of available news providers.
-        
-        Returns:
-            List of provider names
-        """
-        return [provider.value for provider in cls._provider_registry.keys()]
-    
-    @classmethod
-    def validate_provider_config(cls, provider: Union[str, NewsProvider]) -> bool:
-        """
-        Validate if a provider is properly configured.
-        
-        Args:
-            provider: Provider to validate
-            
-        Returns:
-            True if valid, False otherwise
-        """
-        try:
-            if isinstance(provider, str):
-                provider_enum = NewsProvider(provider.lower())
-            else:
-                provider_enum = provider
-            
-            if provider_enum not in cls._provider_registry:
-                return False
-            
-            # Create instance to test configuration
-            provider_class = cls._provider_registry[provider_enum]
-            test_instance = provider_class()
-            
-            # Basic configuration validation
-            info = test_instance.get_provider_info()
-            return info.get('configured', False)
-            
-        except Exception as e:
-            logger.error(f"Provider validation failed: {e}")
-            return False
-
-
-def get_news_api(provider: Optional[Union[str, NewsProvider]] = None) -> NewsAPI:
-    """
-    Convenience function to get a news API instance.
-    
-    Args:
-        provider: Optional provider override
-        
-    Returns:
-        NewsAPI instance
-    """
-    return NewsFactory.create_news_api(provider) 
+        pass 

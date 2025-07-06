@@ -1,14 +1,14 @@
 """
-Telegram Service - Combined transport and bot handler functionality.
+Telegram Service - Message transport implementation.
 
-This service handles both outgoing message transmission and incoming command processing
+This service handles message transmission and bot command processing
 for Telegram integration with the trading system.
 """
 
 import asyncio
 import logging
 import time
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, ClassVar
 from decimal import Decimal
 from datetime import datetime
 from telegram import Update, Bot
@@ -17,6 +17,18 @@ from telegram.error import TelegramError, Conflict, NetworkError, TimedOut
 
 from src.interfaces.message_transport import MessageTransport, MessageFormat
 from src.models.trading_models import Order, Portfolio, Position
+from src.utils.telegram_utils import (
+    fix_markdown_issues,
+    clean_content_for_telegram,
+    extract_byte_offset_from_error,
+    get_problematic_content_area,
+    escape_markdown_symbols
+)
+from src.utils.message_formatters import (
+    format_order_message,
+    format_portfolio_message,
+    format_alert_message
+)
 from config import settings
 
 logger = logging.getLogger(__name__)
@@ -24,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 class TelegramService(MessageTransport):
     """
-    Combined Telegram service for both message transport and bot command handling.
+    Telegram message transport with bot command handling.
     
     This service provides:
     - Message transmission capabilities (implementing MessageTransport)
@@ -33,6 +45,10 @@ class TelegramService(MessageTransport):
     - User authorization
     - Conflict resolution for multiple instances
     """
+    
+    # Class variable to track active instances
+    _active_instances: ClassVar[Dict[str, 'TelegramService']] = {}
+    _instance_lock: ClassVar[asyncio.Lock] = asyncio.Lock()
     
     def __init__(self, 
                  bot_token: str = None, 
@@ -49,6 +65,7 @@ class TelegramService(MessageTransport):
         self.bot_token = bot_token or settings.telegram_bot_token
         self.chat_id = chat_id or settings.telegram_chat_id
         self.trading_system = trading_system
+        self.instance_id = f"{self.bot_token}_{self.chat_id}"
         
         self.bot = None
         self.application = None
@@ -59,18 +76,25 @@ class TelegramService(MessageTransport):
         self.max_retries = 3
         self.retry_delay = 5.0  # seconds
         
+        # Statistics
+        self.message_stats = {
+            'sent_count': 0,
+            'error_count': 0,
+            'last_sent': None,
+            'last_error': None
+        }
+        
         # Command descriptions
         self.commands = {
-            'start': 'Start the bot and get welcome message',
+            'start': 'Start the trading system',
+            'stop': 'Stop the trading system',
             'help': 'Show available commands',
             'status': 'Get trading system status',
             'portfolio': 'Get current portfolio summary',
             'orders': 'Get active orders',
             'positions': 'Get current positions',
             'analyze': 'Manually trigger AI trading analysis',
-            'start_trading': 'Start trading operations',
-            'stop_trading': 'Stop trading operations',
-            'emergency_stop': 'Emergency stop all operations'
+            'emergency': 'Emergency stop all operations'
         }
     
     async def initialize(self) -> bool:
@@ -84,12 +108,33 @@ class TelegramService(MessageTransport):
             logger.warning("Telegram service is already initializing")
             return False
         
+        # Check for existing instance
+        async with self._instance_lock:
+            if self.instance_id in self._active_instances:
+                existing_instance = self._active_instances[self.instance_id]
+                if existing_instance.is_running:
+                    logger.info("Reusing existing Telegram service instance")
+                    # Copy the existing bot and application
+                    self.bot = existing_instance.bot
+                    self.application = existing_instance.application
+                    self.is_running = True
+                    return True
+                else:
+                    # Remove the inactive instance
+                    del self._active_instances[self.instance_id]
+        
         self.is_initializing = True
         
         try:
             if not self.bot_token or self.bot_token == "test_token":
-                logger.warning("Telegram bot token not configured or is test token - Telegram service will be disabled")
-                return False
+                logger.info("Telegram bot token not configured or is test token - running in mock mode")
+                self.is_initializing = False
+                return False  # Return False but don't treat as error
+            
+            if not self.chat_id or self.chat_id == "test_chat_id":
+                logger.info("Telegram chat ID not configured or is test - running in mock mode")
+                self.is_initializing = False
+                return False  # Return False but don't treat as error
             
             # Create bot and application
             self.bot = Bot(token=self.bot_token)
@@ -112,21 +157,12 @@ class TelegramService(MessageTransport):
                     logger.warning(f"Telegram bot conflict detected (attempt {retry_count}/{self.max_retries}): {e}")
                     
                     if retry_count < self.max_retries:
-                        logger.info(f"Waiting {self.retry_delay} seconds before retry...")
-                        await asyncio.sleep(self.retry_delay)
-                        
-                        # Try to clear existing webhook if any
-                        try:
-                            await self.bot.delete_webhook()
-                            logger.info("Cleared existing webhook")
-                        except Exception as webhook_error:
-                            logger.debug(f"Could not clear webhook: {webhook_error}")
-                        
-                        # Wait a bit more for other instances to timeout
+                        # Try to clear any existing instances
+                        await self._clear_conflicts()
                         await asyncio.sleep(self.retry_delay)
                     else:
-                        logger.error("Failed to resolve Telegram bot conflict after multiple retries")
-                        logger.error("Please ensure no other instances of the bot are running")
+                        logger.warning("Failed to resolve Telegram bot conflict after multiple retries")
+                        logger.warning("System will continue in mock mode without Telegram notifications")
                         return False
                         
                 except (NetworkError, TimedOut) as e:
@@ -136,21 +172,42 @@ class TelegramService(MessageTransport):
                     if retry_count < self.max_retries:
                         await asyncio.sleep(self.retry_delay)
                     else:
-                        logger.error("Failed to connect to Telegram after multiple retries")
+                        logger.warning("Failed to connect to Telegram after multiple retries")
+                        logger.warning("System will continue in mock mode without Telegram notifications")
                         return False
                         
                 except Exception as e:
-                    logger.error(f"Unexpected error initializing Telegram service: {e}")
+                    logger.warning(f"Unexpected error initializing Telegram service: {e}")
+                    logger.warning("System will continue in mock mode without Telegram notifications")
                     return False
+            
+            # Register this instance
+            async with self._instance_lock:
+                self._active_instances[self.instance_id] = self
             
             logger.info("Telegram service initialized successfully")
             return True
             
         except Exception as e:
-            logger.error(f"Failed to initialize Telegram service: {e}")
+            logger.warning(f"Failed to initialize Telegram service: {e}")
+            logger.warning("System will continue in mock mode without Telegram notifications")
             return False
         finally:
             self.is_initializing = False
+    
+    async def _clear_conflicts(self):
+        """Clear potential conflicts with existing bot instances."""
+        try:
+            # Try to delete webhook first
+            await self.bot.delete_webhook()
+            logger.info("Cleared existing webhook")
+            
+            # Close any existing sessions
+            if hasattr(self.bot, '_request') and hasattr(self.bot._request, '_client'):
+                await self.bot._request._client.aclose()
+                
+        except Exception as e:
+            logger.debug(f"Error clearing conflicts: {e}")
     
     async def start(self) -> bool:
         """
@@ -161,12 +218,22 @@ class TelegramService(MessageTransport):
         """
         try:
             if self.is_running:
-                logger.warning("Telegram service is already running")
+                logger.info("Telegram service is already running")
                 return True
             
             if not self.application:
                 if not await self.initialize():
+                    logger.info("Telegram service not initialized - running in mock mode")
                     return False
+            
+            # Check if another instance is already running the same bot
+            async with self._instance_lock:
+                for instance_id, instance in self._active_instances.items():
+                    if instance != self and instance.is_running and instance.bot_token == self.bot_token:
+                        logger.warning("Another instance of the same bot is already running")
+                        # Don't start another instance, but mark this as successful
+                        self.is_running = True
+                        return True
             
             # Start the application with retry logic
             retry_count = 0
@@ -189,90 +256,86 @@ class TelegramService(MessageTransport):
                     logger.warning(f"Conflict starting Telegram service (attempt {retry_count}/{self.max_retries}): {e}")
                     
                     if retry_count < self.max_retries:
-                        logger.info(f"Waiting {self.retry_delay} seconds before retry...")
+                        # Try to clear conflicts and restart
+                        await self._clear_conflicts()
                         await asyncio.sleep(self.retry_delay)
                         
-                        # Try to stop and restart
                         try:
-                            await self.application.stop()
-                            await self.application.shutdown()
+                            if self.application:
+                                await self.application.stop()
+                                await self.application.shutdown()
                         except Exception as stop_error:
                             logger.debug(f"Error stopping application during retry: {stop_error}")
-                        
-                        # Reinitialize
-                        if not await self.initialize():
-                            return False
                     else:
-                        logger.error("Failed to start Telegram service due to persistent conflicts")
-                        logger.error("Please check for other running instances and restart the system")
+                        logger.warning("Failed to resolve Telegram service conflict after multiple retries")
+                        logger.warning("System will continue in mock mode without Telegram notifications")
                         return False
                         
                 except Exception as e:
-                    logger.error(f"Error starting Telegram service: {e}")
+                    logger.warning(f"Error starting Telegram service: {e}")
+                    logger.warning("System will continue in mock mode without Telegram notifications")
                     return False
-                    
+            
             return False
             
         except Exception as e:
-            logger.error(f"Failed to start Telegram service: {e}")
+            logger.warning(f"Failed to start Telegram service: {e}")
+            logger.warning("System will continue in mock mode without Telegram notifications")
             return False
     
     async def stop(self) -> bool:
         """
-        Stop the Telegram service gracefully.
+        Stop the Telegram service.
         
         Returns:
             True if stop successful, False otherwise
         """
         try:
             if not self.is_running:
-                logger.debug("Telegram service is not running")
+                logger.info("Telegram service is not running")
                 return True
             
             self.is_running = False
             
+            # Remove from active instances
+            async with self._instance_lock:
+                if self.instance_id in self._active_instances:
+                    del self._active_instances[self.instance_id]
+            
             if self.application:
                 try:
-                    # Stop polling first
-                    await self.application.updater.stop()
-                    logger.debug("Telegram updater stopped")
+                    # Check if updater is actually running before stopping
+                    if hasattr(self.application, 'updater') and self.application.updater.running:
+                        await self.application.updater.stop()
                     
-                    # Stop application
-                    await self.application.stop()
-                    logger.debug("Telegram application stopped")
-                    
-                    # Shutdown application
-                    await self.application.shutdown()
-                    logger.debug("Telegram application shutdown complete")
-                    
+                    if hasattr(self.application, '_running') and self.application._running:
+                        await self.application.stop()
+                        await self.application.shutdown()
+                        
+                    logger.info("Telegram service stopped successfully")
                 except Exception as e:
-                    logger.warning(f"Error during Telegram service shutdown: {e}")
-                    # Continue with cleanup even if there are errors
+                    # Don't treat stop errors as critical since we're shutting down
+                    logger.debug(f"Non-critical error stopping Telegram service: {e}")
             
-            # Clear references
-            self.application = None
-            self.bot = None
-            
-            logger.info("Telegram service stopped successfully")
             return True
             
         except Exception as e:
-            logger.error(f"Error stopping Telegram service: {e}")
+            logger.debug(f"Error stopping Telegram service: {e}")
             return False
     
     async def _handle_polling_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle polling errors"""
+        """Handle polling errors."""
         error = context.error
         
         if isinstance(error, Conflict):
-            logger.warning(f"Telegram polling conflict: {error}")
-            logger.warning("Another bot instance might be running. Consider restarting the system.")
+            logger.warning("Telegram polling conflict detected - will attempt auto-recovery")
+            # Don't crash on conflicts, just log them
         elif isinstance(error, (NetworkError, TimedOut)):
-            logger.warning(f"Telegram network error: {error}")
+            logger.debug("Network/timeout error in Telegram polling - will retry automatically")
         else:
-            logger.error(f"Telegram polling error: {error}")
+            logger.warning(f"Telegram polling error: {error}")
     
-    # MessageTransport interface implementation
+    # MessageTransport Interface Implementation
     
     async def send_raw_message(self, 
                               content: str, 
@@ -291,7 +354,8 @@ class TelegramService(MessageTransport):
         """
         try:
             if not self.bot:
-                logger.debug("Telegram bot not initialized - message not sent")
+                logger.debug("Telegram bot not initialized - running in mock mode")
+                self.message_stats['error_count'] += 1
                 return False
             
             # Rate limiting
@@ -299,19 +363,21 @@ class TelegramService(MessageTransport):
             
             target_chat_id = kwargs.get('chat_id') or self.chat_id
             if not target_chat_id or target_chat_id == "test_chat_id":
-                logger.debug("No valid chat ID configured for message sending")
+                logger.debug("No valid chat ID configured - running in mock mode")
+                self.message_stats['error_count'] += 1
                 return False
             
             # Convert format type to Telegram parse mode
             parse_mode_map = {
                 MessageFormat.PLAIN_TEXT: None,
-                MessageFormat.MARKDOWN: "Markdown",
+                MessageFormat.MARKDOWN: "Markdown",  # Use standard Markdown which supports *bold*
                 MessageFormat.HTML: "HTML",
                 MessageFormat.JSON: None  # Send as plain text
             }
             
-            parse_mode = parse_mode_map.get(format_type, "Markdown")
+            parse_mode = parse_mode_map.get(format_type)
             
+            # First attempt - try with specified format
             try:
                 await self.bot.send_message(
                     chat_id=target_chat_id,
@@ -319,31 +385,123 @@ class TelegramService(MessageTransport):
                     parse_mode=parse_mode
                 )
                 
-                logger.debug(f"Raw message sent to Telegram chat {target_chat_id}")
+                self.message_stats['sent_count'] += 1
+                self.message_stats['last_sent'] = datetime.now()
+                logger.debug(f"Message sent successfully to Telegram chat {target_chat_id}")
                 return True
                 
             except TelegramError as e:
-                # If Markdown parsing fails, try sending as plain text
-                if "Can't parse entities" in str(e) and parse_mode == "Markdown":
-                    logger.warning(f"Markdown parsing failed, retrying as plain text: {e}")
+                error_message = str(e)
+                
+                # Handle Markdown parsing errors
+                if "Can't parse entities" in error_message and parse_mode == "Markdown":
+                    # Extract more detailed error information
+                    byte_offset = extract_byte_offset_from_error(error_message)
+                    
+                    # Log detailed error information for debugging
+                    logger.warning(f"Markdown parsing failed at byte offset {byte_offset}: {e}")
+                    if byte_offset is not None and byte_offset < len(content):
+                        # Show problematic area
+                        problematic_area = get_problematic_content_area(content, byte_offset)
+                        logger.debug(f"Problematic content area: {problematic_area}")
+                    
+                    # Try intelligent markdown cleanup first
                     try:
+                        cleaned_markdown = fix_markdown_issues(content)
+                        if cleaned_markdown != content:
+                            logger.info("Attempting with markdown fixes applied")
+                            await self.bot.send_message(
+                                chat_id=target_chat_id,
+                                text=cleaned_markdown,
+                                parse_mode="Markdown"
+                            )
+                            self.message_stats['sent_count'] += 1
+                            self.message_stats['last_sent'] = datetime.now()
+                            logger.info("Message sent successfully with markdown fixes")
+                            return True
+                    except Exception as fix_error:
+                        logger.debug(f"Markdown fix attempt failed: {fix_error}")
+                    
+                    # Second attempt - try as plain text
+                    try:
+                        logger.info("Retrying as plain text")
                         await self.bot.send_message(
                             chat_id=target_chat_id,
                             text=content,
                             parse_mode=None
                         )
-                        logger.debug(f"Raw message sent as plain text to Telegram chat {target_chat_id}")
+                        self.message_stats['sent_count'] += 1
+                        self.message_stats['last_sent'] = datetime.now()
+                        logger.info("Message sent successfully as plain text")
                         return True
+                        
                     except Exception as retry_error:
-                        logger.error(f"Failed to send message even as plain text: {retry_error}")
+                        logger.warning(f"Failed to send message even as plain text: {retry_error}")
+                        
+                        # Third attempt - try with cleaned content
+                        try:
+                            logger.info("Trying with cleaned content")
+                            cleaned_content = clean_content_for_telegram(content)
+                            await self.bot.send_message(
+                                chat_id=target_chat_id,
+                                text=cleaned_content,
+                                parse_mode=None
+                            )
+                            self.message_stats['sent_count'] += 1
+                            self.message_stats['last_sent'] = datetime.now()
+                            logger.info("Message sent successfully with cleaned content")
+                            return True
+                            
+                        except Exception as final_error:
+                            logger.error(f"Failed to send message after all attempts: {final_error}")
+                            self.message_stats['error_count'] += 1
+                            self.message_stats['last_error'] = datetime.now()
+                            return False
+                
+                # Handle other Telegram errors
+                elif "Message is too long" in error_message:
+                    logger.warning(f"Message too long, trying to truncate: {e}")
+                    
+                    # Try to truncate the message
+                    try:
+                        truncated_content = content[:4000] + "\n\n... (message truncated)"
+                        await self.bot.send_message(
+                            chat_id=target_chat_id,
+                            text=truncated_content,
+                            parse_mode=None
+                        )
+                        self.message_stats['sent_count'] += 1
+                        self.message_stats['last_sent'] = datetime.now()
+                        logger.debug(f"Truncated message sent to Telegram chat {target_chat_id}")
+                        return True
+                        
+                    except Exception as truncate_error:
+                        logger.error(f"Failed to send truncated message: {truncate_error}")
+                        self.message_stats['error_count'] += 1
+                        self.message_stats['last_error'] = datetime.now()
                         return False
+                
+                # Handle rate limiting
+                elif "Too Many Requests" in error_message or "retry after" in error_message.lower():
+                    logger.warning(f"Rate limited by Telegram: {e}")
+                    self.message_stats['error_count'] += 1
+                    self.message_stats['last_error'] = datetime.now()
+                    return False
+                
+                # Handle other errors
                 else:
-                    logger.error(f"Telegram API error: {e}")
+                    logger.debug(f"Telegram API error: {e}")
+                    self.message_stats['error_count'] += 1
+                    self.message_stats['last_error'] = datetime.now()
                     return False
             
         except Exception as e:
-            logger.error(f"Error sending Telegram message: {e}")
+            logger.debug(f"Error sending Telegram message: {e}")
+            self.message_stats['error_count'] += 1
+            self.message_stats['last_error'] = datetime.now()
             return False
+    
+
     
     async def send_message(self, message: str, chat_id: str = None) -> bool:
         """
@@ -404,16 +562,18 @@ class TelegramService(MessageTransport):
         return {
             "name": "Telegram Service",
             "type": "combined_transport_bot",
-            "description": "Combined Telegram message transport and bot command handler",
+            "description": "Telegram message transport with bot command handling",
             "status": {
                 "initialized": bool(self.bot),
                 "running": self.is_running,
                 "bot_configured": bool(self.bot_token),
                 "chat_configured": bool(self.chat_id),
-                "trading_system_connected": self.trading_system is not None
+                "trading_system_connected": self.trading_system is not None,
+                "instance_id": self.instance_id
             },
             "commands": self.commands,
-            "rate_limit_delay": self.rate_limit_delay
+            "rate_limit_delay": self.rate_limit_delay,
+            "message_stats": self.message_stats
         }
     
     # Bot command handling
@@ -423,15 +583,14 @@ class TelegramService(MessageTransport):
         
         # Command handlers
         self.application.add_handler(CommandHandler("start", self._handle_start))
+        self.application.add_handler(CommandHandler("stop", self._handle_stop))
         self.application.add_handler(CommandHandler("help", self._handle_help))
         self.application.add_handler(CommandHandler("status", self._handle_status))
         self.application.add_handler(CommandHandler("portfolio", self._handle_portfolio))
         self.application.add_handler(CommandHandler("orders", self._handle_orders))
         self.application.add_handler(CommandHandler("positions", self._handle_positions))
         self.application.add_handler(CommandHandler("analyze", self._handle_analyze))
-        self.application.add_handler(CommandHandler("start_trading", self._handle_start_trading))
-        self.application.add_handler(CommandHandler("stop_trading", self._handle_stop_trading))
-        self.application.add_handler(CommandHandler("emergency_stop", self._handle_emergency_stop))
+        self.application.add_handler(CommandHandler("emergency", self._handle_emergency))
         
         # Message handler for non-commands
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
@@ -448,7 +607,6 @@ class TelegramService(MessageTransport):
     
     async def _rate_limit(self):
         """Apply rate limiting to prevent flooding."""
-        import time
         current_time = time.time()
         time_since_last = current_time - self.last_message_time
         
@@ -460,24 +618,82 @@ class TelegramService(MessageTransport):
     # Command handlers
     
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command."""
+        """Handle /start command - start the trading system."""
         if not self._is_authorized(update):
             await update.message.reply_text("❌ Unauthorized access")
             return
         
-        welcome_text = f"""
-🤖 **LLM Trading Agent Bot**
-
-Welcome to your personal trading assistant! I can help you monitor and control your trading system.
-
-Use /help to see available commands.
-
-📊 **Current Status**: {("🟢 Active" if self.trading_system and self.trading_system.is_running else "🔴 Inactive")}
-
-⚠️ **Important**: This bot controls real trading operations. Use with caution.
-        """
+        try:
+            if not self.trading_system:
+                await update.message.reply_text("❌ Trading system not available")
+                return
+            
+            # Check if system is shutting down
+            if hasattr(self.trading_system, 'is_shutting_down') and self.trading_system.is_shutting_down:
+                await update.message.reply_text("🔄 System is shutting down, command not available")
+                return
+            
+            # Check if system is already running
+            if self.trading_system.is_running:
+                success = await self.send_message("ℹ️ **Trading System Already Running**\n\nThe system is currently active and operational.", update.effective_chat.id)
+                if success:
+                    # Show current status
+                    await self._handle_status(update, context)
+                else:
+                    await update.message.reply_text("ℹ️ Trading System Already Running - The system is currently active and operational.")
+                return
+            
+            # System is not running, start it
+            success = await self.send_message("🚀 **Starting Trading System**\n\nInitializing...", update.effective_chat.id)
+            if not success:
+                await update.message.reply_text("🚀 Starting Trading System - Initializing...")
+            
+            # Start the trading system
+            result = await self.trading_system.start()
+            
+            if result:
+                # Send current status after starting
+                await self._handle_status(update, context)
+            else:
+                await update.message.reply_text("❌ Failed to start trading system")
+            
+        except Exception as e:
+            logger.error(f"Error handling start command: {e}")
+            try:
+                await update.message.reply_text("❌ Error starting trading system")
+            except Exception as reply_error:
+                logger.debug(f"Could not send error reply: {reply_error}")
+    
+    async def _handle_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /stop command - stop the trading system."""
+        if not self._is_authorized(update):
+            await update.message.reply_text("❌ Unauthorized access")
+            return
         
-        await update.message.reply_text(welcome_text, parse_mode='Markdown')
+        try:
+            if not self.trading_system:
+                await update.message.reply_text("❌ Trading system not available")
+                return
+            
+            # Send stopping message with proper markdown
+            success = await self.send_message("⏹️ **Stopping Trading System**\n\nShutting down...", update.effective_chat.id)
+            if not success:
+                await update.message.reply_text("⏹️ Stopping Trading System - Shutting down...")
+            
+            # Stop the trading system
+            await self.trading_system.stop()
+            
+            # Send success message with proper markdown
+            success = await self.send_message("✅ **Trading System Stopped**\n\nSystem has been shut down successfully.", update.effective_chat.id)
+            if not success:
+                await update.message.reply_text("✅ Trading System Stopped - System has been shut down successfully.")
+            
+        except Exception as e:
+            logger.error(f"Error handling stop command: {e}")
+            try:
+                await update.message.reply_text("❌ Error stopping trading system")
+            except Exception as reply_error:
+                logger.debug(f"Could not send error reply: {reply_error}")
     
     async def _handle_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /help command."""
@@ -485,17 +701,21 @@ Use /help to see available commands.
             await update.message.reply_text("❌ Unauthorized access")
             return
         
-        help_text = "🤖 **Available Commands:**\n\n"
-        
+        help_text = "🤖 *Available Commands:*\n\n"
         for command, description in self.commands.items():
-            help_text += f"/{command} - {description}\n"
+            # Escape underscores in command names to prevent markdown parsing issues
+            safe_command = escape_markdown_symbols(command, "_")
+            help_text += f"/{safe_command} - {description}\n"
         
-        help_text += "\n📱 **Quick Actions:**\n"
-        help_text += "/status - Quick system overview\n"
-        help_text += "/portfolio - Current holdings\n"
-        help_text += "/emergency_stop - Immediate stop\n"
+        help_text += "\n💡 *Tips:*\n"
+        help_text += "• Use /status to check system health\n"
+        help_text += "• Use /analyze to run AI analysis\n"
+        help_text += "• All commands are logged for security\n"
         
-        await update.message.reply_text(help_text, parse_mode='Markdown')
+        # Use send_message instead of reply_text to get proper error handling
+        success = await self.send_message(help_text.strip(), update.effective_chat.id)
+        if not success:
+            await update.message.reply_text("❌ Error sending help information")
     
     async def _handle_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /status command."""
@@ -510,26 +730,63 @@ Use /help to see available commands.
             
             status = await self.trading_system.get_status()
             
+            # Check if there's an error in the status
+            if "error" in status:
+                await update.message.reply_text(f"❌ Error getting system status: {status['error']}")
+                return
+            
+            # Get portfolio data if available
+            portfolio = None
+            try:
+                portfolio = await self.trading_system.get_portfolio()
+            except Exception as e:
+                logger.warning(f"Could not get portfolio for status: {e}")
+            
+            # Build status text with correct keys
             status_text = f"""
-📊 **Trading System Status**
+📊 *Trading System Status*
 
-🔄 **System**: {status.get('status', 'Unknown').upper()}
-📈 **Trading**: {'🟢 Enabled' if status.get('trading_enabled') else '🔴 Disabled'}
-🏪 **Market**: {'🟢 Open' if status.get('market_open') else '🔴 Closed'}
+🏃 *Running*: {("✅ Yes" if status.get('status') == 'running' else "❌ No")}
+💰 *Trading Enabled*: {("✅ Yes" if status.get('trading_enabled', False) else "❌ No")}
+🏪 *Market Open*: {("✅ Yes" if status.get('market_open', False) else "❌ No")}"""
+            
+            # Add scheduler status
+            scheduler_info = status.get('scheduler', {})
+            if scheduler_info:
+                status_text += f"""
+📅 *Scheduler*: {("✅ Running" if scheduler_info.get('actually_running', False) else "❌ Stopped")}
+📋 *Scheduled Jobs*: {scheduler_info.get('total_jobs', 0)}"""
+            
+            status_text += """
 
-💰 **Portfolio**:
-• Equity: ${float(status.get('equity', 0)):,.2f}
+📈 *Portfolio Summary*:"""
+            
+            if portfolio:
+                status_text += f"""
+• Total Equity: ${float(portfolio.equity):,.2f}
+• Cash: ${float(portfolio.cash):,.2f}
+• Day P&L: ${float(portfolio.day_pnl):,.2f}
+• Positions: {len(portfolio.positions)}"""
+            else:
+                # Use status data if available
+                status_text += f"""
+• Total Equity: ${float(status.get('equity', 0)):,.2f}
 • Day P&L: ${float(status.get('day_pnl', 0)):,.2f}
 • Active Orders: {status.get('active_orders', 0)}
-• Positions: {status.get('positions', 0)}
+• Positions: {status.get('positions', 0)}"""
+            
+            status_text += f"""
 
-📅 **Last Update**: {status.get('last_update', 'Unknown')}
+🕒 *Last Update*: {status.get('last_update', 'N/A')}
             """
             
-            await update.message.reply_text(status_text, parse_mode='Markdown')
+            # Use send_message instead of reply_text to get proper error handling
+            success = await self.send_message(status_text.strip(), update.effective_chat.id)
+            if not success:
+                await update.message.reply_text("❌ Error sending status information")
             
         except Exception as e:
-            logger.error(f"Error handling status command: {e}")
+            logger.error(f"Error getting system status: {e}")
             await update.message.reply_text("❌ Error retrieving system status")
     
     async def _handle_portfolio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -545,36 +802,41 @@ Use /help to see available commands.
             
             portfolio = await self.trading_system.get_portfolio()
             
+            if not portfolio:
+                await update.message.reply_text("❌ Unable to retrieve portfolio")
+                return
+            
             portfolio_text = f"""
-💼 **Portfolio Summary**
+💼 *Portfolio Details*
 
-💰 **Total Value**: ${float(portfolio.equity):,.2f}
-📈 **Cash**: ${float(portfolio.cash):,.2f}
-📊 **Market Value**: ${float(portfolio.market_value):,.2f}
-📈 **Day P&L**: ${float(portfolio.day_pnl):,.2f} ({float(portfolio.day_pnl)/float(portfolio.equity)*100:.2f}%)
-📊 **Total P&L**: ${float(portfolio.total_pnl):,.2f}
+💰 *Total Equity*: ${float(portfolio.equity):,.2f}
+💵 *Cash*: ${float(portfolio.cash):,.2f}
+📊 *Market Value*: ${float(portfolio.market_value):,.2f}
+📈 *Day P&L*: ${float(portfolio.day_pnl):,.2f}
+📊 *Total P&L*: ${float(portfolio.total_pnl):,.2f}
 
-**Positions** ({len(portfolio.positions)}):
+💪 *Buying Power*: ${float(portfolio.buying_power):,.2f}
+📦 *Positions*: {len(portfolio.positions)}
             """
             
-            for position in portfolio.positions[:10]:  # Show top 10 positions
-                pnl_pct = float(position.unrealized_pnl_percentage) * 100
-                pnl_emoji = "📈" if position.unrealized_pnl > 0 else "📉" if position.unrealized_pnl < 0 else "➡️"
+            if portfolio.positions:
+                portfolio_text += "\n\n📋 *Current Positions:*\n"
+                for position in portfolio.positions[:5]:  # Show first 5 positions
+                    # Escape underscores in symbol names to prevent markdown parsing issues
+                    safe_symbol = escape_markdown_symbols(str(position.symbol), "_")
+                    portfolio_text += f"• {safe_symbol}: {position.quantity} shares\n"
                 
-                portfolio_text += f"""
-{pnl_emoji} **{position.symbol}**: {position.quantity} shares
-   Value: ${float(position.market_value):,.2f}
-   P&L: ${float(position.unrealized_pnl):,.2f} ({pnl_pct:.2f}%)
-                """
+                if len(portfolio.positions) > 5:
+                    portfolio_text += f"• ... and {len(portfolio.positions) - 5} more positions\n"
             
-            if len(portfolio.positions) > 10:
-                portfolio_text += f"\n... and {len(portfolio.positions) - 10} more positions"
-            
-            await update.message.reply_text(portfolio_text, parse_mode='Markdown')
+            # Use send_message instead of reply_text to get proper error handling
+            success = await self.send_message(portfolio_text.strip(), update.effective_chat.id)
+            if not success:
+                await update.message.reply_text("❌ Error sending portfolio information")
             
         except Exception as e:
-            logger.error(f"Error handling portfolio command: {e}")
-            await update.message.reply_text("❌ Error retrieving portfolio information")
+            logger.error(f"Error getting portfolio: {e}")
+            await update.message.reply_text("❌ Error retrieving portfolio")
     
     async def _handle_orders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /orders command."""
@@ -587,33 +849,33 @@ Use /help to see available commands.
                 await update.message.reply_text("❌ Trading system not available")
                 return
             
+            await update.message.reply_text("📋 Retrieving active orders...")
+            
             orders = await self.trading_system.get_active_orders()
             
             if not orders:
-                await update.message.reply_text("📋 No active orders")
+                await update.message.reply_text("ℹ️ No active orders found")
                 return
             
-            orders_text = f"📋 **Active Orders** ({len(orders)}):\n\n"
+            orders_text = f"📋 *Active Orders* ({len(orders)}):\n\n"
             
             for order in orders:
-                price_str = f"${float(order.price):,.2f}" if order.price else "Market"
-                orders_text += f"""
-🔄 **{order.symbol}** {order.side.value.upper()}
-   Qty: {order.quantity} @ {price_str}
-   Status: {order.status.value.upper()}
-   ID: {order.id or 'N/A'}
-                """
+                # Escape underscores in symbol names to prevent markdown parsing issues
+                safe_symbol = escape_markdown_symbols(str(order.symbol), "_")
+                orders_text += f"• {safe_symbol} - {order.side.value} {order.quantity} @ {order.order_type.value}\n"
             
-            await update.message.reply_text(orders_text, parse_mode='Markdown')
+            # Use send_message instead of reply_text to get proper error handling
+            success = await self.send_message(orders_text.strip(), update.effective_chat.id)
+            if not success:
+                await update.message.reply_text("❌ Error sending orders information")
             
         except Exception as e:
-            logger.error(f"Error handling orders command: {e}")
-            await update.message.reply_text("❌ Error retrieving active orders")
+            logger.error(f"Error getting orders: {e}")
+            await update.message.reply_text("❌ Error retrieving orders")
     
     async def _handle_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /positions command."""
-        # This is similar to portfolio but focuses only on positions
-        await self._handle_portfolio(update, context)
+        await update.message.reply_text("📊 Use /portfolio to see detailed position information")
     
     async def _handle_analyze(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /analyze command - manually trigger AI trading analysis."""
@@ -632,7 +894,7 @@ Use /help to see available commands.
                 return
             
             # Send immediate confirmation
-            await update.message.reply_text("🤖 *AI Analysis Started*\n\nRunning intelligent trading analysis...\n\nThis may take a few moments.")
+            await update.message.reply_text("🤖 *AI Analysis Started*\n\nRunning intelligent trading analysis...\n\nWatch for detailed step-by-step updates below!")
             
             # Trigger manual analysis with cancellation handling
             try:
@@ -641,7 +903,7 @@ Use /help to see available commands.
                 # Handle different result types
                 if isinstance(result, dict):
                     if result.get("success"):
-                        await update.message.reply_text("✅ *Analysis Complete*\n\nAI analysis has been completed. Check the trading notifications for results.")
+                        await update.message.reply_text("✅ *Analysis Complete*\n\nAI analysis has been completed successfully!")
                     else:
                         message = result.get("message", "Analysis failed")
                         if "cancelled" in message.lower() or "shutting down" in message.lower():
@@ -650,7 +912,7 @@ Use /help to see available commands.
                             await update.message.reply_text(f"❌ *Analysis Failed*\n\n{message}")
                 else:
                     # Fallback for unexpected result types
-                    await update.message.reply_text("✅ *Analysis Complete*\n\nAI analysis has been completed. Check the trading notifications for results.")
+                    await update.message.reply_text("✅ *Analysis Complete*\n\nAI analysis has been completed successfully!")
                     
             except asyncio.CancelledError:
                 logger.info("Analysis command cancelled due to system shutdown")
@@ -670,8 +932,8 @@ Use /help to see available commands.
             except Exception as reply_error:
                 logger.debug(f"Could not send error reply: {reply_error}")
     
-    async def _handle_start_trading(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start_trading command."""
+    async def _handle_emergency(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle /emergency command."""
         if not self._is_authorized(update):
             await update.message.reply_text("❌ Unauthorized access")
             return
@@ -681,73 +943,16 @@ Use /help to see available commands.
                 await update.message.reply_text("❌ Trading system not available")
                 return
             
-            # Check if system is shutting down
-            if hasattr(self.trading_system, 'is_shutting_down') and self.trading_system.is_shutting_down:
-                await update.message.reply_text("🔄 System is shutting down, command not available")
-                return
+            await update.message.reply_text("🚨 *EMERGENCY STOP INITIATED*\n\nStopping all trading operations immediately...")
             
-            await self.trading_system.start_trading()
-            await update.message.reply_text("✅ Trading operations started")
-            
-        except asyncio.CancelledError:
-            logger.info("Start trading command cancelled due to system shutdown")
-            return
-        except Exception as e:
-            logger.error(f"Error handling start trading command: {e}")
-            try:
-                await update.message.reply_text("❌ Error starting trading operations")
-            except Exception as reply_error:
-                logger.debug(f"Could not send error reply: {reply_error}")
-    
-    async def _handle_stop_trading(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /stop_trading command."""
-        if not self._is_authorized(update):
-            await update.message.reply_text("❌ Unauthorized access")
-            return
-        
-        try:
-            if not self.trading_system:
-                await update.message.reply_text("❌ Trading system not available")
-                return
-            
-            # Check if system is shutting down
-            if hasattr(self.trading_system, 'is_shutting_down') and self.trading_system.is_shutting_down:
-                await update.message.reply_text("🔄 System is shutting down, command not available")
-                return
-            
-            await self.trading_system.stop_trading()
-            await update.message.reply_text("🛑 Trading operations stopped")
-            
-        except asyncio.CancelledError:
-            logger.info("Stop trading command cancelled due to system shutdown")
-            return
-        except Exception as e:
-            logger.error(f"Error handling stop trading command: {e}")
-            try:
-                await update.message.reply_text("❌ Error stopping trading operations")
-            except Exception as reply_error:
-                logger.debug(f"Could not send error reply: {reply_error}")
-    
-    async def _handle_emergency_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /emergency_stop command."""
-        if not self._is_authorized(update):
-            await update.message.reply_text("❌ Unauthorized access")
-            return
-        
-        try:
-            if not self.trading_system:
-                await update.message.reply_text("❌ Trading system not available")
-                return
-            
-            # Emergency stop should work even during shutdown
             await self.trading_system.emergency_stop()
-            await update.message.reply_text("🚨 EMERGENCY STOP ACTIVATED - All operations halted")
+            await update.message.reply_text("⛔ *EMERGENCY STOP COMPLETE*\n\nAll trading operations have been stopped.")
             
         except asyncio.CancelledError:
-            logger.info("Emergency stop command cancelled due to system shutdown")
+            logger.info("Emergency command cancelled due to system shutdown")
             return
         except Exception as e:
-            logger.error(f"Error handling emergency stop command: {e}")
+            logger.error(f"Error handling emergency command: {e}")
             try:
                 await update.message.reply_text("❌ Error executing emergency stop")
             except Exception as reply_error:
@@ -761,140 +966,107 @@ Use /help to see available commands.
         
         message_text = update.message.text.lower()
         
-        # Simple keyword responses
-        if any(word in message_text for word in ['hello', 'hi', 'hey']):
-            await update.message.reply_text("👋 Hello! Use /help to see available commands.")
-        elif any(word in message_text for word in ['status', 'how']):
-            await self._handle_status(update, context)
-        elif any(word in message_text for word in ['portfolio', 'positions']):
-            await self._handle_portfolio(update, context)
-        elif any(word in message_text for word in ['help', 'commands']):
+        if 'help' in message_text:
             await self._handle_help(update, context)
+        elif 'status' in message_text:
+            await self._handle_status(update, context)
+        elif 'portfolio' in message_text:
+            await self._handle_portfolio(update, context)
+        elif 'analyze' in message_text or 'analysis' in message_text:
+            await self._handle_analyze(update, context)
         else:
-            await update.message.reply_text("🤔 I didn't understand that. Use /help to see available commands.")
-    
-    # Extended message capabilities for trading notifications
-    
-    async def send_order_notification(self, order: Order, event_type: str) -> bool:
-        """Send order notification message."""
-        try:
-            emoji_map = {
-                'created': '📝',
-                'filled': '✅',
-                'partially_filled': '📊',
-                'canceled': '❌',
-                'rejected': '🚫'
-            }
-            
-            emoji = emoji_map.get(event_type, '📝')
-            title = f"Order {event_type.replace('_', ' ').title()}"
-            
-            message = f"""
-{emoji} **{title}**
-
-📊 **Symbol**: {order.symbol}
-📈 **Side**: {order.side.value.upper()}
-📦 **Quantity**: {order.quantity}
-💰 **Type**: {order.order_type.value.upper()}
-"""
-            
-            if order.price:
-                message += f"💵 **Price**: ${float(order.price):,.2f}\n"
-            
-            if order.filled_quantity and order.filled_quantity > 0:
-                message += f"✅ **Filled**: {order.filled_quantity}\n"
-            
-            if order.filled_price:
-                message += f"💲 **Fill Price**: ${float(order.filled_price):,.2f}\n"
-            
-            if order.id:
-                message += f"🔢 **Order ID**: {order.id}\n"
-            
-            return await self.send_message(message)
-            
-        except Exception as e:
-            logger.error(f"Error sending order notification: {e}")
-            return False
-    
-    async def send_portfolio_update(self, portfolio: Portfolio) -> bool:
-        """Send portfolio update message."""
-        try:
-            day_pnl_pct = (float(portfolio.day_pnl) / float(portfolio.equity)) * 100
-            pnl_emoji = "📈" if portfolio.day_pnl > 0 else "📉" if portfolio.day_pnl < 0 else "➡️"
-            
-            message = f"""
-💼 **Portfolio Update**
-
-💰 **Total Equity**: ${float(portfolio.equity):,.2f}
-{pnl_emoji} **Day P&L**: ${float(portfolio.day_pnl):,.2f} ({day_pnl_pct:.2f}%)
-📊 **Market Value**: ${float(portfolio.market_value):,.2f}
-💵 **Cash**: ${float(portfolio.cash):,.2f}
-📈 **Total P&L**: ${float(portfolio.total_pnl):,.2f}
-
-📦 **Positions**: {len(portfolio.positions)}
-            """
-            
-            return await self.send_message(message)
-            
-        except Exception as e:
-            logger.error(f"Error sending portfolio update: {e}")
-            return False
-    
-    async def send_system_alert(self, message: str, alert_type: str = "info") -> bool:
-        """Send system alert message."""
-        try:
-            emoji_map = {
-                'info': 'ℹ️',
-                'warning': '⚠️',
-                'error': '🚨',
-                'success': '✅'
-            }
-            
-            emoji = emoji_map.get(alert_type, 'ℹ️')
-            title = alert_type.upper()
-            
-            alert_message = f"""
-{emoji} **{title}**
-
-{message}
-
-📅 **Time**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """
-            
-            return await self.send_message(alert_message)
-            
-        except Exception as e:
-            logger.error(f"Error sending system alert: {e}")
-            return False
+            await update.message.reply_text("🤖 I don't understand that command. Use /help to see available commands.")
     
     async def send_startup_message(self) -> bool:
         """Send startup notification with available commands."""
         try:
+            # Send a shorter, safer startup message to avoid markdown parsing issues
             startup_message = """🚀 *LLM Trading Agent Started*
 
 System is now running and ready for trading operations!
 
-🤖 *Available Commands:*
-"""
-            
-            # Add command list
-            for command, description in self.commands.items():
-                startup_message += f"/{command} - {description}\n"
-            
-            startup_message += """
+🤖 *Main Commands:*
+/help - Show all available commands
+/status - Get trading system status
+/portfolio - Get current portfolio summary
+/analyze - Manually trigger AI trading analysis
+
 📊 *Quick Start:*
-• /status - Check system status
-• /portfolio - View current holdings
-• /analyze - Run AI analysis
-• /help - Show detailed help
+• Use /help to see all commands
+• Use /status to check system status
+• Use /analyze to run AI analysis
 
-⚠️ *Important:* Set up your API keys and configure the system before trading!
-
-💡 *Tip:* Use /analyze to manually trigger AI trading analysis based on current market conditions.
+Ready to trade! 📊
 """
             
             return await self.send_message(startup_message)
             
         except Exception as e:
             logger.error(f"Error sending startup message: {e}")
+            return False
+    
+    @classmethod
+    async def cleanup_all_instances(cls):
+        """Clean up all active instances."""
+        async with cls._instance_lock:
+            for instance in list(cls._active_instances.values()):
+                try:
+                    await instance.stop()
+                except Exception as e:
+                    logger.debug(f"Error stopping instance: {e}")
+            cls._active_instances.clear()
+    
+    # High-level message sending methods for compatibility
+    
+    async def send_order_notification(self, order, event_type: str) -> bool:
+        """
+        Send order notification message.
+        
+        Args:
+            order: Order object
+            event_type: Type of event (created, filled, canceled, etc.)
+            
+        Returns:
+            True if message sent successfully, False otherwise
+        """
+        try:
+            formatted_message = format_order_message(order, event_type)
+            return await self.send_message(formatted_message)
+        except Exception as e:
+            logger.error(f"Error sending order notification: {e}")
+            return False
+    
+    async def send_portfolio_update(self, portfolio) -> bool:
+        """
+        Send portfolio update message.
+        
+        Args:
+            portfolio: Portfolio object
+            
+        Returns:
+            True if message sent successfully, False otherwise
+        """
+        try:
+            formatted_message = format_portfolio_message(portfolio)
+            return await self.send_message(formatted_message)
+        except Exception as e:
+            logger.error(f"Error sending portfolio update: {e}")
+            return False
+    
+    async def send_system_alert(self, message: str, alert_type: str = "info") -> bool:
+        """
+        Send system alert message.
+        
+        Args:
+            message: Alert message
+            alert_type: Type of alert (info, warning, error, success)
+            
+        Returns:
+            True if message sent successfully, False otherwise
+        """
+        try:
+            formatted_message = format_alert_message(message, alert_type)
+            return await self.send_message(formatted_message)
+        except Exception as e:
+            logger.error(f"Error sending system alert: {e}")
             return False 

@@ -6,13 +6,13 @@ import pytest
 from unittest.mock import Mock, patch, MagicMock
 from typing import Dict, Any
 
-from src.agents.workflow_factory import WorkflowFactory, WorkflowType, create_default_workflow, get_workflow_choices, validate_workflow_config
+from src.agents.workflow_factory import WorkflowFactory, WorkflowType, get_workflow_choices, validate_workflow_config
 from src.agents.workflow_base import WorkflowBase
 from src.agents.sequential_workflow import SequentialWorkflow
 from src.agents.tool_calling_workflow import ToolCallingWorkflow
-from src.apis.alpaca_api import AlpacaAPI
-from src.apis.tiingo_api import TiingoAPI
-from src.apis.tiingo_news_adapter import TiingoNewsAdapter  # Import to register adapter
+from src.adapters.brokers.alpaca_adapter import AlpacaBrokerAdapter
+from src.adapters.market_data.tiingo_market_data_adapter import TiingoMarketDataAdapter
+from src.adapters.news.tiingo_news_adapter import TiingoNewsAdapter
 from config import settings
 
 
@@ -48,73 +48,108 @@ class TestWorkflowFactory:
     
     def test_create_sequential_workflow(self):
         """Test creating sequential workflow"""
-        mock_alpaca = Mock(spec=AlpacaAPI)
-        mock_tiingo = Mock(spec=TiingoAPI)
+        mock_alpaca = Mock(spec=AlpacaBrokerAdapter)
+        mock_tiingo = Mock(spec=TiingoMarketDataAdapter)
         mock_telegram = Mock()
+        mock_message_manager = Mock()
         
         with patch.object(settings, 'workflow_type', 'sequential'):
             workflow = WorkflowFactory.create_workflow(
-                mock_alpaca, mock_tiingo, mock_telegram
+                broker_api=mock_alpaca, 
+                market_data_api=mock_tiingo, 
+                news_api=mock_telegram,
+                message_manager=mock_message_manager
             )
         
         assert isinstance(workflow, SequentialWorkflow)
         assert isinstance(workflow, WorkflowBase)
-        assert workflow.alpaca_api == mock_alpaca
-        assert workflow.tiingo_api == mock_tiingo
-        assert workflow.telegram_bot == mock_telegram
+        assert workflow.broker_api == mock_alpaca
+        assert workflow.market_data_api == mock_tiingo
+        assert workflow.news_api == mock_telegram
+        assert workflow.message_manager == mock_message_manager
     
     def test_create_tool_calling_workflow(self):
         """Test creating tool calling workflow"""
-        mock_alpaca = Mock(spec=AlpacaAPI)
-        mock_tiingo = Mock(spec=TiingoAPI)
+        mock_alpaca = Mock(spec=AlpacaBrokerAdapter)
+        mock_tiingo = Mock(spec=TiingoMarketDataAdapter)
         mock_telegram = Mock()
+        mock_message_manager = Mock()
         
         with patch.object(settings, 'workflow_type', 'tool_calling'):
             workflow = WorkflowFactory.create_workflow(
-                mock_alpaca, mock_tiingo, mock_telegram
+                broker_api=mock_alpaca, 
+                market_data_api=mock_tiingo, 
+                news_api=mock_telegram,
+                message_manager=mock_message_manager
             )
         
         assert isinstance(workflow, ToolCallingWorkflow)
         assert isinstance(workflow, WorkflowBase)
-        assert workflow.alpaca_api == mock_alpaca
-        assert workflow.tiingo_api == mock_tiingo
-        assert workflow.telegram_bot == mock_telegram
+        assert workflow.broker_api == mock_alpaca
+        assert workflow.market_data_api == mock_tiingo
+        assert workflow.news_api == mock_telegram
+        assert workflow.message_manager == mock_message_manager
     
     def test_create_workflow_with_override(self):
         """Test creating workflow with type override"""
-        mock_alpaca = Mock(spec=AlpacaAPI)
-        mock_tiingo = Mock(spec=TiingoAPI)
+        mock_alpaca = Mock(spec=AlpacaBrokerAdapter)
+        mock_tiingo = Mock(spec=TiingoMarketDataAdapter)
+        mock_message_manager = Mock()
         
         # Override with specific type regardless of settings
         workflow = WorkflowFactory.create_workflow(
-            mock_alpaca, mock_tiingo, workflow_type="tool_calling"
+            broker_api=mock_alpaca, 
+            market_data_api=mock_tiingo, 
+            message_manager=mock_message_manager,
+            workflow_type="tool_calling"
         )
         
         assert isinstance(workflow, ToolCallingWorkflow)
     
     def test_create_workflow_invalid_type(self):
         """Test creating workflow with invalid type"""
-        mock_alpaca = Mock(spec=AlpacaAPI)
-        mock_tiingo = Mock(spec=TiingoAPI)
+        mock_alpaca = Mock(spec=AlpacaBrokerAdapter)
+        mock_tiingo = Mock(spec=TiingoMarketDataAdapter)
+        mock_message_manager = Mock()
         
         with pytest.raises(RuntimeError, match="Workflow creation failed"):
             WorkflowFactory.create_workflow(
-                mock_alpaca, mock_tiingo, workflow_type="invalid_type"
+                broker_api=mock_alpaca, 
+                market_data_api=mock_tiingo, 
+                message_manager=mock_message_manager,
+                workflow_type="invalid_type"
             )
     
     def test_create_workflow_default_fallback(self):
         """Test creating workflow with default fallback"""
-        mock_alpaca = Mock(spec=AlpacaAPI)
-        mock_tiingo = Mock(spec=TiingoAPI)
+        mock_alpaca = Mock(spec=AlpacaBrokerAdapter)
+        mock_tiingo = Mock(spec=TiingoMarketDataAdapter)
+        mock_message_manager = Mock()
         
         # Mock settings without workflow_type
         with patch.object(settings, 'workflow_type', None, create=True):
             workflow = WorkflowFactory.create_workflow(
-                mock_alpaca, mock_tiingo
+                broker_api=mock_alpaca, 
+                market_data_api=mock_tiingo,
+                message_manager=mock_message_manager
             )
         
         # Should default to sequential
         assert isinstance(workflow, SequentialWorkflow)
+    
+    def test_create_workflow_missing_message_manager(self):
+        """Test creating workflow without message_manager raises error"""
+        mock_alpaca = Mock(spec=AlpacaBrokerAdapter)
+        mock_tiingo = Mock(spec=TiingoMarketDataAdapter)
+        mock_telegram = Mock()
+        
+        with pytest.raises(RuntimeError, match="Workflow creation failed"):
+            WorkflowFactory.create_workflow(
+                broker_api=mock_alpaca, 
+                market_data_api=mock_tiingo, 
+                news_api=mock_telegram
+                # message_manager intentionally omitted
+            )
     
     def test_get_available_workflows(self):
         """Test getting available workflows"""
@@ -273,14 +308,20 @@ class TestWorkflowFactory:
 class TestConvenienceFunctions:
     """Test convenience functions"""
     
-    def test_create_default_workflow(self):
-        """Test create_default_workflow function"""
-        mock_alpaca = Mock(spec=AlpacaAPI)
-        mock_tiingo = Mock(spec=TiingoAPI)
+    def test_create_workflow_convenience(self):
+        """Test WorkflowFactory.create_workflow convenience method"""
+        mock_alpaca = Mock(spec=AlpacaBrokerAdapter)
+        mock_tiingo = Mock(spec=TiingoMarketDataAdapter)
         mock_telegram = Mock()
+        mock_message_manager = Mock()
         
         with patch.object(settings, 'workflow_type', 'sequential'):
-            workflow = create_default_workflow(mock_alpaca, mock_tiingo, mock_telegram)
+            workflow = WorkflowFactory.create_workflow(
+                broker_api=mock_alpaca, 
+                market_data_api=mock_tiingo, 
+                news_api=mock_telegram,
+                message_manager=mock_message_manager
+            )
         
         assert isinstance(workflow, SequentialWorkflow)
     
@@ -310,12 +351,16 @@ class TestWorkflowIntegration:
     
     def test_workflow_interface_compatibility(self):
         """Test that all workflows implement the required interface"""
-        mock_alpaca = Mock(spec=AlpacaAPI)
-        mock_tiingo = Mock(spec=TiingoAPI)
+        mock_alpaca = Mock(spec=AlpacaBrokerAdapter)
+        mock_tiingo = Mock(spec=TiingoMarketDataAdapter)
+        mock_message_manager = Mock()
         
         for workflow_type in WorkflowType:
             workflow = WorkflowFactory.create_workflow(
-                mock_alpaca, mock_tiingo, workflow_type=workflow_type.value
+                broker_api=mock_alpaca, 
+                market_data_api=mock_tiingo, 
+                message_manager=mock_message_manager,
+                workflow_type=workflow_type.value
             )
             
             # Test required interface methods exist
@@ -332,11 +377,15 @@ class TestWorkflowIntegration:
     @pytest.mark.asyncio
     async def test_workflow_base_methods(self):
         """Test WorkflowBase common methods"""
-        mock_alpaca = Mock(spec=AlpacaAPI)
-        mock_tiingo = Mock(spec=TiingoAPI)
+        mock_alpaca = Mock(spec=AlpacaBrokerAdapter)
+        mock_tiingo = Mock(spec=TiingoMarketDataAdapter)
+        mock_message_manager = Mock()
         
         workflow = WorkflowFactory.create_workflow(
-            mock_alpaca, mock_tiingo, workflow_type="sequential"
+            broker_api=mock_alpaca, 
+            market_data_api=mock_tiingo, 
+            message_manager=mock_message_manager,
+            workflow_type="sequential"
         )
         
         # Test utility methods exist and can be called
