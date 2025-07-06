@@ -11,8 +11,8 @@ import time
 from typing import Optional, Dict, Any, List, ClassVar
 from decimal import Decimal
 from datetime import datetime
-from telegram import Update, Bot
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from telegram.error import TelegramError, Conflict, NetworkError, TimedOut
 
 from src.interfaces.message_transport import MessageTransport, MessageFormat
@@ -592,6 +592,9 @@ class TelegramService(MessageTransport):
         self.application.add_handler(CommandHandler("analyze", self._handle_analyze))
         self.application.add_handler(CommandHandler("emergency", self._handle_emergency))
         
+        # Callback query handler for button interactions
+        self.application.add_handler(CallbackQueryHandler(self._handle_callback_query))
+        
         # Message handler for non-commands
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
         
@@ -614,6 +617,96 @@ class TelegramService(MessageTransport):
             await asyncio.sleep(self.rate_limit_delay - time_since_last)
         
         self.last_message_time = time.time()
+    
+    def _create_main_menu_keyboard(self) -> InlineKeyboardMarkup:
+        """Create main menu keyboard with quick action buttons."""
+        keyboard = [
+            [
+                InlineKeyboardButton("📊 Status", callback_data="status"),
+                InlineKeyboardButton("💼 Portfolio", callback_data="portfolio")
+            ],
+            [
+                InlineKeyboardButton("📈 Orders", callback_data="orders"),
+                InlineKeyboardButton("🎯 Positions", callback_data="positions")
+            ],
+            [
+                InlineKeyboardButton("🤖 Analyze", callback_data="analyze"),
+                InlineKeyboardButton("❓ Help", callback_data="help")
+            ],
+            [
+                InlineKeyboardButton("🚨 Emergency Stop", callback_data="emergency")
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    def _create_refresh_keyboard(self, command: str) -> InlineKeyboardMarkup:
+        """Create a refresh button for updates."""
+        keyboard = [
+            [
+                InlineKeyboardButton("🔄 Refresh", callback_data=f"refresh_{command}"),
+                InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    def _create_confirmation_keyboard(self, action: str) -> InlineKeyboardMarkup:
+        """Create confirmation buttons for important actions."""
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Confirm", callback_data=f"confirm_{action}"),
+                InlineKeyboardButton("❌ Cancel", callback_data="cancel")
+            ]
+        ]
+        return InlineKeyboardMarkup(keyboard)
+    
+    async def _handle_callback_query(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Handle button callback queries."""
+        query = update.callback_query
+        
+        # Answer the callback query to stop the loading animation
+        await query.answer()
+        
+        if not self._is_authorized(update):
+            await query.edit_message_text("❌ Unauthorized access")
+            return
+        
+        try:
+            callback_data = query.data
+            
+            # Handle different callback actions
+            if callback_data == "status":
+                await self._handle_status_callback(query, context)
+            elif callback_data == "portfolio":
+                await self._handle_portfolio_callback(query, context)
+            elif callback_data == "orders":
+                await self._handle_orders_callback(query, context)
+            elif callback_data == "positions":
+                await self._handle_positions_callback(query, context)
+            elif callback_data == "analyze":
+                await self._handle_analyze_callback(query, context)
+            elif callback_data == "help":
+                await self._handle_help_callback(query, context)
+            elif callback_data == "emergency":
+                await self._handle_emergency_callback(query, context)
+            elif callback_data == "main_menu":
+                await self._handle_main_menu_callback(query, context)
+            elif callback_data.startswith("refresh_"):
+                command = callback_data.replace("refresh_", "")
+                await self._handle_refresh_callback(query, context, command)
+            elif callback_data.startswith("confirm_"):
+                action = callback_data.replace("confirm_", "")
+                await self._handle_confirm_callback(query, context, action)
+            elif callback_data == "cancel":
+                await query.edit_message_text("❌ **Action Cancelled**")
+            else:
+                await query.edit_message_text("❓ Unknown action")
+                
+        except Exception as e:
+            logger.error(f"Error handling callback query: {e}")
+            try:
+                await query.edit_message_text("❌ Error processing button action")
+            except Exception as edit_error:
+                logger.debug(f"Could not edit message after callback error: {edit_error}")
     
     # Command handlers
     
@@ -703,19 +796,16 @@ class TelegramService(MessageTransport):
         
         help_text = "🤖 **Available Commands:**\n\n"
         for command, description in self.commands.items():
-            # Escape underscores in command names to prevent markdown parsing issues
-            safe_command = escape_markdown_symbols(command, "_")
-            help_text += f"/{safe_command} - {description}\n"
+            help_text += f"/{command} - {description}\n"
         
-        help_text += "\n💡 *Tips:*\n"
-        help_text += "• Use /status to check system health\n"
-        help_text += "• Use /analyze to run AI analysis\n"
-        help_text += "• All commands are logged for security\n"
+        help_text += "\n💡 **Tip:** Use the buttons below for quick access!"
         
-        # Use send_message instead of reply_text to get proper error handling
-        success = await self.send_message(help_text.strip(), update.effective_chat.id)
-        if not success:
-            await update.message.reply_text("❌ Error sending help information")
+        # Send help message with interactive buttons
+        await update.message.reply_text(
+            help_text.strip(),
+            reply_markup=self._create_main_menu_keyboard(),
+            parse_mode='Markdown'
+        )
     
     async def _handle_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /status command."""
@@ -780,10 +870,12 @@ class TelegramService(MessageTransport):
 🕒 *Last Update*: {status.get('last_update', 'N/A')}
             """
             
-            # Use send_message instead of reply_text to get proper error handling
-            success = await self.send_message(status_text.strip(), update.effective_chat.id)
-            if not success:
-                await update.message.reply_text("❌ Error sending status information")
+            # Send status message with refresh button
+            await update.message.reply_text(
+                status_text.strip(),
+                reply_markup=self._create_refresh_keyboard("status"),
+                parse_mode='Markdown'
+            )
             
         except Exception as e:
             logger.error(f"Error getting system status: {e}")
@@ -829,10 +921,12 @@ class TelegramService(MessageTransport):
                 if len(portfolio.positions) > 5:
                     portfolio_text += f"• ... and {len(portfolio.positions) - 5} more positions\n"
             
-            # Use send_message instead of reply_text to get proper error handling
-            success = await self.send_message(portfolio_text.strip(), update.effective_chat.id)
-            if not success:
-                await update.message.reply_text("❌ Error sending portfolio information")
+            # Send portfolio message with refresh button
+            await update.message.reply_text(
+                portfolio_text.strip(),
+                reply_markup=self._create_refresh_keyboard("portfolio"),
+                parse_mode='Markdown'
+            )
             
         except Exception as e:
             logger.error(f"Error getting portfolio: {e}")
@@ -864,10 +958,12 @@ class TelegramService(MessageTransport):
                 safe_symbol = escape_markdown_symbols(str(order.symbol), "_")
                 orders_text += f"• {safe_symbol} - {order.side.value} {order.quantity} @ {order.order_type.value}\n"
             
-            # Use send_message instead of reply_text to get proper error handling
-            success = await self.send_message(orders_text.strip(), update.effective_chat.id)
-            if not success:
-                await update.message.reply_text("❌ Error sending orders information")
+            # Send orders message with refresh button
+            await update.message.reply_text(
+                orders_text.strip(),
+                reply_markup=self._create_refresh_keyboard("orders"),
+                parse_mode='Markdown'
+            )
             
         except Exception as e:
             logger.error(f"Error getting orders: {e}")
@@ -875,7 +971,11 @@ class TelegramService(MessageTransport):
     
     async def _handle_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /positions command."""
-        await update.message.reply_text("📊 Use /portfolio to see detailed position information")
+        await update.message.reply_text(
+            "📊 **Position Information**\n\nUse the Portfolio button below for detailed position information.",
+            reply_markup=self._create_main_menu_keyboard(),
+            parse_mode='Markdown'
+        )
     
     async def _handle_analyze(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle /analyze command - manually trigger AI trading analysis."""
@@ -1007,7 +1107,7 @@ Ready to trade! 📊"""
         """Send system started notification - this is called directly by trading system."""
         try:
             # Send system online message with all available commands
-            startup_message = f"""🚀 **Trading System Online**
+            startup_message = f"""🚀 **LLM Agent Trading System**
 
 All components initialized successfully. Ready for trading operations!
 
@@ -1090,4 +1190,267 @@ Ready to trade! Use /help for detailed information."""
             return await self.send_message(formatted_message)
         except Exception as e:
             logger.error(f"Error sending system alert: {e}")
-            return False 
+            return False
+
+    # Callback handler functions for button interactions
+    
+    async def _handle_main_menu_callback(self, query, context):
+        """Handle main menu button callback."""
+        await query.edit_message_text(
+            "🤖 **Trading System Menu**\n\nSelect an action:",
+            reply_markup=self._create_main_menu_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    async def _handle_status_callback(self, query, context):
+        """Handle status button callback."""
+        if not self.trading_system:
+            await query.edit_message_text(
+                "❌ **Trading System Not Available**",
+                reply_markup=self._create_refresh_keyboard("status"),
+                parse_mode='Markdown'
+            )
+            return
+        
+        try:
+            # Get system status
+            is_running = self.trading_system.is_running
+            is_trading_enabled = getattr(self.trading_system, 'is_trading_enabled', False)
+            
+            status_message = f"""📊 **Trading System Status**
+
+🔄 **System**: {'🟢 Running' if is_running else '🔴 Stopped'}
+💰 **Trading**: {'🟢 Enabled' if is_trading_enabled else '🔴 Disabled'}
+⏰ **Last Update**: {datetime.now().strftime('%H:%M:%S')}"""
+            
+            await query.edit_message_text(
+                status_message,
+                reply_markup=self._create_refresh_keyboard("status"),
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting status via callback: {e}")
+            await query.edit_message_text(
+                "❌ **Error Getting Status**",
+                reply_markup=self._create_refresh_keyboard("status"),
+                parse_mode='Markdown'
+            )
+    
+    async def _handle_portfolio_callback(self, query, context):
+        """Handle portfolio button callback."""
+        if not self.trading_system:
+            await query.edit_message_text(
+                "❌ **Trading System Not Available**",
+                reply_markup=self._create_refresh_keyboard("portfolio"),
+                parse_mode='Markdown'
+            )
+            return
+        
+        try:
+            portfolio = await self.trading_system.get_portfolio()
+            if portfolio:
+                formatted_message = format_portfolio_message(portfolio)
+                await query.edit_message_text(
+                    formatted_message,
+                    reply_markup=self._create_refresh_keyboard("portfolio"),
+                    parse_mode='Markdown'
+                )
+            else:
+                await query.edit_message_text(
+                    "❌ **Portfolio Not Available**",
+                    reply_markup=self._create_refresh_keyboard("portfolio"),
+                    parse_mode='Markdown'
+                )
+                
+        except Exception as e:
+            logger.error(f"Error getting portfolio via callback: {e}")
+            await query.edit_message_text(
+                "❌ **Error Getting Portfolio**",
+                reply_markup=self._create_refresh_keyboard("portfolio"),
+                parse_mode='Markdown'
+            )
+    
+    async def _handle_orders_callback(self, query, context):
+        """Handle orders button callback."""
+        if not self.trading_system:
+            await query.edit_message_text(
+                "❌ **Trading System Not Available**",
+                reply_markup=self._create_refresh_keyboard("orders"),
+                parse_mode='Markdown'
+            )
+            return
+        
+        try:
+            orders = await self.trading_system.get_active_orders()
+            if orders:
+                message = "📈 **Active Orders:**\n\n"
+                for order in orders[:5]:  # Limit to 5 orders to avoid message too long
+                    message += f"• {order.symbol}: {order.side.value} {order.quantity} @ {order.order_type.value}\n"
+                if len(orders) > 5:
+                    message += f"\n... and {len(orders) - 5} more orders"
+            else:
+                message = "📈 **Active Orders:**\n\nNo active orders found."
+            
+            await query.edit_message_text(
+                message,
+                reply_markup=self._create_refresh_keyboard("orders"),
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting orders via callback: {e}")
+            await query.edit_message_text(
+                "❌ **Error Getting Orders**",
+                reply_markup=self._create_refresh_keyboard("orders"),
+                parse_mode='Markdown'
+            )
+    
+    async def _handle_positions_callback(self, query, context):
+        """Handle positions button callback."""
+        if not self.trading_system:
+            await query.edit_message_text(
+                "❌ **Trading System Not Available**",
+                reply_markup=self._create_refresh_keyboard("positions"),
+                parse_mode='Markdown'
+            )
+            return
+        
+        try:
+            portfolio = await self.trading_system.get_portfolio()
+            if portfolio and portfolio.positions:
+                message = "🎯 **Current Positions:**\n\n"
+                for position in portfolio.positions[:5]:  # Limit to 5 positions
+                    pnl_emoji = "📈" if position.unrealized_pnl >= 0 else "📉"
+                    message += f"{pnl_emoji} {position.symbol}: {position.quantity} shares\n"
+                    message += f"   P&L: ${position.unrealized_pnl:.2f} ({position.unrealized_pnl_percentage:.2%})\n\n"
+                if len(portfolio.positions) > 5:
+                    message += f"... and {len(portfolio.positions) - 5} more positions"
+            else:
+                message = "🎯 **Current Positions:**\n\nNo open positions found."
+            
+            await query.edit_message_text(
+                message,
+                reply_markup=self._create_refresh_keyboard("positions"),
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            logger.error(f"Error getting positions via callback: {e}")
+            await query.edit_message_text(
+                "❌ **Error Getting Positions**",
+                reply_markup=self._create_refresh_keyboard("positions"),
+                parse_mode='Markdown'
+            )
+    
+    async def _handle_analyze_callback(self, query, context):
+        """Handle analyze button callback."""
+        if not self.trading_system:
+            await query.edit_message_text(
+                "❌ **Trading System Not Available**",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Check if system is shutting down
+        if hasattr(self.trading_system, 'is_shutting_down') and self.trading_system.is_shutting_down:
+            await query.edit_message_text(
+                "🔄 **System Shutting Down**\n\nPlease try again after restart.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Start analysis
+        await query.edit_message_text(
+            "🤖 **AI Analysis Started**\n\nRunning intelligent trading analysis...\n\nWatch for detailed step-by-step updates below!",
+            parse_mode='Markdown'
+        )
+        
+        try:
+            result = await self.trading_system.run_manual_analysis()
+            # The analysis progress will be sent via the message manager
+            # Just update the button message with completion status
+            if isinstance(result, dict) and result.get("success"):
+                completion_keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]]
+                await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(completion_keyboard))
+        except Exception as e:
+            logger.error(f"Error in analyze callback: {e}")
+            await query.edit_message_text(
+                "❌ **Analysis Failed**\n\nPlease try again.",
+                reply_markup=self._create_main_menu_keyboard(),
+                parse_mode='Markdown'
+            )
+    
+    async def _handle_help_callback(self, query, context):
+        """Handle help button callback."""
+        help_text = "🤖 **Available Commands:**\n\n"
+        for command, description in self.commands.items():
+            help_text += f"/{command} - {description}\n"
+        
+        help_text += "\n💡 **Tip:** Use the buttons below for quick access!"
+        
+        await query.edit_message_text(
+            help_text,
+            reply_markup=self._create_main_menu_keyboard(),
+            parse_mode='Markdown'
+        )
+    
+    async def _handle_emergency_callback(self, query, context):
+        """Handle emergency button callback with confirmation."""
+        confirmation_keyboard = self._create_confirmation_keyboard("emergency")
+        await query.edit_message_text(
+            "🚨 **Emergency Stop Confirmation**\n\n⚠️ This will immediately stop all trading operations!\n\nAre you sure you want to proceed?",
+            reply_markup=confirmation_keyboard,
+            parse_mode='Markdown'
+        )
+    
+    async def _handle_refresh_callback(self, query, context, command: str):
+        """Handle refresh button callback."""
+        # Map command to appropriate callback handler
+        if command == "status":
+            await self._handle_status_callback(query, context)
+        elif command == "portfolio":
+            await self._handle_portfolio_callback(query, context)
+        elif command == "orders":
+            await self._handle_orders_callback(query, context)
+        elif command == "positions":
+            await self._handle_positions_callback(query, context)
+        else:
+            await query.edit_message_text(
+                "❓ **Unknown Command**",
+                reply_markup=self._create_main_menu_keyboard(),
+                parse_mode='Markdown'
+            )
+    
+    async def _handle_confirm_callback(self, query, context, action: str):
+        """Handle confirmation button callback."""
+        if action == "emergency":
+            if not self.trading_system:
+                await query.edit_message_text("❌ **Trading System Not Available**", parse_mode='Markdown')
+                return
+            
+            await query.edit_message_text(
+                "🚨 **EMERGENCY STOP INITIATED**\n\nStopping all trading operations immediately...",
+                parse_mode='Markdown'
+            )
+            
+            try:
+                await self.trading_system.emergency_stop()
+                await query.edit_message_text(
+                    "⛔ **EMERGENCY STOP COMPLETE**\n\nAll trading operations have been stopped.",
+                    reply_markup=self._create_main_menu_keyboard(),
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Error in emergency stop: {e}")
+                await query.edit_message_text(
+                    "❌ **Error During Emergency Stop**",
+                    reply_markup=self._create_main_menu_keyboard(),
+                    parse_mode='Markdown'
+                )
+        else:
+            await query.edit_message_text(
+                "❓ **Unknown Action**",
+                reply_markup=self._create_main_menu_keyboard(),
+                parse_mode='Markdown'
+            ) 

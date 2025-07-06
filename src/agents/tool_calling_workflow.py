@@ -84,7 +84,7 @@ class ToolCallingWorkflow(WorkflowBase):
             return ChatDeepSeek(
                 model=settings.deepseek_model,
                 api_key=settings.deepseek_api_key,
-                temperature=0.1
+                temperature=1.0
             )
         elif settings.llm_provider.lower() == "openai":
             return ChatOpenAI(
@@ -270,13 +270,31 @@ Be conservative and prioritize capital preservation.
             except Exception as e:
                 return f"Error in decision making: {e}"
         
+        @tool
+        async def finish_analysis(analysis_summary: str, final_decision: str) -> str:
+            """Finish the trading analysis with final decision and reasoning"""
+            try:
+                # This tool signals that the analysis is complete
+                return f"""
+ANALYSIS COMPLETE
+
+Final Summary: {analysis_summary}
+
+Decision: {final_decision}
+
+The trading analysis has been completed. The system will now process the final decision.
+"""
+            except Exception as e:
+                return f"Error finishing analysis: {e}"
+        
         return [
             get_portfolio_info,
             get_market_data,
             get_news,
             check_market_status,
             get_active_orders,
-            make_trading_decision
+            make_trading_decision,
+            finish_analysis
         ]
     
     async def run_workflow(self, initial_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -341,12 +359,13 @@ Be conservative and prioritize capital preservation.
         
         tool_calls = []
         decision = None
+        analysis_complete = False  # Flag to track when analysis is complete
         
         # Start interactive loop
         for iteration in range(self.max_iterations):
             try:
                 # Send iteration notification
-                await self.message_manager.send_message(f"🔄 **Analysis Step {iteration + 1}**\n\n🧭 AI is processing market data and making strategic decisions...", "info")
+                await self.message_manager.send_message(f"🔄 **Analysis Step {iteration + 1}**", "info")
                 
                 # Get LLM response with cancellation handling
                 try:
@@ -424,23 +443,45 @@ Be conservative and prioritize capital preservation.
                             "result": tool_result[:500] + "..." if len(tool_result) > 500 else tool_result,
                             "success": tool_success
                         })
+                        
+                        # Check if finish_analysis was called
+                        if tool_name == "finish_analysis":
+                            # Extract decision from the finish_analysis arguments
+                            final_decision = tool_args.get("final_decision", "")
+                            analysis_summary = tool_args.get("analysis_summary", "")
+                            
+                            # Parse the decision from the arguments
+                            decision = self._parse_decision(final_decision)
+                            
+                            # Send only reasoning summary (no separate decision summary to avoid redundancy)
+                            await self.message_manager.send_reasoning_summary(
+                                reasoning_text=f"Analysis Summary: {analysis_summary}\n\nFinal Decision: {final_decision}",
+                                tool_calls_count=len(tool_calls)
+                            )
+                            
+                            # Mark analysis as complete
+                            analysis_complete = True
+                            logger.info("Analysis marked as complete via finish_analysis tool")
+                            break  # Break out of tool execution loop
+                    
+                    # Check if analysis is complete after tool execution
+                    if analysis_complete:
+                        logger.info("Breaking out of main analysis loop - finish_analysis was called")
+                        break  # Break out of main iteration loop
+                        
                 else:
-                    # No more tools to call, LLM has provided final analysis
-                    final_response = response.content
+                    # No tools called, prompt LLM to continue or finish
+                    await self.message_manager.send_message("🤔 **Awaiting Decision**\n\nAI is thinking... Please use tools to gather more information or call `finish_analysis` when ready.", "info")
                     
-                    # Try to parse a decision from the response
-                    decision = self._parse_decision(final_response)
-                    
-                    # Send reasoning summary with tool usage count
-                    await self.message_manager.send_reasoning_summary(
-                        reasoning_text=final_response,
-                        tool_calls_count=len(tool_calls)
-                    )
-                    
-                    # Send decision summary
-                    await self.message_manager.send_decision_summary(decision)
-                    
-                    break
+                    # Add a message to guide the LLM
+                    guidance_message = HumanMessage(content="""
+Please continue your analysis by either:
+1. Using available tools to gather more information, OR
+2. Calling the 'finish_analysis' tool with your final analysis summary and decision
+
+Remember: You must explicitly call 'finish_analysis' to complete the analysis.
+""")
+                    messages.append(guidance_message)
                     
             except asyncio.CancelledError:
                 logger.info(f"Interactive workflow cancelled in iteration {iteration}")
@@ -456,6 +497,18 @@ Be conservative and prioritize capital preservation.
                 logger.error(f"Error in iteration {iteration}: {e}")
                 await self.message_manager.send_error(f"Error in analysis step {iteration}: {e}", "Tool Execution")
                 break
+        
+        # Check if we reached max iterations without calling finish_analysis
+        if decision is None and not analysis_complete:
+            await self.message_manager.send_message("⚠️ **Analysis Timeout**\n\nMaximum iterations reached without explicit finish. Defaulting to HOLD decision.", "warning")
+            # Create a default HOLD decision
+            decision = TradingDecision(
+                action=TradingAction.HOLD,
+                symbol="",
+                reasoning="Analysis reached maximum iterations without explicit completion via finish_analysis tool",
+                confidence=Decimal('0.0')
+            )
+        # Note: Removed redundant "Analysis Complete" message as it's already sent in the workflow summary
         
         # Execute the decision if trading is enabled
         try:
@@ -499,12 +552,21 @@ Be conservative and prioritize capital preservation.
 You are an expert trading AI assistant with access to various tools to gather market information and make trading decisions.
 
 Your goal is to:
-1. Gather relevant information about current market conditions
+1. Gather relevant information about current market conditions using available tools
 2. Analyze portfolio and market data comprehensively  
 3. Make well-informed trading decisions
 4. Provide clear reasoning for your recommendations
 
-Use the available tools as needed to collect data, then provide your analysis and final decision.
+IMPORTANT WORKFLOW RULES:
+- Use the available tools to collect data and information
+- Continue using tools until you have sufficient information for a decision
+- When you are ready to conclude your analysis, you MUST call the 'finish_analysis' tool
+- The 'finish_analysis' tool requires two parameters:
+  * analysis_summary: A comprehensive summary of your analysis
+  * final_decision: Your trading decision in the format "DECISION: [BUY/SELL/HOLD], SYMBOL: [symbol], QUANTITY: [amount], REASONING: [reasoning], CONFIDENCE: [0.0-1.0]"
+
+Do not attempt to end the analysis without calling 'finish_analysis'. The system will only process your decision when you explicitly use this tool.
+
 Be conservative and prioritize capital preservation while identifying profitable opportunities.
 """
     
@@ -600,30 +662,76 @@ Please start by gathering the information you need to make an informed decision.
     def _parse_decision(self, decision_text: str) -> Optional[TradingDecision]:
         """Parse LLM decision response into TradingDecision object."""
         try:
-            # Parse the decision text
+            # Parse the decision text - handle both formats:
+            # Format 1: "DECISION: BUY\nSYMBOL: SPY\n..."  (newline separated)
+            # Format 2: "BUY, SYMBOL: SPY, QUANTITY: 100, ..." (comma separated)
             decision_data = {}
-            lines = decision_text.strip().split('\n')
+            text = decision_text.strip()
             
-            for line in lines:
-                if ':' in line:
-                    key, value = line.split(':', 1)
-                    decision_data[key.strip().lower()] = value.strip()
+            # Check if it's comma-separated format
+            if ', ' in text and not '\n' in text:
+                # Handle comma-separated format: "HOLD, SYMBOL: N/A, QUANTITY: N/A, ..."
+                parts = text.split(', ')
+                
+                # First part might be just the decision without key
+                first_part = parts[0].strip()
+                if ':' not in first_part and first_part.upper() in ['BUY', 'SELL', 'HOLD']:
+                    decision_data['decision'] = first_part
+                    parts = parts[1:]  # Skip first part
+                else:
+                    # First part has key:value format
+                    if ':' in first_part:
+                        key, value = first_part.split(':', 1)
+                        decision_data[key.strip().lower()] = value.strip()
+                        parts = parts[1:]
+                
+                # Parse remaining parts
+                for part in parts:
+                    if ':' in part:
+                        key, value = part.split(':', 1)
+                        decision_data[key.strip().lower()] = value.strip()
+            else:
+                # Handle newline-separated format: "DECISION: BUY\nSYMBOL: SPY\n..."
+                lines = text.split('\n')
+                for line in lines:
+                    if ':' in line:
+                        key, value = line.split(':', 1)
+                        decision_data[key.strip().lower()] = value.strip()
             
             # Extract decision components
-            action = decision_data.get('decision', 'HOLD').lower()
+            action_raw = decision_data.get('decision', 'HOLD').strip()
+            action_upper = action_raw.upper()  # Use uppercase for validation
+            action = action_raw.lower()  # Convert to lowercase for TradingAction enum
+            
+            # Validate action
+            if action_upper not in ['BUY', 'SELL', 'HOLD']:
+                logger.warning(f"Invalid action '{action_raw}', defaulting to HOLD")
+                action = 'hold'
+            elif action_upper == 'HOLD':
+                action = 'hold'
+            elif action_upper == 'BUY':
+                action = 'buy'
+            elif action_upper == 'SELL':
+                action = 'sell'
             
             # Handle symbol
             symbol = decision_data.get('symbol', '')
-            if symbol.upper() in ['N/A', 'NA', 'NONE', 'NULL'] or action.lower() == 'hold':
+            if symbol.upper() in ['N/A', 'NA', 'NONE', 'NULL'] or action == 'hold':
                 symbol = ""
             
             # Handle quantity
             quantity = None
-            if action.lower() in ['buy', 'sell']:
+            if action in ['buy', 'sell']:
                 quantity_str = decision_data.get('quantity', '0')
                 if quantity_str.upper() not in ['N/A', 'NA', 'NONE', 'NULL']:
                     try:
-                        quantity = Decimal(quantity_str)
+                        # Extract numeric part if there are extra characters
+                        import re
+                        numeric_match = re.search(r'(\d+(?:\.\d+)?)', quantity_str)
+                        if numeric_match:
+                            quantity = Decimal(numeric_match.group(1))
+                        else:
+                            quantity = Decimal(quantity_str)
                     except (ValueError, TypeError):
                         logger.warning(f"Invalid quantity: {quantity_str}")
                         quantity = None
@@ -635,11 +743,19 @@ Please start by gathering the information you need to make an informed decision.
             confidence = 0.5  # Default confidence
             confidence_str = decision_data.get('confidence', '0.5')
             try:
-                confidence = float(confidence_str)
+                # Extract numeric part if there are extra characters
+                import re
+                numeric_match = re.search(r'(\d+(?:\.\d+)?)', confidence_str)
+                if numeric_match:
+                    confidence = float(numeric_match.group(1))
+                else:
+                    confidence = float(confidence_str)
                 confidence = max(0.0, min(1.0, confidence))
             except (ValueError, TypeError):
                 logger.warning(f"Invalid confidence: {confidence_str}")
                 confidence = 0.5
+            
+            logger.info(f"Parsed decision: action={action}, symbol={symbol}, quantity={quantity}, confidence={confidence}")
             
             return TradingDecision(
                 action=TradingAction(action),
@@ -650,7 +766,7 @@ Please start by gathering the information you need to make an informed decision.
             )
             
         except Exception as e:
-            logger.error(f"Error parsing decision: {e}")
+            logger.error(f"Error parsing decision: '{decision_text}' - {e}")
             return TradingDecision(
                 action=TradingAction.HOLD,
                 symbol="",
