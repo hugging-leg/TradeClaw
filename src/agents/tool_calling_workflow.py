@@ -293,22 +293,16 @@ Be conservative and prioritize capital preservation.
             self.workflow_id = self._generate_workflow_id()
             self.start_time = datetime.now()
             
-            # Send start notification
-            await self.send_workflow_start_notification("Tool Calling")
-            
             # Initialize context
             context = initial_context or {}
             await self.initialize_workflow(context)
             
-            # Execute the interactive workflow
+            # Execute the interactive workflow (this will send its own start notification)
             result = await self._execute_interactive_workflow(context)
             
             # Calculate execution time
             self.end_time = datetime.now()
             execution_time = (self.end_time - self.start_time).total_seconds()
-            
-            # Send completion notification
-            await self.send_workflow_complete_notification("Tool Calling", execution_time)
             
             return {
                 "success": True,
@@ -327,17 +321,16 @@ Be conservative and prioritize capital preservation.
     async def _execute_interactive_workflow(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Execute interactive workflow with dynamic tool calling."""
         
-        # Send workflow start notification
+        # Send enhanced workflow start notification
         await self.message_manager.send_message(f"""
-🚀 **AI Trading Analysis Started**
+🤖 **AI Trading Analysis Engine**
 
-The AI will now analyze market conditions using intelligent tool selection.
+🎯 **Workflow**: Tool Calling AI
+📊 **Available Tools**: {len(self.tools)}
+⚙️ **Max Iterations**: {self.max_iterations}
+⏱️ **Analysis Timeout**: {self.analysis_timeout}s
 
-📋 **Available Tools**: {len(self.tools)}
-🎯 **Max Iterations**: {self.max_iterations}
-⏱️ **Timeout**: {self.analysis_timeout}s
-
-Let the AI decide which tools to use and when...
+🧠 The AI will intelligently select and use tools to analyze market conditions...
         """.strip(), "info")
         
         # Initialize messages and tracking
@@ -353,7 +346,7 @@ Let the AI decide which tools to use and when...
         for iteration in range(self.max_iterations):
             try:
                 # Send iteration notification
-                await self.message_manager.send_message(f"🔄 **Iteration {iteration + 1}**\n\nAnalyzing market conditions and making decisions...", "info")
+                await self.message_manager.send_message(f"🔄 **Analysis Step {iteration + 1}**\n\n🧭 AI is processing market data and making strategic decisions...", "info")
                 
                 # Get LLM response with cancellation handling
                 try:
@@ -363,7 +356,7 @@ Let the AI decide which tools to use and when...
                     )
                 except asyncio.TimeoutError:
                     logger.warning(f"LLM call timed out in iteration {iteration}")
-                    await self.message_manager.send_error("LLM call timed out", "Tool Execution")
+                    await self.message_manager.send_error("AI analysis timed out", "Tool Execution")
                     break
                 except asyncio.CancelledError:
                     logger.info(f"LLM call cancelled in iteration {iteration}")
@@ -379,7 +372,6 @@ Let the AI decide which tools to use and when...
                 
                 # Check if LLM wants to use tools
                 if response.tool_calls:
-                    await self.message_manager.send_message(f"🔧 **Tool Calls** (Iteration {iteration + 1})\n\nExecuting {len(response.tool_calls)} tool call(s)...", "info")
                     
                     # Add AI message to conversation
                     messages.append(response)
@@ -414,13 +406,9 @@ Let the AI decide which tools to use and when...
                         # Check if tool execution was successful
                         tool_success = not tool_result.startswith("Error executing")
                         
-                        # Send detailed tool result
-                        await self.message_manager.send_tool_result(
-                            tool_name=tool_name,
-                            tool_args=tool_args,
-                            tool_result=tool_result,
-                            success=tool_success
-                        )
+                        # Send simple tool execution notification (without results)
+                        status_emoji = "✅" if tool_success else "❌"
+                        await self.message_manager.send_message(f"   {status_emoji} `{tool_name}` executed", "info")
                         
                         # Add tool result to conversation
                         tool_message = ToolMessage(
@@ -466,7 +454,7 @@ Let the AI decide which tools to use and when...
                 }
             except Exception as e:
                 logger.error(f"Error in iteration {iteration}: {e}")
-                await self.message_manager.send_error(f"Error in iteration {iteration}: {e}", "Tool Execution")
+                await self.message_manager.send_error(f"Error in analysis step {iteration}: {e}", "Tool Execution")
                 break
         
         # Execute the decision if trading is enabled
@@ -481,11 +469,8 @@ Let the AI decide which tools to use and when...
             logger.info("Trade execution cancelled")
             execution_result = {"success": False, "message": "Trade execution cancelled"}
         
-        # Send workflow completion summary
+        # Send comprehensive workflow completion summary (only this one notification)
         await self._send_workflow_summary(tool_calls, decision, execution_result, iteration + 1)
-        
-        # Send final completion notification
-        await self.message_manager.send_workflow_complete()
         
         return {
             "decision": decision,
@@ -511,24 +496,16 @@ Let the AI decide which tools to use and when...
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the LLM."""
         return """
-You are an expert trading AI assistant with access to tools to gather information and make trading decisions.
+You are an expert trading AI assistant with access to various tools to gather market information and make trading decisions.
 
 Your goal is to:
-1. Gather relevant information about the current market conditions
-2. Analyze the portfolio and market data
-3. Make informed trading decisions
+1. Gather relevant information about current market conditions
+2. Analyze portfolio and market data comprehensively  
+3. Make well-informed trading decisions
 4. Provide clear reasoning for your recommendations
 
-You have access to the following tools:
-- get_portfolio_info: Get current portfolio status
-- get_market_data: Get market data for specific symbols or overview
-- get_news: Get recent market news
-- check_market_status: Check if market is open
-- get_active_orders: Get current open orders
-- make_trading_decision: Structure your final trading decision
-
-Start by gathering the necessary information, then provide your analysis and decision.
-Be conservative and prioritize capital preservation.
+Use the available tools as needed to collect data, then provide your analysis and final decision.
+Be conservative and prioritize capital preservation while identifying profitable opportunities.
 """
     
     def _get_initial_prompt(self, context: Dict[str, Any]) -> str:
@@ -688,26 +665,31 @@ Please start by gathering the information you need to make an informed decision.
             successful_tools = sum(1 for tc in tool_calls if tc.get('success', True))
             failed_tools = len(tool_calls) - successful_tools
             
-            # Create tool summary
-            tool_names = [tc['name'] for tc in tool_calls]
-            unique_tools = list(set(tool_names))
+            # Get decision status with emoji
+            decision_emoji = {
+                "BUY": "📈", 
+                "SELL": "📉", 
+                "HOLD": "⏸️"
+            }.get(decision.action.value if decision else "HOLD", "⏸️")
+            
+            # Get execution status emoji
+            execution_emoji = "✅" if execution_result.get('success') else "❌"
+            
+            # Create unique tools list for display
+            unique_tools = list(set(tc['name'] for tc in tool_calls))
             
             summary_message = f"""
-📊 **AI Analysis Summary**
+🎯 **AI Analysis Complete**
 
-🔧 **Tool Usage**:
-• Total tools executed: {len(tool_calls)}
-• Successful: {successful_tools}
-• Failed: {failed_tools}
-• Unique tools used: {len(unique_tools)}
-• Tools: {', '.join(unique_tools)}
+📊 **Analysis Summary**:
+• Steps completed: {iterations}
+• Tools executed: {len(tool_calls)} ({successful_tools} ✅, {failed_tools} ❌)
+• Tools used: {', '.join(unique_tools)}
 
-⚡ **Workflow Stats**:
-• Iterations completed: {iterations}
-• Decision made: {'Yes' if decision else 'No'}
-• Trade execution: {'Success' if execution_result.get('success') else 'Failed/Skipped'}
+{decision_emoji} **Decision**: {decision.action.value if decision else 'HOLD'}
+{execution_emoji} **Execution**: {'Success' if execution_result.get('success') else 'Failed/Skipped'}
 
-🎯 **Final Action**: {decision.action.value if decision else 'HOLD'}
+💡 **Status**: Trading analysis workflow completed successfully
             """
             
             await self.message_manager.send_message(summary_message.strip(), "success")

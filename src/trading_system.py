@@ -638,8 +638,19 @@ End of Day Summary:
     async def _handle_system_started(self, event: TradingEvent):
         """Handle system started event"""
         try:
+            # Send startup notification directly through telegram service instead of message manager
+            transport = self.message_manager.transport
+            try:
+                # Try to call the new method if it exists (TelegramService)
+                if hasattr(transport, 'send_system_started_notification'):
+                    await transport.send_system_started_notification()  # type: ignore
+                    return
+            except Exception as e:
+                logger.debug(f"Could not send startup notification via transport: {e}")
+            
+            # Fallback to message manager if telegram service method not available
             await self.message_manager.send_system_alert(
-                "🚀 **Trading System Online**\n\nAll components initialized successfully. Ready for trading operations!", 
+                "🚀 **LLM Agent Trading System**\n\nAll components initialized successfully. Ready for trading operations!", 
                 "success"
             )
         except Exception as e:

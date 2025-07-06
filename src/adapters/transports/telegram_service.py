@@ -701,7 +701,7 @@ class TelegramService(MessageTransport):
             await update.message.reply_text("❌ Unauthorized access")
             return
         
-        help_text = "🤖 *Available Commands:*\n\n"
+        help_text = "🤖 **Available Commands:**\n\n"
         for command, description in self.commands.items():
             # Escape underscores in command names to prevent markdown parsing issues
             safe_command = escape_markdown_symbols(command, "_")
@@ -893,8 +893,8 @@ class TelegramService(MessageTransport):
                 await update.message.reply_text("🔄 System is shutting down, please try again after restart")
                 return
             
-            # Send immediate confirmation
-            await update.message.reply_text("🤖 *AI Analysis Started*\n\nRunning intelligent trading analysis...\n\nWatch for detailed step-by-step updates below!")
+            # Send immediate confirmation with proper formatting
+            await self.send_message("🤖 **AI Analysis Started**\n\nRunning intelligent trading analysis...\n\nWatch for detailed step-by-step updates below!", update.effective_chat.id)
             
             # Trigger manual analysis with cancellation handling
             try:
@@ -903,21 +903,21 @@ class TelegramService(MessageTransport):
                 # Handle different result types
                 if isinstance(result, dict):
                     if result.get("success"):
-                        await update.message.reply_text("✅ *Analysis Complete*\n\nAI analysis has been completed successfully!")
+                        await self.send_message("✅ **Analysis Complete**\n\nAI analysis has been completed successfully!", update.effective_chat.id)
                     else:
                         message = result.get("message", "Analysis failed")
                         if "cancelled" in message.lower() or "shutting down" in message.lower():
-                            await update.message.reply_text("🔄 *Analysis Cancelled*\n\nSystem is shutting down. Please try again after restart.")
+                            await self.send_message("🔄 **Analysis Cancelled**\n\nSystem is shutting down. Please try again after restart.", update.effective_chat.id)
                         else:
-                            await update.message.reply_text(f"❌ *Analysis Failed*\n\n{message}")
+                            await self.send_message(f"❌ **Analysis Failed**\n\n{message}", update.effective_chat.id)
                 else:
                     # Fallback for unexpected result types
-                    await update.message.reply_text("✅ *Analysis Complete*\n\nAI analysis has been completed successfully!")
+                    await self.send_message("✅ **Analysis Complete**\n\nAI analysis has been completed successfully!", update.effective_chat.id)
                     
             except asyncio.CancelledError:
                 logger.info("Analysis command cancelled due to system shutdown")
                 try:
-                    await update.message.reply_text("🔄 *Analysis Cancelled*\n\nSystem is shutting down. Please try again after restart.")
+                    await self.send_message("🔄 **Analysis Cancelled**\n\nSystem is shutting down. Please try again after restart.", update.effective_chat.id)
                 except Exception as e:
                     logger.debug(f"Could not send cancellation message: {e}")
                 return
@@ -943,10 +943,10 @@ class TelegramService(MessageTransport):
                 await update.message.reply_text("❌ Trading system not available")
                 return
             
-            await update.message.reply_text("🚨 *EMERGENCY STOP INITIATED*\n\nStopping all trading operations immediately...")
+            await self.send_message("🚨 **EMERGENCY STOP INITIATED**\n\nStopping all trading operations immediately...", update.effective_chat.id)
             
             await self.trading_system.emergency_stop()
-            await update.message.reply_text("⛔ *EMERGENCY STOP COMPLETE*\n\nAll trading operations have been stopped.")
+            await self.send_message("⛔ **EMERGENCY STOP COMPLETE**\n\nAll trading operations have been stopped.", update.effective_chat.id)
             
         except asyncio.CancelledError:
             logger.info("Emergency command cancelled due to system shutdown")
@@ -978,31 +978,52 @@ class TelegramService(MessageTransport):
             await update.message.reply_text("🤖 I don't understand that command. Use /help to see available commands.")
     
     async def send_startup_message(self) -> bool:
-        """Send startup notification with available commands."""
+        """Send startup notification with all available commands."""
         try:
-            # Send a shorter, safer startup message to avoid markdown parsing issues
-            startup_message = """🚀 *LLM Trading Agent Started*
+            # Build the commands list from the commands dictionary
+            commands_list = "\n".join([f"/{cmd} - {desc}" for cmd, desc in self.commands.items()])
+            
+            startup_message = f"""🚀 **LLM Trading Agent Started**
 
 System is now running and ready for trading operations!
 
-🤖 *Main Commands:*
-/help - Show all available commands
-/status - Get trading system status
-/portfolio - Get current portfolio summary
-/analyze - Manually trigger AI trading analysis
+🤖 **Available Commands:**
+{commands_list}
 
-📊 *Quick Start:*
-• Use /help to see all commands
+📊 **Quick Start:**
+• Use /help to see detailed command information
 • Use /status to check system status
 • Use /analyze to run AI analysis
 
-Ready to trade! 📊
-"""
+Ready to trade! 📊"""
             
             return await self.send_message(startup_message)
             
         except Exception as e:
             logger.error(f"Error sending startup message: {e}")
+            return False
+    
+    async def send_system_started_notification(self) -> bool:
+        """Send system started notification - this is called directly by trading system."""
+        try:
+            # Send system online message with all available commands
+            startup_message = f"""🚀 **Trading System Online**
+
+All components initialized successfully. Ready for trading operations!
+
+🤖 **Available Commands:**
+"""
+            # Add all commands with descriptions
+            for cmd, desc in self.commands.items():
+                startup_message += f"/{cmd} - {desc}\n"
+            
+            startup_message += """
+Ready to trade! Use /help for detailed information."""
+            
+            return await self.send_message(startup_message)
+            
+        except Exception as e:
+            logger.error(f"Error sending system started notification: {e}")
             return False
     
     @classmethod
