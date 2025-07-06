@@ -13,7 +13,7 @@ This represents the original workflow logic that was in trading_workflow.py
 import asyncio
 import json
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -27,10 +27,13 @@ from pydantic import BaseModel, Field
 
 from config import settings
 from src.agents.workflow_base import WorkflowBase
-from src.apis.alpaca_api import AlpacaAPI
-from src.apis.tiingo_api import TiingoAPI
+from src.interfaces.broker_api import BrokerAPI
+from src.interfaces.market_data_api import MarketDataAPI
+from src.interfaces.news_api import NewsAPI
+from src.messaging.message_manager import MessageManager
 from src.models.trading_models import (
-    Order, Portfolio, TradingDecision, OrderSide, OrderType, TimeInForce, TradingAction
+    Order, Portfolio, TradingDecision, OrderSide, OrderType, TimeInForce, TradingAction,
+    Position, MarketData, NewsItem
 )
 
 
@@ -77,21 +80,42 @@ class TradingState(BaseModel):
 
 class SequentialWorkflow(WorkflowBase):
     """
-    Sequential workflow implementation using LangGraph.
+    Sequential AI trading workflow implementation.
     
-    This workflow follows a fixed sequence of steps:
-    1. Data gathering - collect portfolio, market data, and news
-    2. Market analysis - LLM analyzes current market conditions
-    3. Decision making - LLM makes trading decisions based on analysis
-    4. Trade execution - execute approved trades
-    
-    This is the original workflow logic that provides a structured,
-    predictable execution path.
+    This workflow follows a structured, step-by-step approach to trading
+    decisions, executing analysis phases in a predetermined sequence.
     """
     
-    def __init__(self, alpaca_api: AlpacaAPI, tiingo_api: TiingoAPI, telegram_bot=None):
-        """Initialize the sequential workflow."""
-        super().__init__(alpaca_api, tiingo_api, telegram_bot)
+    def __init__(self, 
+                 broker_api: BrokerAPI = None,
+                 market_data_api: MarketDataAPI = None,
+                 news_api: NewsAPI = None,
+                 message_manager: MessageManager = None):
+        """
+        Initialize the sequential workflow.
+        
+        Args:
+            broker_api: Broker API for trading operations
+            market_data_api: Market data API for market information
+            news_api: News API for news data
+            message_manager: Message manager for notifications
+        """
+        super().__init__(broker_api, market_data_api, news_api, message_manager)
+        
+        # Sequential workflow specific configuration
+        self.analysis_phases = getattr(settings, 'analysis_phases', [
+            'market_overview',
+            'portfolio_analysis', 
+            'news_analysis',
+            'technical_analysis',
+            'decision_making'
+        ])
+        
+        self.phase_timeout = getattr(settings, 'phase_timeout_seconds', 60)
+        self.minimum_confidence = getattr(settings, 'minimum_confidence', 0.6)
+        
+        logger.info("Initialized SequentialWorkflow with structured analysis phases")
+        
         self.llm = create_llm_client()
         self.workflow = None
         self._build_workflow()
@@ -206,7 +230,7 @@ class SequentialWorkflow(WorkflowBase):
     async def _gather_data(self, state: TradingState) -> TradingState:
         """Gather market data and portfolio information"""
         try:
-            await self.message_queue.send_message("**Starting Data Collection**\n\nGathering portfolio, market data, and news...", "info")
+            await self.message_manager.send_message("**Starting Data Collection**\n\nGathering portfolio, market data, and news...", "info")
             
             # Get portfolio
             portfolio = await self.get_portfolio()
@@ -228,23 +252,23 @@ class SequentialWorkflow(WorkflowBase):
                 portfolio_msg += f"• **Day P&L**: ${portfolio.day_pnl:,.2f}\n"
                 portfolio_msg += f"• **Positions**: {len(portfolio.positions)}"
                 
-                await self.message_queue.send_portfolio_summary(portfolio_msg)
+                await self.message_manager.send_portfolio_summary(portfolio_msg)
             
             # Send news summary
             if news:
-                await self.message_queue.send_news_summary(news, limit=5)
+                await self.message_manager.send_news_summary(news, limit=5)
             
             return state
             
         except Exception as e:
             logger.error(f"Error in data gathering: {e}")
-            await self.message_queue.send_error(f"Error gathering data: {e}", "Data Collection")
+            await self.message_manager.send_error(f"Error gathering data: {e}", "Data Collection")
             return state
     
     async def _analyze_market(self, state: TradingState) -> TradingState:
         """Analyze market conditions"""
         try:
-            await self.message_queue.send_message("**Market Analysis**\n\nAnalyzing current market conditions...", "info")
+            await self.message_manager.send_message("**Market Analysis**\n\nAnalyzing current market conditions...", "info")
             
             # Prepare analysis prompt
             analysis_prompt = self._create_analysis_prompt(state)
@@ -261,19 +285,19 @@ class SequentialWorkflow(WorkflowBase):
             state.context["market_analysis"] = analysis_content
             
             # Send analysis summary
-            await self.message_queue.send_analysis_summary(analysis_content)
+            await self.message_manager.send_analysis_summary(analysis_content)
             
             return state
             
         except Exception as e:
             logger.error(f"Error in market analysis: {e}")
-            await self.message_queue.send_error(f"Error in market analysis: {e}", "Market Analysis")
+            await self.message_manager.send_error(f"Error in market analysis: {e}", "Market Analysis")
             return state
     
     async def _make_decision(self, state: TradingState) -> TradingState:
         """Make trading decision"""
         try:
-            await self.message_queue.send_message("**Decision Making**\n\nGenerating trading decision...", "info")
+            await self.message_manager.send_message("**Decision Making**\n\nGenerating trading decision...", "info")
             
             # Prepare decision prompt
             decision_prompt = self._create_decision_prompt(state)
@@ -291,13 +315,13 @@ class SequentialWorkflow(WorkflowBase):
             state.decision = decision
             
             # Send decision summary
-            await self.message_queue.send_decision_summary(decision)
+            await self.message_manager.send_decision_summary(decision)
             
             return state
             
         except Exception as e:
             logger.error(f"Error in decision making: {e}")
-            await self.message_queue.send_error(f"Error in decision making: {e}", "Decision Making")
+            await self.message_manager.send_error(f"Error in decision making: {e}", "Decision Making")
             return state
     
     async def _execute_trades(self, state: TradingState) -> TradingState:
@@ -306,15 +330,15 @@ class SequentialWorkflow(WorkflowBase):
             decision = state.decision
             
             if not decision or decision.action == TradingAction.HOLD:
-                await self.message_queue.send_message("**No Trade Execution**\n\nDecision is HOLD - no trades to execute.", "info")
+                await self.message_manager.send_message("**No Trade Execution**\n\nDecision is HOLD - no trades to execute.", "info")
                 return state
             
             # Check if market is open
             if not await self.is_market_open():
-                await self.message_queue.send_message("**Market Closed**\n\nMarket is closed - trades will be queued for next session.", "warning")
+                await self.message_manager.send_message("**Market Closed**\n\nMarket is closed - trades will be queued for next session.", "warning")
                 return state
             
-            await self.message_queue.send_message("**Executing Trades**\n\nProcessing trading orders...", "info")
+            await self.message_manager.send_message("**Executing Trades**\n\nProcessing trading orders...", "info")
             
             # Execute the trade
             if decision.action in [TradingAction.BUY, TradingAction.SELL]:
@@ -331,7 +355,7 @@ class SequentialWorkflow(WorkflowBase):
                 order_id = await self.alpaca_api.submit_order(order)
                 
                 if order_id:
-                    await self.message_queue.send_trade_execution(
+                    await self.message_manager.send_trade_execution(
                         decision.symbol,
                         decision.action.value,
                         str(decision.quantity or 1),
@@ -340,16 +364,16 @@ class SequentialWorkflow(WorkflowBase):
                     state.context["order_id"] = order_id
                     state.context["trade_executed"] = True
                 else:
-                    await self.message_queue.send_error("Failed to submit order", "Trade Execution")
+                    await self.message_manager.send_error("Failed to submit order", "Trade Execution")
                     state.context["trade_executed"] = False
             
-            await self.message_queue.send_workflow_complete()
+            await self.message_manager.send_workflow_complete()
             
             return state
             
         except Exception as e:
             logger.error(f"Error in trade execution: {e}")
-            await self.message_queue.send_error(f"Error in trade execution: {e}", "Trade Execution")
+            await self.message_manager.send_error(f"Error in trade execution: {e}", "Trade Execution")
             return state
     
     def _create_analysis_prompt(self, state: TradingState) -> str:

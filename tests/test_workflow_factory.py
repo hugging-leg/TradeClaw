@@ -12,6 +12,7 @@ from src.agents.sequential_workflow import SequentialWorkflow
 from src.agents.tool_calling_workflow import ToolCallingWorkflow
 from src.apis.alpaca_api import AlpacaAPI
 from src.apis.tiingo_api import TiingoAPI
+from src.apis.tiingo_news_adapter import TiingoNewsAdapter  # Import to register adapter
 from config import settings
 
 

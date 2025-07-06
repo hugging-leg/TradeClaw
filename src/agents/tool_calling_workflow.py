@@ -11,7 +11,7 @@ This represents a more flexible and intelligent approach to trading workflows.
 import asyncio
 import json
 import logging
-from typing import Dict, List, Any, Optional, Union
+from typing import Dict, List, Any, Optional, Union, Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
 
@@ -24,10 +24,13 @@ from pydantic import BaseModel, Field
 
 from config import settings
 from src.agents.workflow_base import WorkflowBase
-from src.apis.alpaca_api import AlpacaAPI
-from src.apis.tiingo_api import TiingoAPI
+from src.interfaces.broker_api import BrokerAPI
+from src.interfaces.market_data_api import MarketDataAPI
+from src.interfaces.news_api import NewsAPI
+from src.messaging.message_manager import MessageManager
 from src.models.trading_models import (
-    Order, Portfolio, TradingDecision, OrderSide, OrderType, TimeInForce, TradingAction
+    Order, Portfolio, TradingDecision, OrderSide, OrderType, TimeInForce, TradingAction,
+    Position, MarketData, NewsItem
 )
 
 
@@ -36,26 +39,43 @@ logger = logging.getLogger(__name__)
 
 class ToolCallingWorkflow(WorkflowBase):
     """
-    Tool calling workflow implementation using LangChain tool binding.
+    Advanced AI trading workflow using tool-calling LLM capabilities.
     
-    This workflow uses LLM tool calling capabilities to dynamically decide
-    which tools to use and when. The LLM can call tools to:
-    - Get portfolio information
-    - Fetch market data
-    - Get news
-    - Check market status
-    - Make trading decisions
-    
-    This provides a more flexible and intelligent approach compared to
-    fixed sequential workflows.
+    This workflow leverages LLM tool-calling functionality to make more
+    sophisticated trading decisions based on multiple data sources
+    and complex analysis patterns.
     """
     
-    def __init__(self, alpaca_api: AlpacaAPI, tiingo_api: TiingoAPI, telegram_bot=None):
-        """Initialize the tool calling workflow."""
-        super().__init__(alpaca_api, tiingo_api, telegram_bot)
+    def __init__(self, 
+                 broker_api: BrokerAPI = None,
+                 market_data_api: MarketDataAPI = None,
+                 news_api: NewsAPI = None,
+                 message_manager: MessageManager = None):
+        """
+        Initialize the tool-calling workflow.
+        
+        Args:
+            broker_api: Broker API for trading operations
+            market_data_api: Market data API for market information
+            news_api: News API for news data
+            message_manager: Message manager for notifications
+        """
+        super().__init__(broker_api, market_data_api, news_api, message_manager)
+        
+        # Tool-calling specific configuration
+        self.max_function_calls = getattr(settings, 'max_function_calls', 10)
+        self.analysis_timeout = getattr(settings, 'analysis_timeout_seconds', 300)
+        self.confidence_threshold = getattr(settings, 'confidence_threshold', 0.7)
+        
+        # Initialize LLM first
         self.llm = self._create_llm_client()
-        self.tools = self._create_tools()
+        
+        # Available tools for LLM
+        self.available_tools = self._register_tools()
+        self.tools = self.available_tools
         self.llm_with_tools = self.llm.bind_tools(self.tools)
+        
+        logger.info("Initialized ToolCallingWorkflow with advanced AI capabilities")
         self.max_iterations = 10  # Prevent infinite loops
         
     def _create_llm_client(self):
@@ -79,6 +99,16 @@ class ToolCallingWorkflow(WorkflowBase):
                 api_key=settings.openai_api_key,
                 temperature=0.1
             )
+    
+    def _register_tools(self):
+        """Register and return available tools for the LLM."""
+        try:
+            tools = self._create_tools()
+            logger.info(f"Registered {len(tools)} tools for LLM")
+            return tools
+        except Exception as e:
+            logger.error(f"Error registering tools: {e}")
+            return []
     
     def _create_tools(self):
         """Create tools for the LLM to use."""
@@ -124,7 +154,7 @@ Current Positions:
                     return f"Market Overview:\n{json.dumps(market_data, indent=2)}"
                 else:
                     # Get specific symbol data
-                    market_data = await self.alpaca_api.get_market_data(symbol)
+                    market_data = await self.broker_api.get_market_data(symbol)
                     return f"""
 Market Data for {symbol}:
 - Current Price: ${market_data.price:.2f}
@@ -141,9 +171,9 @@ Market Data for {symbol}:
             """Get recent news for a symbol or general market news"""
             try:
                 if symbol:
-                    news_items = await self.tiingo_api.get_symbol_news(symbol, limit=limit)
+                    news_items = await self.news_api.get_symbol_news(symbol, limit=limit)
                 else:
-                    news_items = await self.tiingo_api.get_news(limit=limit)
+                    news_items = await self.news_api.get_market_overview_news(limit=limit)
                 
                 if not news_items:
                     return "No recent news found"
@@ -190,7 +220,7 @@ Market Status:
         async def get_active_orders() -> str:
             """Get all active orders"""
             try:
-                orders = await self.alpaca_api.get_orders(status="open")
+                orders = await self.broker_api.get_orders(status="open")
                 
                 if not orders:
                     return "No active orders"
@@ -295,54 +325,61 @@ Be conservative and prioritize capital preservation.
             return await self._handle_workflow_error(e, "Workflow Execution")
     
     async def _execute_interactive_workflow(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute the interactive tool calling workflow."""
+        """Execute interactive workflow with dynamic tool calling."""
         
-        # Initial system message
-        system_message = SystemMessage(content="""
-You are an expert trading AI assistant with access to tools to gather information and make trading decisions.
+        # Send workflow start notification
+        await self.message_manager.send_message(f"""
+🚀 **AI Trading Analysis Started**
 
-Your goal is to:
-1. Gather relevant information about the current market conditions
-2. Analyze the portfolio and market data
-3. Make informed trading decisions
-4. Provide clear reasoning for your recommendations
+The AI will now analyze market conditions using intelligent tool selection.
 
-You have access to the following tools:
-- get_portfolio_info: Get current portfolio status
-- get_market_data: Get market data for specific symbols or overview
-- get_news: Get recent market news
-- check_market_status: Check if market is open
-- get_active_orders: Get current open orders
-- make_trading_decision: Structure your final trading decision
+📋 **Available Tools**: {len(self.tools)}
+🎯 **Max Iterations**: {self.max_iterations}
+⏱️ **Timeout**: {self.analysis_timeout}s
 
-Start by gathering the necessary information, then provide your analysis and decision.
-Be conservative and prioritize capital preservation.
-""")
+Let the AI decide which tools to use and when...
+        """.strip(), "info")
         
-        # Initial user message
-        user_message = HumanMessage(content=f"""
-Please analyze the current market conditions and make a trading decision.
-
-Context: {json.dumps(context, indent=2)}
-
-Please start by gathering the information you need to make an informed decision.
-""")
+        # Initialize messages and tracking
+        messages = [
+            SystemMessage(content=self._get_system_prompt()),
+            HumanMessage(content=self._get_initial_prompt(context))
+        ]
         
-        messages = [system_message, user_message]
         tool_calls = []
         decision = None
         
-        await self.message_queue.send_message("🔧 **Starting Tool-Based Analysis**\n\nLetting AI decide which tools to use...", "info")
-        
-        # Interactive loop
+        # Start interactive loop
         for iteration in range(self.max_iterations):
             try:
-                # Get LLM response
-                response = await self.llm_with_tools.ainvoke(messages)
+                # Send iteration notification
+                await self.message_manager.send_message(f"🔄 **Iteration {iteration + 1}**\n\nAnalyzing market conditions and making decisions...", "info")
+                
+                # Get LLM response with cancellation handling
+                try:
+                    response = await asyncio.wait_for(
+                        self.llm_with_tools.ainvoke(messages),
+                        timeout=120  # 2 minutes timeout per LLM call
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(f"LLM call timed out in iteration {iteration}")
+                    await self.message_manager.send_error("LLM call timed out", "Tool Execution")
+                    break
+                except asyncio.CancelledError:
+                    logger.info(f"LLM call cancelled in iteration {iteration}")
+                    # Return partial results if available
+                    return {
+                        "decision": decision,
+                        "context": context,
+                        "tool_calls": tool_calls,
+                        "execution_result": {"success": False, "message": "Cancelled during LLM call"},
+                        "iterations": iteration,
+                        "cancelled": True
+                    }
                 
                 # Check if LLM wants to use tools
                 if response.tool_calls:
-                    await self.message_queue.send_message(f"🔧 **Tool Calls** (Iteration {iteration + 1})\n\nExecuting {len(response.tool_calls)} tool call(s)...", "info")
+                    await self.message_manager.send_message(f"🔧 **Tool Calls** (Iteration {iteration + 1})\n\nExecuting {len(response.tool_calls)} tool call(s)...", "info")
                     
                     # Add AI message to conversation
                     messages.append(response)
@@ -355,8 +392,35 @@ Please start by gathering the information you need to make an informed decision.
                         
                         logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
                         
-                        # Find and execute the tool
-                        tool_result = await self._execute_tool(tool_name, tool_args)
+                        # Find and execute the tool with cancellation handling
+                        try:
+                            tool_result = await asyncio.wait_for(
+                                self._execute_tool(tool_name, tool_args),
+                                timeout=30  # 30 seconds timeout per tool call
+                            )
+                        except asyncio.TimeoutError:
+                            tool_result = f"Error executing {tool_name}: Tool call timed out"
+                        except asyncio.CancelledError:
+                            logger.info(f"Tool call {tool_name} cancelled")
+                            return {
+                                "decision": decision,
+                                "context": context,
+                                "tool_calls": tool_calls,
+                                "execution_result": {"success": False, "message": "Cancelled during tool execution"},
+                                "iterations": iteration,
+                                "cancelled": True
+                            }
+                        
+                        # Check if tool execution was successful
+                        tool_success = not tool_result.startswith("Error executing")
+                        
+                        # Send detailed tool result
+                        await self.message_manager.send_tool_result(
+                            tool_name=tool_name,
+                            tool_args=tool_args,
+                            tool_result=tool_result,
+                            success=tool_success
+                        )
                         
                         # Add tool result to conversation
                         tool_message = ToolMessage(
@@ -369,11 +433,9 @@ Please start by gathering the information you need to make an informed decision.
                         tool_calls.append({
                             "name": tool_name,
                             "args": tool_args,
-                            "result": tool_result[:500] + "..." if len(tool_result) > 500 else tool_result
+                            "result": tool_result[:500] + "..." if len(tool_result) > 500 else tool_result,
+                            "success": tool_success
                         })
-                        
-                        # Send tool execution notification
-                        await self.message_queue.send_message(f"✅ **Tool Executed**: {tool_name}\n\nGathered data successfully", "info")
                 else:
                     # No more tools to call, LLM has provided final analysis
                     final_response = response.content
@@ -381,21 +443,49 @@ Please start by gathering the information you need to make an informed decision.
                     # Try to parse a decision from the response
                     decision = self._parse_decision(final_response)
                     
-                    # Send analysis summary
-                    await self.message_queue.send_analysis_summary(final_response)
+                    # Send reasoning summary with tool usage count
+                    await self.message_manager.send_reasoning_summary(
+                        reasoning_text=final_response,
+                        tool_calls_count=len(tool_calls)
+                    )
                     
                     # Send decision summary
-                    await self.message_queue.send_decision_summary(decision)
+                    await self.message_manager.send_decision_summary(decision)
                     
                     break
                     
+            except asyncio.CancelledError:
+                logger.info(f"Interactive workflow cancelled in iteration {iteration}")
+                return {
+                    "decision": decision,
+                    "context": context,
+                    "tool_calls": tool_calls,
+                    "execution_result": {"success": False, "message": "Workflow cancelled"},
+                    "iterations": iteration,
+                    "cancelled": True
+                }
             except Exception as e:
                 logger.error(f"Error in iteration {iteration}: {e}")
-                await self.message_queue.send_error(f"Error in iteration {iteration}: {e}", "Tool Execution")
+                await self.message_manager.send_error(f"Error in iteration {iteration}: {e}", "Tool Execution")
                 break
         
         # Execute the decision if trading is enabled
-        execution_result = await self.execute_decision(decision)
+        try:
+            execution_result = await asyncio.wait_for(
+                self.execute_decision(decision),
+                timeout=60  # 1 minute timeout for trade execution
+            )
+        except asyncio.TimeoutError:
+            execution_result = {"success": False, "message": "Trade execution timed out"}
+        except asyncio.CancelledError:
+            logger.info("Trade execution cancelled")
+            execution_result = {"success": False, "message": "Trade execution cancelled"}
+        
+        # Send workflow completion summary
+        await self._send_workflow_summary(tool_calls, decision, execution_result, iteration + 1)
+        
+        # Send final completion notification
+        await self.message_manager.send_workflow_complete()
         
         return {
             "decision": decision,
@@ -418,6 +508,39 @@ Please start by gathering the information you need to make an informed decision.
         
         return f"Tool {tool_name} not found"
     
+    def _get_system_prompt(self) -> str:
+        """Get the system prompt for the LLM."""
+        return """
+You are an expert trading AI assistant with access to tools to gather information and make trading decisions.
+
+Your goal is to:
+1. Gather relevant information about the current market conditions
+2. Analyze the portfolio and market data
+3. Make informed trading decisions
+4. Provide clear reasoning for your recommendations
+
+You have access to the following tools:
+- get_portfolio_info: Get current portfolio status
+- get_market_data: Get market data for specific symbols or overview
+- get_news: Get recent market news
+- check_market_status: Check if market is open
+- get_active_orders: Get current open orders
+- make_trading_decision: Structure your final trading decision
+
+Start by gathering the necessary information, then provide your analysis and decision.
+Be conservative and prioritize capital preservation.
+"""
+    
+    def _get_initial_prompt(self, context: Dict[str, Any]) -> str:
+        """Get the initial user prompt for the LLM."""
+        return f"""
+Please analyze the current market conditions and make a trading decision.
+
+Context: {json.dumps(context, indent=2)}
+
+Please start by gathering the information you need to make an informed decision.
+"""
+
     # Implementation of abstract methods
     
     async def initialize_workflow(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -447,15 +570,15 @@ Please start by gathering the information you need to make an informed decision.
         """Execute the trading decision."""
         try:
             if not decision or decision.action == TradingAction.HOLD:
-                await self.message_queue.send_message("**No Trade Execution**\n\nDecision is HOLD - no trades to execute.", "info")
+                await self.message_manager.send_message("**No Trade Execution**\n\nDecision is HOLD - no trades to execute.", "info")
                 return {"success": True, "message": "No trade executed (HOLD decision)"}
             
             # Check if market is open
             if not await self.is_market_open():
-                await self.message_queue.send_message("**Market Closed**\n\nMarket is closed - trades will be queued for next session.", "warning")
+                await self.message_manager.send_message("**Market Closed**\n\nMarket is closed - trades will be queued for next session.", "warning")
                 return {"success": True, "message": "Trade queued - market closed"}
             
-            await self.message_queue.send_message("**Executing Trades**\n\nProcessing trading orders...", "info")
+            await self.message_manager.send_message("**Executing Trades**\n\nProcessing trading orders...", "info")
             
             # Execute the trade
             if decision.action in [TradingAction.BUY, TradingAction.SELL]:
@@ -469,17 +592,17 @@ Please start by gathering the information you need to make an informed decision.
                     time_in_force=TimeInForce.DAY
                 )
                 
-                order_id = await self.alpaca_api.submit_order(order)
+                order_id = await self.broker_api.submit_order(order)
                 
                 if order_id:
-                    await self.message_queue.send_trade_execution(
+                    await self.message_manager.send_trade_execution(
                         decision.symbol,
                         decision.action.value,
                         str(decision.quantity or 1),
                         order_id
                     )
                     
-                    await self.message_queue.send_workflow_complete()
+                    await self.message_manager.send_workflow_complete()
                     
                     return {
                         "success": True,
@@ -487,14 +610,14 @@ Please start by gathering the information you need to make an informed decision.
                         "message": f"Order executed: {decision.action.value} {decision.symbol}"
                     }
                 else:
-                    await self.message_queue.send_error("Failed to submit order", "Trade Execution")
+                    await self.message_manager.send_error("Failed to submit order", "Trade Execution")
                     return {"success": False, "message": "Failed to submit order"}
             
             return {"success": False, "message": "Invalid trading action"}
             
         except Exception as e:
             logger.error(f"Error in trade execution: {e}")
-            await self.message_queue.send_error(f"Error in trade execution: {e}", "Trade Execution")
+            await self.message_manager.send_error(f"Error in trade execution: {e}", "Trade Execution")
             return {"success": False, "message": f"Error: {e}"}
     
     def _parse_decision(self, decision_text: str) -> Optional[TradingDecision]:
@@ -556,4 +679,39 @@ Please start by gathering the information you need to make an informed decision.
                 symbol="",
                 reasoning="Error parsing decision from LLM response",
                 confidence=Decimal('0.0')
-            ) 
+            )
+
+    async def _send_workflow_summary(self, tool_calls: List[Dict[str, Any]], decision: Optional[TradingDecision], execution_result: Dict[str, Any], iterations: int):
+        """Send comprehensive workflow completion summary."""
+        try:
+            # Count successful vs failed tools
+            successful_tools = sum(1 for tc in tool_calls if tc.get('success', True))
+            failed_tools = len(tool_calls) - successful_tools
+            
+            # Create tool summary
+            tool_names = [tc['name'] for tc in tool_calls]
+            unique_tools = list(set(tool_names))
+            
+            summary_message = f"""
+📊 **AI Analysis Summary**
+
+🔧 **Tool Usage**:
+• Total tools executed: {len(tool_calls)}
+• Successful: {successful_tools}
+• Failed: {failed_tools}
+• Unique tools used: {len(unique_tools)}
+• Tools: {', '.join(unique_tools)}
+
+⚡ **Workflow Stats**:
+• Iterations completed: {iterations}
+• Decision made: {'Yes' if decision else 'No'}
+• Trade execution: {'Success' if execution_result.get('success') else 'Failed/Skipped'}
+
+🎯 **Final Action**: {decision.action.value if decision else 'HOLD'}
+            """
+            
+            await self.message_manager.send_message(summary_message.strip(), "success")
+            
+        except Exception as e:
+            logger.error(f"Error sending workflow summary: {e}")
+            await self.message_manager.send_error(f"Error generating workflow summary: {e}", "Workflow Summary") 

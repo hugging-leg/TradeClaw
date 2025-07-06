@@ -12,12 +12,20 @@ Supported workflow types:
 """
 
 import logging
-from typing import Dict, Any, Type, Optional
+from typing import Dict, Any, Type, Optional, List, Callable, Union
+from decimal import Decimal
+from dataclasses import dataclass, field
+from abc import ABC, abstractmethod
 from enum import Enum
 
 from config import settings
-from src.apis.alpaca_api import AlpacaAPI
-from src.apis.tiingo_api import TiingoAPI
+from src.interfaces.broker_api import BrokerAPI
+from src.interfaces.market_data_api import MarketDataAPI
+from src.interfaces.news_api import NewsAPI
+from src.messaging.message_manager import MessageManager
+from src.interfaces.factory import (
+    get_broker_api, get_market_data_api, get_news_api, get_message_manager
+)
 from src.agents.workflow_base import WorkflowBase
 from src.agents.sequential_workflow import SequentialWorkflow
 from src.agents.tool_calling_workflow import ToolCallingWorkflow
@@ -56,50 +64,64 @@ class WorkflowFactory:
         WorkflowType.TOOL_CALLING: ToolCallingWorkflow,
     }
     
-    @classmethod
+    @staticmethod
     def create_workflow(
-        cls,
-        alpaca_api: AlpacaAPI,
-        tiingo_api: TiingoAPI,
-        telegram_bot=None,
-        workflow_type: Optional[str] = None
+        workflow_type: Optional[str] = None,
+        broker_api: BrokerAPI = None,
+        market_data_api: MarketDataAPI = None,
+        news_api: NewsAPI = None,
+        message_manager: MessageManager = None,
+        **kwargs
     ) -> WorkflowBase:
         """
-        Create a workflow instance based on configuration or specified type.
+        Create a workflow instance with the specified configuration.
         
         Args:
-            alpaca_api: Alpaca API client
-            tiingo_api: Tiingo API client  
-            telegram_bot: Optional Telegram bot instance
-            workflow_type: Optional workflow type override
+            workflow_type: Type of workflow to create ('sequential' or 'tool_calling')
+            broker_api: Broker API instance (optional)
+            market_data_api: Market data API instance (optional)
+            news_api: News API instance (optional)
+            message_manager: Message manager instance (optional)
+            **kwargs: Additional keyword arguments for workflow configuration
             
         Returns:
-            Configured workflow instance
-            
-        Raises:
-            ValueError: If workflow type is unsupported
-            RuntimeError: If workflow creation fails
+            WorkflowBase instance
         """
         try:
             # Determine workflow type
-            target_type = workflow_type or getattr(settings, 'workflow_type', 'sequential')
+            workflow_type = workflow_type or getattr(settings, 'workflow_type', 'sequential')
             
-            # Validate and normalize workflow type
-            workflow_enum = cls._validate_workflow_type(target_type)
+            # Create API instances if not provided
+            if broker_api is None:
+                broker_api = get_broker_api()
+            if market_data_api is None:
+                market_data_api = get_market_data_api()
+            if news_api is None:
+                news_api = get_news_api()
+            if message_manager is None:
+                message_manager = get_message_manager()
             
-            # Get workflow class
-            workflow_class = cls._workflow_registry[workflow_enum]
+            # Create workflow instance
+            if workflow_type.lower() == 'sequential':
+                workflow = SequentialWorkflow(
+                    broker_api=broker_api,
+                    market_data_api=market_data_api,
+                    news_api=news_api,
+                    message_manager=message_manager,
+                    **kwargs
+                )
+            elif workflow_type.lower() == 'tool_calling':
+                workflow = ToolCallingWorkflow(
+                    broker_api=broker_api,
+                    market_data_api=market_data_api,
+                    news_api=news_api,
+                    message_manager=message_manager,
+                    **kwargs
+                )
+            else:
+                raise ValueError(f"Unknown workflow type: {workflow_type}")
             
-            logger.info(f"Creating {workflow_enum.value} workflow")
-            
-            # Create and return workflow instance
-            workflow = workflow_class(
-                alpaca_api=alpaca_api,
-                tiingo_api=tiingo_api,
-                telegram_bot=telegram_bot
-            )
-            
-            logger.info(f"Successfully created {workflow_enum.value} workflow")
+            logger.info(f"Created {workflow_type} workflow")
             return workflow
             
         except Exception as e:
@@ -314,19 +336,21 @@ class WorkflowFactory:
 
 # Convenience functions for common operations
 
-def create_default_workflow(alpaca_api: AlpacaAPI, tiingo_api: TiingoAPI, telegram_bot=None) -> WorkflowBase:
+def create_default_workflow(broker_api: BrokerAPI = None, market_data_api: MarketDataAPI = None, 
+                           news_api: NewsAPI = None, message_manager: MessageManager = None) -> WorkflowBase:
     """
     Create a workflow using the default configuration.
     
     Args:
-        alpaca_api: Alpaca API client
-        tiingo_api: Tiingo API client
-        telegram_bot: Optional Telegram bot instance
+        broker_api: Optional broker API client
+        market_data_api: Optional market data API client
+        news_api: Optional news API client
+        message_manager: Optional message manager
         
     Returns:
         Configured workflow instance
     """
-    return WorkflowFactory.create_workflow(alpaca_api, tiingo_api, telegram_bot)
+    return WorkflowFactory.create_workflow(broker_api, market_data_api, news_api, message_manager)
 
 
 def get_workflow_choices() -> list[str]:
@@ -354,4 +378,54 @@ def validate_workflow_config() -> bool:
     for warning in result["warnings"]:
         logger.warning(f"Configuration warning: {warning}")
     
-    return result["valid"] 
+    return result["valid"]
+
+
+@staticmethod
+def create_base_workflow(workflow_type: str, broker_api: BrokerAPI = None, market_data_api: MarketDataAPI = None, 
+                        news_api: NewsAPI = None, message_manager: MessageManager = None) -> WorkflowBase:
+    """
+    Create a base workflow instance.
+    
+    Args:
+        workflow_type: Type of workflow to create
+        broker_api: Broker API instance (optional)
+        market_data_api: Market data API instance (optional)
+        news_api: News API instance (optional)
+        message_manager: Message manager instance (optional)
+        
+    Returns:
+        WorkflowBase instance
+    """
+    try:
+        # Create API instances if not provided
+        if broker_api is None:
+            broker_api = get_broker_api()
+        if market_data_api is None:
+            market_data_api = get_market_data_api()
+        if news_api is None:
+            news_api = get_news_api()
+        if message_manager is None:
+            message_manager = get_message_manager()
+        
+        # Create workflow based on type
+        if workflow_type.lower() == 'sequential':
+            return SequentialWorkflow(
+                broker_api=broker_api,
+                market_data_api=market_data_api,
+                news_api=news_api,
+                message_manager=message_manager
+            )
+        elif workflow_type.lower() == 'tool_calling':
+            return ToolCallingWorkflow(
+                broker_api=broker_api,
+                market_data_api=market_data_api,
+                news_api=news_api,
+                message_manager=message_manager
+            )
+        else:
+            raise ValueError(f"Unknown workflow type: {workflow_type}")
+            
+    except Exception as e:
+        logger.error(f"Failed to create base workflow: {e}")
+        raise RuntimeError(f"Base workflow creation failed: {e}") from e 

@@ -6,14 +6,23 @@ using the Factory pattern. It defines the common interface that all workflow
 implementations must follow.
 """
 
+import logging
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, List
-from datetime import datetime
+from typing import Dict, Any, Optional, List, Union
+from decimal import Decimal
+from datetime import datetime, timedelta
 
-from src.apis.alpaca_api import AlpacaAPI
-from src.apis.tiingo_api import TiingoAPI
-from src.apis.telegram_message_queue import TelegramMessageQueue
-from src.models.trading_models import TradingDecision, Portfolio
+from src.interfaces.broker_api import BrokerAPI
+from src.interfaces.market_data_api import MarketDataAPI
+from src.interfaces.news_api import NewsAPI
+from src.interfaces.factory import (
+    get_broker_api, get_market_data_api, get_news_api, get_message_manager
+)
+from src.messaging.message_manager import MessageManager
+from src.models.trading_models import TradingDecision, Portfolio, Order, TradingEvent
+from config import settings
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowBase(ABC):
@@ -25,25 +34,42 @@ class WorkflowBase(ABC):
     structure while allowing different implementations for specific workflow logic.
     """
     
-    def __init__(self, alpaca_api: AlpacaAPI, tiingo_api: TiingoAPI, telegram_bot=None):
+    def __init__(self, broker_api: BrokerAPI = None, market_data_api: MarketDataAPI = None, 
+                 news_api: NewsAPI = None, message_manager: MessageManager = None):
         """
         Initialize the workflow with required APIs.
         
         Args:
-            alpaca_api: Alpaca API client for trading operations
-            tiingo_api: Tiingo API client for market data and news
-            telegram_bot: Optional Telegram bot for notifications
+            broker_api: Broker API client for trading operations
+            market_data_api: Market data API client for market data
+            news_api: News API client for news operations
+            message_manager: Message manager instance for notifications
         """
-        self.alpaca_api = alpaca_api
-        self.tiingo_api = tiingo_api
-        self.telegram_bot = telegram_bot
-        self.message_queue = TelegramMessageQueue(telegram_bot)
+        self.broker_api = broker_api or get_broker_api()
+        self.market_data_api = market_data_api or get_market_data_api()
+        self.news_api = news_api or get_news_api()
+        self.message_manager = message_manager or get_message_manager()
         
         # Common workflow state
         self.current_context = {}
         self.workflow_id = None
         self.start_time = None
         self.end_time = None
+        
+        # Initialize workflow state
+        self.is_running = False
+        self.current_portfolio = None
+        self.current_market_data = None
+        self.workflow_stats = {
+            'total_runs': 0,
+            'successful_runs': 0,
+            'failed_runs': 0,
+            'last_run': None,
+            'last_success': None,
+            'last_error': None
+        }
+        
+        logger.info(f"Initialized {self.__class__.__name__} workflow")
         
     @abstractmethod
     async def run_workflow(self, initial_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -126,23 +152,23 @@ class WorkflowBase(ABC):
     async def get_portfolio(self) -> Optional[Portfolio]:
         """Get current portfolio information."""
         try:
-            return await self.alpaca_api.get_portfolio()
+            return await self.broker_api.get_portfolio()
         except Exception as e:
-            await self.message_queue.send_error(f"Error getting portfolio: {e}", "Data Collection")
+            await self.message_manager.send_error(f"Error getting portfolio: {e}", "Data Collection")
             return None
     
     async def get_market_data(self) -> Dict[str, Any]:
         """Get current market data."""
         try:
-            return await self.tiingo_api.get_market_overview()
+            return await self.market_data_api.get_market_overview()
         except Exception as e:
-            await self.message_queue.send_error(f"Error getting market data: {e}", "Data Collection")
+            await self.message_manager.send_error(f"Error getting market data: {e}", "Data Collection")
             return {}
     
     async def get_news(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Get recent news articles."""
         try:
-            news_items = await self.tiingo_api.get_news(limit=limit)
+            news_items = await self.news_api.get_market_overview_news(limit=limit)
             return [
                 {
                     "title": item.title,
@@ -154,28 +180,28 @@ class WorkflowBase(ABC):
                 for item in news_items
             ]
         except Exception as e:
-            await self.message_queue.send_error(f"Error getting news: {e}", "Data Collection")
+            await self.message_manager.send_error(f"Error getting news: {e}", "Data Collection")
             return []
     
     async def is_market_open(self) -> bool:
         """Check if market is currently open."""
         try:
-            return await self.alpaca_api.is_market_open()
+            return await self.broker_api.is_market_open()
         except Exception as e:
-            await self.message_queue.send_error(f"Error checking market status: {e}", "Market Check")
+            await self.message_manager.send_error(f"Error checking market status: {e}", "Market Check")
             return False
     
     async def send_workflow_start_notification(self, workflow_type: str):
         """Send notification about workflow start."""
         message = f"🚀 **{workflow_type.title()} Workflow Started**\n\n"
         message += f"Starting AI trading analysis at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-        await self.message_queue.send_message(message, "info")
+        await self.message_manager.send_message(message, "info")
     
     async def send_workflow_complete_notification(self, workflow_type: str, execution_time: float):
         """Send notification about workflow completion."""
         message = f"✅ **{workflow_type.title()} Workflow Complete**\n\n"
         message += f"Trading analysis completed in {execution_time:.2f} seconds."
-        await self.message_queue.send_message(message, "success")
+        await self.message_manager.send_message(message, "success")
     
     def get_workflow_type(self) -> str:
         """Get the type of workflow (to be overridden by subclasses)."""
@@ -193,7 +219,7 @@ class WorkflowBase(ABC):
     async def _handle_workflow_error(self, error: Exception, stage: str) -> Dict[str, Any]:
         """Handle workflow errors consistently."""
         error_message = f"Error in {stage}: {str(error)}"
-        await self.message_queue.send_error(error_message, stage)
+        await self.message_manager.send_error(error_message, stage)
         
         return {
             "success": False,

@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     alpaca_base_url: str = "https://paper-api.alpaca.markets"
     tiingo_api_key: str = "test_key"
     
+    # Provider Configuration
+    broker_provider: str = "alpaca"  # Options: "alpaca", "interactive_brokers", "td_ameritrade", "schwab"
+    market_data_provider: str = "tiingo"  # Options: "tiingo", "alpha_vantage", "yahoo_finance", "polygon", "finnhub"
+    news_provider: str = "tiingo"  # Options: "tiingo", "alpha_vantage", "news_api", "custom"
+    message_provider: str = "telegram"  # Options: "telegram", "discord", "slack", "email" (transport layer)
+    
     # LLM Configuration
     llm_provider: str = "openai"  # Options: "openai", "deepseek"
     

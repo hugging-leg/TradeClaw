@@ -6,6 +6,7 @@ from pathlib import Path
 from datetime import datetime
 
 from src.trading_system import TradingSystem
+from src.interfaces.factory import get_news_api
 from config import settings
 
 
@@ -84,6 +85,15 @@ async def main():
             logger.info(f"OpenAI Model: {settings.openai_model}")
         elif settings.llm_provider.lower() == "deepseek":
             logger.info(f"DeepSeek Model: {settings.deepseek_model}")
+        
+        # Display news provider information
+        try:
+            news_api = get_news_api()
+            news_info = news_api.get_provider_info()
+            logger.info(f"News Provider: {news_info['name']} ({news_info['configured'] and 'configured' or 'not configured'})")
+        except Exception as e:
+            logger.warning(f"Failed to get news provider info: {e}")
+        
         logger.info(f"Rebalance Time: {settings.rebalance_time}")
         logger.info(f"Max Position Size: {settings.max_position_size * 100}%")
         logger.info(f"Stop Loss: {settings.stop_loss_percentage * 100}%")

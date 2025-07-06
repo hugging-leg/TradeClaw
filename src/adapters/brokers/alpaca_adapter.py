@@ -1,5 +1,7 @@
 """
-Alpaca API integration for trading operations using alpaca-py package.
+Alpaca broker adapter implementing the BrokerAPI interface.
+
+This adapter wraps the Alpaca API to provide a unified interface for trading operations.
 """
 
 import logging
@@ -21,6 +23,8 @@ from alpaca.trading.enums import (
 )
 from alpaca.data.requests import StockBarsRequest, StockLatestQuoteRequest, StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame
+
+from src.interfaces.broker_api import BrokerAPI
 from src.models.trading_models import (
     Order, Portfolio, Position, MarketData, OrderSide, OrderType, 
     OrderStatus, TimeInForce, PositionSide
@@ -30,8 +34,8 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
-class AlpacaAPI:
-    """Alpaca API wrapper for trading operations using alpaca-py"""
+class AlpacaBrokerAdapter(BrokerAPI):
+    """Alpaca broker adapter implementing BrokerAPI interface"""
     
     def __init__(self):
         """Initialize Alpaca clients"""
@@ -49,10 +53,10 @@ class AlpacaAPI:
                 secret_key=settings.alpaca_secret_key
             )
             
-            logger.info("Alpaca API clients initialized successfully")
+            logger.info("Alpaca broker adapter initialized successfully")
             
         except Exception as e:
-            logger.error(f"Failed to initialize Alpaca API: {e}")
+            logger.error(f"Failed to initialize Alpaca broker adapter: {e}")
             raise
     
     async def get_account(self) -> Optional[Dict[str, Any]]:
@@ -202,7 +206,7 @@ class AlpacaAPI:
                     stop_price=Decimal(str(alpaca_order.stop_price)) if alpaca_order.stop_price else None,
                     time_in_force=self._convert_alpaca_tif_to_time_in_force(alpaca_order.time_in_force),
                     status=self._convert_alpaca_status_to_order_status(alpaca_order.status),
-                    filled_quantity=Decimal(str(alpaca_order.filled_qty)) if alpaca_order.filled_qty else Decimal("0"),
+                    filled_quantity=Decimal(str(alpaca_order.filled_qty)) if alpaca_order.filled_qty else None,
                     filled_price=Decimal(str(alpaca_order.filled_avg_price)) if alpaca_order.filled_avg_price else None,
                     created_at=alpaca_order.created_at,
                     updated_at=alpaca_order.updated_at
@@ -220,7 +224,7 @@ class AlpacaAPI:
         try:
             alpaca_order = self.trading_client.get_order_by_id(order_id)
             
-            order = Order(
+            return Order(
                 id=alpaca_order.id,
                 symbol=alpaca_order.symbol,
                 side=self._convert_alpaca_side_to_order_side(alpaca_order.side),
@@ -230,47 +234,43 @@ class AlpacaAPI:
                 stop_price=Decimal(str(alpaca_order.stop_price)) if alpaca_order.stop_price else None,
                 time_in_force=self._convert_alpaca_tif_to_time_in_force(alpaca_order.time_in_force),
                 status=self._convert_alpaca_status_to_order_status(alpaca_order.status),
-                filled_quantity=Decimal(str(alpaca_order.filled_qty)) if alpaca_order.filled_qty else Decimal("0"),
+                filled_quantity=Decimal(str(alpaca_order.filled_qty)) if alpaca_order.filled_qty else None,
                 filled_price=Decimal(str(alpaca_order.filled_avg_price)) if alpaca_order.filled_avg_price else None,
                 created_at=alpaca_order.created_at,
                 updated_at=alpaca_order.updated_at
             )
-            
-            return order
             
         except Exception as e:
             logger.error(f"Failed to get order {order_id}: {e}")
             return None
     
     async def get_market_data(self, symbol: str, timeframe: str = "1Day", limit: int = 100) -> List[Dict[str, Any]]:
-        """Get historical market data"""
+        """Get market data for a symbol"""
         try:
-            # Convert timeframe string to TimeFrame enum
-            tf = self._convert_timeframe(timeframe)
+            # Convert timeframe to Alpaca format
+            alpaca_timeframe = self._convert_timeframe(timeframe)
             
-            # Create request for historical bars
+            # Create request
             request = StockBarsRequest(
-                symbol_or_symbols=[symbol],
-                timeframe=tf,
+                symbol_or_symbols=symbol,
+                timeframe=alpaca_timeframe,
                 limit=limit
             )
             
-            bars_response = self.data_client.get_stock_bars(request)
-            bars_data = []
+            bars = self.data_client.get_stock_bars(request)
+            market_data = []
             
-            if symbol in bars_response.data:
-                for bar in bars_response.data[symbol]:
-                    bars_data.append({
-                        "symbol": symbol,
-                        "timestamp": bar.timestamp,
-                        "open": float(bar.open),
-                        "high": float(bar.high),
-                        "low": float(bar.low),
-                        "close": float(bar.close),
-                        "volume": int(bar.volume)
-                    })
+            for bar in bars[symbol]:
+                market_data.append({
+                    "timestamp": bar.timestamp,
+                    "open": float(bar.open),
+                    "high": float(bar.high),
+                    "low": float(bar.low),
+                    "close": float(bar.close),
+                    "volume": bar.volume
+                })
             
-            return bars_data
+            return market_data
             
         except Exception as e:
             logger.error(f"Failed to get market data for {symbol}: {e}")
@@ -282,112 +282,170 @@ class AlpacaAPI:
             clock = self.trading_client.get_clock()
             return clock.is_open
         except Exception as e:
-            logger.error(f"Failed to get market status: {e}")
+            logger.error(f"Failed to check market status: {e}")
             return False
     
-    # Helper methods for enum conversions
+    def get_provider_name(self) -> str:
+        """Get the name of the broker provider"""
+        return "Alpaca"
+    
+    def get_provider_info(self) -> Dict[str, Any]:
+        """Get detailed information about the broker provider"""
+        return {
+            "name": "Alpaca",
+            "type": "broker",
+            "description": "Commission-free stock trading API",
+            "website": "https://alpaca.markets",
+            "features": [
+                "Commission-free trading",
+                "Real-time market data",
+                "Paper trading",
+                "Crypto trading",
+                "Fractional shares",
+                "API-first platform"
+            ],
+            "supported_assets": ["stocks", "etfs", "crypto"],
+            "supported_order_types": ["market", "limit", "stop", "stop_limit"],
+            "paper_trading": settings.paper_trading,
+            "rate_limits": {
+                "orders": "200 per minute",
+                "account": "200 per minute",
+                "market_data": "200 per minute"
+            }
+        }
+    
+    # Helper methods for type conversion
     @staticmethod
     def _convert_order_side_to_alpaca(side: OrderSide) -> AlpacaOrderSide:
         """Convert OrderSide to Alpaca OrderSide"""
-        mapping = {
-            OrderSide.BUY: AlpacaOrderSide.BUY,
-            OrderSide.SELL: AlpacaOrderSide.SELL
-        }
-        return mapping[side]
+        if side == OrderSide.BUY:
+            return AlpacaOrderSide.BUY
+        elif side == OrderSide.SELL:
+            return AlpacaOrderSide.SELL
+        else:
+            raise ValueError(f"Unknown order side: {side}")
     
     @staticmethod
     def _convert_alpaca_side_to_order_side(side: AlpacaOrderSide) -> OrderSide:
         """Convert Alpaca OrderSide to OrderSide"""
-        mapping = {
-            AlpacaOrderSide.BUY: OrderSide.BUY,
-            AlpacaOrderSide.SELL: OrderSide.SELL
-        }
-        return mapping[side]
+        if side == AlpacaOrderSide.BUY:
+            return OrderSide.BUY
+        elif side == AlpacaOrderSide.SELL:
+            return OrderSide.SELL
+        else:
+            raise ValueError(f"Unknown Alpaca order side: {side}")
     
     @staticmethod
     def _convert_time_in_force_to_alpaca(tif: TimeInForce) -> AlpacaTimeInForce:
         """Convert TimeInForce to Alpaca TimeInForce"""
-        mapping = {
-            TimeInForce.DAY: AlpacaTimeInForce.DAY,
-            TimeInForce.GTC: AlpacaTimeInForce.GTC,
-            TimeInForce.IOC: AlpacaTimeInForce.IOC,
-            TimeInForce.FOK: AlpacaTimeInForce.FOK
-        }
-        return mapping.get(tif, AlpacaTimeInForce.DAY)
+        if tif == TimeInForce.DAY:
+            return AlpacaTimeInForce.DAY
+        elif tif == TimeInForce.GTC:
+            return AlpacaTimeInForce.GTC
+        elif tif == TimeInForce.IOC:
+            return AlpacaTimeInForce.IOC
+        elif tif == TimeInForce.FOK:
+            return AlpacaTimeInForce.FOK
+        else:
+            raise ValueError(f"Unknown time in force: {tif}")
     
     @staticmethod
     def _convert_alpaca_tif_to_time_in_force(tif: AlpacaTimeInForce) -> TimeInForce:
         """Convert Alpaca TimeInForce to TimeInForce"""
-        mapping = {
-            AlpacaTimeInForce.DAY: TimeInForce.DAY,
-            AlpacaTimeInForce.GTC: TimeInForce.GTC,
-            AlpacaTimeInForce.IOC: TimeInForce.IOC,
-            AlpacaTimeInForce.FOK: TimeInForce.FOK
-        }
-        return mapping.get(tif, TimeInForce.DAY)
+        if tif == AlpacaTimeInForce.DAY:
+            return TimeInForce.DAY
+        elif tif == AlpacaTimeInForce.GTC:
+            return TimeInForce.GTC
+        elif tif == AlpacaTimeInForce.IOC:
+            return TimeInForce.IOC
+        elif tif == AlpacaTimeInForce.FOK:
+            return TimeInForce.FOK
+        else:
+            raise ValueError(f"Unknown Alpaca time in force: {tif}")
     
     @staticmethod
     def _convert_alpaca_type_to_order_type(order_type: AlpacaOrderType) -> OrderType:
         """Convert Alpaca OrderType to OrderType"""
-        mapping = {
-            AlpacaOrderType.MARKET: OrderType.MARKET,
-            AlpacaOrderType.LIMIT: OrderType.LIMIT,
-            AlpacaOrderType.STOP: OrderType.STOP_LOSS,
-            AlpacaOrderType.STOP_LIMIT: OrderType.STOP_LIMIT
-        }
-        return mapping.get(order_type, OrderType.MARKET)
+        if order_type == AlpacaOrderType.MARKET:
+            return OrderType.MARKET
+        elif order_type == AlpacaOrderType.LIMIT:
+            return OrderType.LIMIT
+        elif order_type == AlpacaOrderType.STOP:
+            return OrderType.STOP_LOSS
+        elif order_type == AlpacaOrderType.STOP_LIMIT:
+            return OrderType.STOP_LIMIT
+        else:
+            raise ValueError(f"Unknown Alpaca order type: {order_type}")
     
     @staticmethod
     def _convert_alpaca_status_to_order_status(status: AlpacaOrderStatus) -> OrderStatus:
         """Convert Alpaca OrderStatus to OrderStatus"""
-        mapping = {
-            AlpacaOrderStatus.NEW: OrderStatus.SUBMITTED,
-            AlpacaOrderStatus.PARTIALLY_FILLED: OrderStatus.PARTIALLY_FILLED,
-            AlpacaOrderStatus.FILLED: OrderStatus.FILLED,
-            AlpacaOrderStatus.DONE_FOR_DAY: OrderStatus.CANCELLED,
-            AlpacaOrderStatus.CANCELED: OrderStatus.CANCELLED,
-            AlpacaOrderStatus.EXPIRED: OrderStatus.CANCELLED,
-            AlpacaOrderStatus.REPLACED: OrderStatus.SUBMITTED,
-            AlpacaOrderStatus.PENDING_CANCEL: OrderStatus.PENDING,
-            AlpacaOrderStatus.PENDING_REPLACE: OrderStatus.PENDING,
-            AlpacaOrderStatus.ACCEPTED: OrderStatus.SUBMITTED,
-            AlpacaOrderStatus.PENDING_NEW: OrderStatus.PENDING,
-            AlpacaOrderStatus.ACCEPTED_FOR_BIDDING: OrderStatus.SUBMITTED,
-            AlpacaOrderStatus.STOPPED: OrderStatus.CANCELLED,
-            AlpacaOrderStatus.REJECTED: OrderStatus.REJECTED,
-            AlpacaOrderStatus.SUSPENDED: OrderStatus.PENDING,
-            AlpacaOrderStatus.CALCULATED: OrderStatus.PENDING
-        }
-        return mapping.get(status, OrderStatus.PENDING)
+        if status == AlpacaOrderStatus.NEW:
+            return OrderStatus.PENDING
+        elif status == AlpacaOrderStatus.PARTIALLY_FILLED:
+            return OrderStatus.PARTIALLY_FILLED
+        elif status == AlpacaOrderStatus.FILLED:
+            return OrderStatus.FILLED
+        elif status == AlpacaOrderStatus.DONE_FOR_DAY:
+            return OrderStatus.CANCELLED
+        elif status == AlpacaOrderStatus.CANCELED:
+            return OrderStatus.CANCELLED
+        elif status == AlpacaOrderStatus.EXPIRED:
+            return OrderStatus.EXPIRED
+        elif status == AlpacaOrderStatus.REPLACED:
+            return OrderStatus.PENDING
+        elif status == AlpacaOrderStatus.PENDING_CANCEL:
+            return OrderStatus.PENDING_CANCEL
+        elif status == AlpacaOrderStatus.PENDING_REPLACE:
+            return OrderStatus.PENDING
+        elif status == AlpacaOrderStatus.ACCEPTED:
+            return OrderStatus.PENDING
+        elif status == AlpacaOrderStatus.PENDING_NEW:
+            return OrderStatus.PENDING
+        elif status == AlpacaOrderStatus.ACCEPTED_FOR_BIDDING:
+            return OrderStatus.PENDING
+        elif status == AlpacaOrderStatus.STOPPED:
+            return OrderStatus.CANCELLED
+        elif status == AlpacaOrderStatus.REJECTED:
+            return OrderStatus.REJECTED
+        elif status == AlpacaOrderStatus.SUSPENDED:
+            return OrderStatus.CANCELLED
+        elif status == AlpacaOrderStatus.CALCULATED:
+            return OrderStatus.PENDING
+        else:
+            return OrderStatus.PENDING
     
     @staticmethod
     def _convert_alpaca_position_side(side: AlpacaPositionSide) -> PositionSide:
         """Convert Alpaca PositionSide to PositionSide"""
-        mapping = {
-            AlpacaPositionSide.LONG: PositionSide.LONG,
-            AlpacaPositionSide.SHORT: PositionSide.SHORT
-        }
-        return mapping.get(side, PositionSide.LONG)
+        if side == AlpacaPositionSide.LONG:
+            return PositionSide.LONG
+        elif side == AlpacaPositionSide.SHORT:
+            return PositionSide.SHORT
+        else:
+            raise ValueError(f"Unknown Alpaca position side: {side}")
     
     @staticmethod
     def _convert_timeframe(timeframe: str) -> TimeFrame:
-        """Convert timeframe string to Alpaca TimeFrame"""
-        mapping = {
+        """Convert string timeframe to Alpaca TimeFrame"""
+        timeframe_map = {
             "1Min": TimeFrame.Minute,
-            "5Min": TimeFrame(5, "Minute"),
-            "15Min": TimeFrame(15, "Minute"),
-            "30Min": TimeFrame(30, "Minute"),
+            "5Min": TimeFrame(5, TimeFrame.Minute),
+            "15Min": TimeFrame(15, TimeFrame.Minute),
+            "30Min": TimeFrame(30, TimeFrame.Minute),
             "1Hour": TimeFrame.Hour,
             "1Day": TimeFrame.Day,
             "1Week": TimeFrame.Week,
             "1Month": TimeFrame.Month
         }
-        return mapping.get(timeframe, TimeFrame.Day)
+        
+        return timeframe_map.get(timeframe, TimeFrame.Day)
     
     @staticmethod
     def _parse_timestamp(timestamp_str: str) -> datetime:
-        """Parse timestamp string to datetime"""
+        """Parse timestamp string to datetime object"""
         try:
             return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
         except ValueError:
+            # Fallback for different timestamp formats
             return datetime.now(timezone.utc) 
