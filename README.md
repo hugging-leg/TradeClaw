@@ -10,26 +10,27 @@ A sophisticated, event-driven trading system that uses advanced LLMs (OpenAI or 
 - **💰 Cost-Effective Options**: Choose between OpenAI (premium) or DeepSeek (cost-effective) LLM providers
 - **📊 Real-Time Data**: Integrates Alpaca API for trading and Tiingo for market data
 - **🔄 Event-Driven Architecture**: In-memory event system for real-time event handling
-- **📱 Telegram Control & Updates**: Complete remote control with real-time workflow progress notifications
+- **📱 Enhanced Telegram Control**: Complete remote control with improved command handlers and real-time workflow progress notifications
 - **🔗 LangGraph Workflow**: Structured AI decision pipeline with live progress tracking
-- **📢 Message Queue System**: Intelligent Telegram notifications with anti-flood protection
-- **⏰ Automated Scheduling**: Daily rebalancing and risk management
+- **📢 Intelligent Message System**: Advanced message formatting with anti-flood protection and markdown support
+- **⏰ Automated Scheduling**: Daily rebalancing and risk management with robust restart functionality
 - **🛡️ Risk Management**: Built-in stop-loss, take-profit, and portfolio risk controls
 - **🔐 Paper Trading**: Safe testing environment with Alpaca paper trading
+- **🧹 Clean Code Architecture**: Modular design with dedicated utility modules for better maintainability
 
 ## 🏗️ System Architecture
 
 ```
 ┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
 │   Telegram Bot  │    │ OpenAI/DeepSeek │    │   Alpaca API    │
-│ (Control+Updates)│    │   (Decisions)   │    │   (Trading)     │
+│ (Enhanced UI)   │    │   (Decisions)   │    │   (Trading)     │
 └─────────┬───────┘    └─────────┬───────┘    └─────────┬───────┘
           │                      │                      │
           └──────────────────────┼──────────────────────┘
                                  │
                     ┌─────────────▼─────────────┐
                     │     Trading System        │
-                    │     (Orchestrator)        │
+                    │   (Enhanced Orchestrator) │
                     └─────────────┬─────────────┘
                                  │
                     ┌─────────────▼─────────────┐
@@ -48,17 +49,52 @@ A sophisticated, event-driven trading system that uses advanced LLMs (OpenAI or 
           └──────────────────┬───────────────────┘
           │                  │                   │
 ┌─────────▼───────┐ ┌─────────▼───────┐ ┌─────────▼───────┐
-│  Event System   │ │   Scheduler     │ │Message Queue    │
-│  (In-Memory)    │ │   (Daily Jobs)  │ │  (Telegram)     │
+│  Event System   │ │   Scheduler     │ │Message Manager  │
+│  (In-Memory)    │ │  (Enhanced)     │ │ (Intelligent)   │
 └─────────────────┘ └─────────────────┘ └─────────────────┘
           │                      │                      │
           └──────────────────────┼──────────────────────┘
+                                 │
+                    ┌─────────────▼─────────────┐
+                    │     Utility Modules       │
+                    │  (String Processing)      │
+                    └─────────────┬─────────────┘
                                  │
                     ┌─────────────▼─────────────┐
                     │     Tiingo API            │
                     │     (News & Data)         │
                     └───────────────────────────┘
 ```
+
+## 🧹 Recent Improvements (v2.0)
+
+### 🔧 **String Processing Refactoring**
+- **200+ lines moved** from business logic to dedicated utility modules
+- **New `src/utils/` directory** with specialized string processing functions:
+  - `string_utils.py`: General text processing and formatting
+  - `telegram_utils.py`: Telegram-specific markdown handling and escaping
+  - `message_formatters.py`: Portfolio, order, and alert message formatting
+- **Improved code reusability** and eliminated duplicate formatting logic
+- **Enhanced maintainability** with centralized string processing
+
+### 📱 **Enhanced Telegram Command Handlers**
+- **Fixed command processing issues**: Resolved stopped message problems and duplicate notifications
+- **Improved markdown formatting**: Better bold text support and special character escaping
+- **Enhanced error handling**: More robust command processing with graceful fallbacks
+- **Unified message flow**: Centralized message handling through message manager
+- **Better user experience**: Cleaner command responses and status updates
+
+### 🔄 **System Reliability Improvements**
+- **Robust restart functionality**: Enhanced scheduler thread lifecycle management
+- **Graceful shutdown**: Improved stop/start cycles while preserving command availability
+- **Better error recovery**: Enhanced exception handling and system state management
+- **Improved logging**: More detailed system state tracking and debugging information
+
+### 🏗️ **Code Organization Enhancements**
+- **Modular architecture**: Better separation of concerns across components
+- **Utility abstraction**: Common functions extracted to reusable modules
+- **Interface consistency**: Standardized message formatting and handling
+- **Backward compatibility**: All improvements maintain existing functionality
 
 ## 🏭 Workflow Factory Pattern
 
@@ -339,6 +375,44 @@ Both workflow types support manual analysis via Telegram:
 ✅ **Tool Calling Workflow Complete**
 ```
 
+### 📱 Enhanced Telegram Commands
+
+The Telegram bot includes improved command handling with better formatting and reliability:
+
+#### Core Commands
+- **`/start`**: Start the trading system with enhanced status reporting
+- **`/stop`**: Gracefully stop the system while keeping commands available
+- **`/status`**: Get comprehensive system status with proper markdown formatting
+- **`/help`**: Display all available commands with descriptions
+
+#### Enhanced Features
+- **Improved markdown**: Proper **bold** text and special character escaping
+- **Better error handling**: Graceful fallbacks when message formatting fails
+- **Unified messaging**: Consistent message flow through the message manager
+- **Status persistence**: Commands remain available even after system stop
+- **Real-time updates**: Live progress notifications during workflow execution
+
+#### Command Examples
+```
+User: /start
+Bot: 🚀 **Starting Trading System**
+     
+     Initializing...
+
+Bot: 🚀 **Trading System Online**
+     
+     All components initialized successfully. Ready for trading operations!
+
+User: /status
+Bot: 📊 **Trading System Status**
+     
+     🏃 **Running**: ✅ Yes
+     💰 **Trading Enabled**: ✅ Yes
+     🏪 **Market Open**: ❌ No
+     📅 **Scheduler**: ✅ Running
+     ...
+```
+
 ## 🔍 Components Deep Dive
 
 ### 1. Trading System (`src/trading_system.py`)
@@ -393,7 +467,14 @@ Automated job scheduling:
 ### 8. API Integrations
 - **Alpaca API**: Trading execution and portfolio management
 - **Tiingo API**: News and market data
-- **Telegram Bot**: Remote control and notifications
+- **Telegram Bot**: Enhanced remote control and notifications
+
+### 9. Utility Modules (`src/utils/`)
+**New modular string processing system**:
+- **`string_utils.py`**: General text processing, formatting, and validation utilities
+- **`telegram_utils.py`**: Telegram-specific markdown handling, escaping, and character limits
+- **`message_formatters.py`**: Specialized formatters for portfolio, order, and alert messages
+- **Benefits**: Improved code reusability, centralized formatting logic, better maintainability
 
 ## 🔧 Development
 
@@ -407,13 +488,23 @@ Agent_Trader/
 ├── README.md                       # This file
 ├── logs/                           # Log files
 └── src/
+    ├── adapters/                    # External service adapters
+    │   ├── brokers/
+    │   │   └── alpaca_adapter.py    # Alpaca broker integration
+    │   ├── market_data/
+    │   │   └── tiingo_market_data_adapter.py # Tiingo market data
+    │   ├── news/
+    │   │   └── tiingo_news_adapter.py # Tiingo news integration
+    │   └── transports/
+    │       └── telegram_service.py  # Enhanced Telegram bot
+    ├── interfaces/                  # Abstract interfaces
+    │   ├── broker_api.py           # Broker interface
+    │   ├── market_data_api.py      # Market data interface
+    │   ├── message_transport.py    # Message transport interface
+    │   ├── news_api.py             # News API interface
+    │   └── factory.py              # Service factory
     ├── models/
     │   └── trading_models.py        # Pydantic models
-    ├── apis/
-    │   ├── alpaca_api.py           # Alpaca integration
-    │   ├── tiingo_api.py           # Tiingo integration
-    │   ├── telegram_bot.py         # Telegram bot
-    │   └── telegram_message_queue.py # Message queue system
     ├── events/
     │   └── event_system.py         # Event handling
     ├── agents/
@@ -421,8 +512,14 @@ Agent_Trader/
     │   ├── workflow_base.py        # Abstract base class
     │   ├── sequential_workflow.py  # Fixed-step workflow
     │   └── tool_calling_workflow.py # Dynamic workflow
+    ├── messaging/
+    │   └── message_manager.py      # Intelligent message management
     ├── scheduler/
-    │   └── trading_scheduler.py    # Job scheduling
+    │   └── trading_scheduler.py    # Enhanced job scheduling
+    ├── utils/                      # Utility modules (NEW)
+    │   ├── string_utils.py         # General string processing
+    │   ├── telegram_utils.py       # Telegram-specific utilities
+    │   └── message_formatters.py   # Message formatting functions
     └── trading_system.py           # Main orchestrator
 ```
 
@@ -516,12 +613,28 @@ tests/
 ├── test_trading_models.py         # Data model tests
 ├── test_event_system.py           # Event system tests
 ├── test_alpaca_api.py             # Alpaca API tests
-├── test_telegram_bot.py           # Telegram bot tests
+├── test_telegram_bot.py           # Enhanced Telegram bot tests
+├── test_telegram_message_queue.py # Message queue system tests
 ├── test_tiingo_api.py             # Tiingo API tests
 ├── test_workflow_factory.py       # Factory pattern tests
 ├── test_sequential_workflow.py    # Sequential workflow tests
-└── test_tool_calling_workflow.py  # Tool calling workflow tests
+├── test_tool_calling_workflow.py  # Tool calling workflow tests
+└── test_news_api.py               # News API integration tests
 ```
+
+### Code Quality Features
+
+#### String Processing & Utilities
+- **Centralized formatting**: All message formatting handled by specialized utility modules
+- **Markdown safety**: Proper escaping of special characters for Telegram
+- **Reusable functions**: Common string operations available across the codebase
+- **Type safety**: Proper type hints and validation for all utility functions
+
+#### Enhanced Error Handling
+- **Graceful degradation**: System continues operating even if individual components fail
+- **Comprehensive logging**: Detailed error tracking and debugging information
+- **Retry mechanisms**: Automatic retry for transient failures
+- **User-friendly messages**: Clear error messages in Telegram interface
 
 ## 📄 License
 
@@ -539,6 +652,21 @@ Common issues:
 - **"Unsupported workflow type"**: Check your `WORKFLOW_TYPE` setting
 - **"Workflow creation failed"**: Verify your LLM provider configuration
 - **"Configuration validation failed"**: Check all required API keys
+
+## 🎯 Recent Updates
+
+### Version 2.0 Highlights
+- **String Processing Refactoring**: Moved 200+ lines of formatting code to dedicated utility modules
+- **Enhanced Telegram Bot**: Improved command handling, markdown formatting, and error recovery
+- **System Reliability**: Better restart functionality and graceful shutdown handling
+- **Code Organization**: Modular architecture with improved separation of concerns
+- **Maintainability**: Centralized utilities and consistent interfaces across components
+
+### Performance Improvements
+- **Reduced code duplication**: Eliminated redundant string processing across components
+- **Better error handling**: More robust exception handling and recovery mechanisms
+- **Enhanced logging**: Improved debugging and system monitoring capabilities
+- **Optimized messaging**: Intelligent message queuing and formatting
 
 ## 🙏 Acknowledgments
 
