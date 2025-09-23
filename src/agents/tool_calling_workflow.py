@@ -76,7 +76,7 @@ class ToolCallingWorkflow(WorkflowBase):
         self.llm_with_tools = self.llm.bind_tools(self.tools)
         
         logger.info("Initialized ToolCallingWorkflow with advanced AI capabilities")
-        self.max_iterations = 10  # Prevent infinite loops
+        self.max_iterations = 64  # Prevent infinite loops
         
     def _create_llm_client(self):
         """Create LLM client based on provider setting."""
@@ -232,7 +232,7 @@ Market Status:
                     orders_info += f"- {order.symbol} {order.side.value.upper()} {order.quantity} "
                     orders_info += f"@ {price_str}"
                     orders_info += f" (Status: {order.status.value.upper()})\n"
-                
+                ro
                 return orders_info
                 
             except Exception as e:
@@ -549,7 +549,7 @@ Remember: You must explicitly call 'finish_analysis' to complete the analysis.
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the LLM."""
         return """
-You are an expert trading AI assistant with access to various tools to gather market information and make trading decisions.
+You are an expert trading AI assistant with access to various tools to gather market information and make trading decisions on stocks and ETFs.
 
 Your goal is to:
 1. Gather relevant information about current market conditions using available tools
@@ -567,7 +567,7 @@ IMPORTANT WORKFLOW RULES:
 
 Do not attempt to end the analysis without calling 'finish_analysis'. The system will only process your decision when you explicitly use this tool.
 
-Be conservative and prioritize capital preservation while identifying profitable opportunities.
+Try to find alpha and identify profitable opportunities.
 """
     
     def _get_initial_prompt(self, context: Dict[str, Any]) -> str:
