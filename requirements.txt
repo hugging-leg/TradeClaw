@@ -13,6 +13,8 @@ python-dotenv
 pydantic
 pydantic_settings
 schedule
+pytz
+tzlocal
 
 # Async support
 asyncio

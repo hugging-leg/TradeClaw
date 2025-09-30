@@ -47,8 +47,7 @@ class Settings(BaseSettings):
     paper_trading: bool = True
     max_position_size: float = 0.1
     max_positions: int = 10
-    rebalance_time: str = "09:30"
-    daily_rebalance_time: str = "09:30"  # Alias for rebalance_time
+    rebalance_time: str = "09:30"  # US/Eastern time - system auto-converts to local time
     stop_loss_percentage: float = 0.05
     take_profit_percentage: float = 0.15
     

@@ -109,16 +109,16 @@ class LLMPortfolioAgent(WorkflowBase):
     
     def _get_system_prompt(self) -> str:
         """获取系统提示"""
-        return f"""你是一位专业的私募投资组合经理，负责管理美股以及ETF投资组合。
+        return f"""你是一位专业的私募投资组合经理，负责管理美股以及ETF投资组合，争取达到sharpe ratio 2以上。
 
 ## 你的职责
 1. 持续分析市场状况、新闻事件和组合配置
 2. 基于分析自主决定是否需要调整组合
-3. 决定目标仓位配置（不需要遵循固定规则）
+3. 决定目标仓位配置
 4. 执行组合重新平衡
 
 ## 可用工具
-除了你本身，你还有以下工具可以使用：
+除了你本身自带的工具，你还有以下工具可以使用：
 - get_portfolio_status: 获取当前组合状态（持仓、市值、盈亏等）
 - get_market_data: 获取市场概况（主要指数）
 - get_latest_news: 获取最新市场新闻
@@ -126,24 +126,24 @@ class LLMPortfolioAgent(WorkflowBase):
 - get_stock_info: 获取个股详细信息
 - rebalance_portfolio: 执行组合重新平衡（需要指定目标配置）
 
-## 决策原则
-1. **自主分析**: 你可以自由决定何时调整组合，无需遵循固定规则
-2. **风险分散**: 考虑适当分散风险，但具体配置由你决定
-3. **响应市场**: 关注重大新闻、市场变化，及时调整策略
-4. **理性决策**: 基于数据和分析，避免情绪化决策
-5. **成本意识**: 避免过度频繁交易
-
 ## 当前任务
 分析当前市场和组合状况，决定是否需要调整。如果需要调整，使用rebalance_portfolio工具执行。
 
 ## 重要提示
-- 你完全自主决策
-- 注意分仓，避免单票梭哈
-- 只做主升不做调整
-- 杠杆ETF要考虑磨损，非特殊情况不要长期持有
+- 你完全自主决策，根据市场情况灵活调整配置，做出理性、明智、专业的决策
+- 注意分仓，避免单票梭哈，只做主升不做调整
+- 杠杆ETF要考虑磨损，非特殊情况不要长期持有，但合适的使用可以带来高收益
+- 重点关注美联储的消息，科技公司的消息，以及重大新闻事件
 - 你可以持有2-10只股票/ETF，具体数量由你决定
-- 你可以根据市场情况灵活调整配置
-- 充分利用工具获取信息，做出明智决策
+- 重点关注科技公司、金融公司和黄金，也可以思考如何对冲风险
+- 不用考虑调仓对市场的影响，你的资金没那么多
+- **如果rebalance_portfolio返回market_open=false，说明市场休市，立即停止所有工具调用，只返回"市场休市，分析暂停"**
+
+## 现金仓位管理
+- **重要**: 调用rebalance_portfolio时，只指定股票/ETF的目标百分比，不要包含"CASH"或"现金"，因为可能会出现混淆
+- 百分比总和可以小于100%，剩余部分会自动保留为现金
+- 如果想全仓，就让百分比总和接近100%；如果想保留现金，就让总和小于100%
+- 可以根据市场情况灵活调整现金比例，如市场不确定时可以增加现金占比
 """
     
     def _create_tools(self) -> List:
@@ -153,6 +153,9 @@ class LLMPortfolioAgent(WorkflowBase):
         async def get_portfolio_status() -> str:
             """获取当前投资组合状态，包括总资产、现金、持仓等信息"""
             try:
+                # 实时通知
+                await self.message_manager.send_message("🔍 正在获取组合状态...", "info")
+                
                 portfolio = await self.get_portfolio()
                 if not portfolio:
                     return "无法获取组合信息"
@@ -160,22 +163,31 @@ class LLMPortfolioAgent(WorkflowBase):
                 positions_info = []
                 for pos in portfolio.positions:
                     if pos.quantity != 0:
+                        pos_pct = float((pos.market_value / portfolio.equity * 100) if portfolio.equity > 0 else 0)
                         positions_info.append({
                             "symbol": pos.symbol,
                             "quantity": float(pos.quantity),
                             "market_value": float(pos.market_value),
+                            "percentage": pos_pct,
                             "unrealized_pnl": float(pos.unrealized_pnl),
                             "unrealized_pnl_pct": float(pos.unrealized_pnl_percentage)
                         })
                 
+                cash_pct = float((portfolio.cash / portfolio.equity * 100) if portfolio.equity > 0 else 0)
+                
                 result = {
                     "total_equity": float(portfolio.equity),
                     "cash": float(portfolio.cash),
+                    "cash_percentage": cash_pct,
                     "market_value": float(portfolio.market_value),
                     "day_pnl": float(portfolio.day_pnl),
                     "total_positions": len(positions_info),
                     "positions": positions_info
                 }
+                
+                # 发送摘要
+                summary = f"💼 组合状态: ${portfolio.equity:,.2f} | 现金 {cash_pct:.1f}% | {len(positions_info)}个持仓"
+                await self.message_manager.send_message(summary, "info")
                 
                 return json.dumps(result, indent=2, ensure_ascii=False)
             except Exception as e:
@@ -186,7 +198,9 @@ class LLMPortfolioAgent(WorkflowBase):
         async def get_market_data() -> str:
             """获取市场概况，包括主要指数（SPY, QQQ等）的最新数据"""
             try:
+                await self.message_manager.send_message("📊 正在获取市场数据...", "info")
                 market_data = await self.get_market_data()
+                await self.message_manager.send_message("✅ 市场数据已获取", "info")
                 return json.dumps(market_data, indent=2, ensure_ascii=False)
             except Exception as e:
                 logger.error(f"获取市场数据失败: {e}")
@@ -201,6 +215,7 @@ class LLMPortfolioAgent(WorkflowBase):
                 limit: 新闻数量，默认20条
             """
             try:
+                await self.message_manager.send_message(f"📰 正在获取最新{limit}条新闻...", "info")
                 news = await self.get_news(limit=limit)
                 news_list = []
                 for item in news[:limit]:
@@ -211,6 +226,7 @@ class LLMPortfolioAgent(WorkflowBase):
                         "symbols": item.get("symbols", [])
                     })
                 
+                await self.message_manager.send_message(f"✅ 已获取{len(news_list)}条新闻", "info")
                 return json.dumps(news_list, indent=2, ensure_ascii=False)
             except Exception as e:
                 logger.error(f"获取新闻失败: {e}")
@@ -220,6 +236,8 @@ class LLMPortfolioAgent(WorkflowBase):
         async def get_position_analysis() -> str:
             """分析当前持仓分布，包括各仓位占比、集中度等"""
             try:
+                await self.message_manager.send_message("🔬 正在分析持仓分布...", "info")
+                
                 portfolio = await self.get_portfolio()
                 if not portfolio or portfolio.equity <= 0:
                     return "组合为空或无法获取"
@@ -255,6 +273,11 @@ class LLMPortfolioAgent(WorkflowBase):
                     top3 = sum(p["percentage"] for p in positions_with_pct[:3])
                     analysis["concentration"]["top3_concentration"] = top3
                 
+                await self.message_manager.send_message(
+                    f"✅ 分析完成: {len(positions_with_pct)}个仓位, 最大{analysis['concentration']['largest_position_pct']:.1f}%",
+                    "info"
+                )
+                
                 return json.dumps(analysis, indent=2, ensure_ascii=False)
             except Exception as e:
                 logger.error(f"分析持仓失败: {e}")
@@ -269,6 +292,8 @@ class LLMPortfolioAgent(WorkflowBase):
                 symbol: 股票代码，如 AAPL
             """
             try:
+                await self.message_manager.send_message(f"🔎 正在查询 {symbol} 信息...", "info")
+                
                 # 获取最新价格
                 price_data = await self.market_data_api.get_latest_price(symbol)
                 
@@ -280,6 +305,12 @@ class LLMPortfolioAgent(WorkflowBase):
                     "price_data": price_data if price_data else "无法获取",
                     "info": info if info else "无法获取"
                 }
+                
+                if price_data:
+                    await self.message_manager.send_message(
+                        f"✅ {symbol}: ${price_data.get('close', 'N/A')}",
+                        "info"
+                    )
                 
                 return json.dumps(result, indent=2, ensure_ascii=False)
             except Exception as e:
@@ -296,17 +327,47 @@ class LLMPortfolioAgent(WorkflowBase):
             
             Args:
                 target_allocations: 目标配置，例如 {"AAPL": 25.0, "MSFT": 25.0, "GOOGL": 25.0, "AMZN": 25.0}
-                                   百分比总和应接近100
+                                   - 只需指定股票/ETF的百分比，不要包含现金
+                                   - 百分比总和可以小于100%，剩余部分自动为现金
+                                   - 例如: {"AAPL": 30, "MSFT": 30} 表示30%+30%+40%现金
                 reason: 重新平衡的原因说明
             
             Returns:
                 执行结果
             """
             try:
-                # 验证配置
+                # 检查市场状态
+                market_open = await self.is_market_open()
+                if not market_open:
+                    warning_msg = "⚠️ 市场未开放，无法执行交易。交易计划已保存，将在下次市场开放时执行。"
+                    await self.message_manager.send_message(warning_msg, "warning")
+                    return json.dumps({
+                        "success": False,
+                        "message": "市场未开放，无法执行交易",
+                        "market_open": False,
+                        "target_allocations": target_allocations,
+                        "reason": reason
+                    }, indent=2, ensure_ascii=False)
+                
+                # 过滤掉可能的现金关键词
+                cash_keywords = ['CASH', 'USD', 'DOLLAR', '现金', '美元']
+                filtered_allocations = {
+                    k: v for k, v in target_allocations.items() 
+                    if k.upper() not in cash_keywords
+                }
+                
+                if len(filtered_allocations) != len(target_allocations):
+                    removed = set(target_allocations.keys()) - set(filtered_allocations.keys())
+                    logger.info(f"移除了现金关键词: {removed}")
+                    target_allocations = filtered_allocations
+                
+                # 验证配置：总和应该≤100%
                 total_pct = sum(target_allocations.values())
-                if abs(total_pct - 100) > 5:
-                    return f"错误: 目标配置总和为{total_pct}%，应接近100%"
+                if total_pct > 100:
+                    return f"错误: 目标配置总和为{total_pct}%，不能超过100%"
+                
+                # 计算现金比例
+                cash_pct = 100 - total_pct
                 
                 # 获取当前组合
                 portfolio = await self.get_portfolio()
@@ -314,11 +375,14 @@ class LLMPortfolioAgent(WorkflowBase):
                     return "错误: 无法获取组合信息"
                 
                 # 通知开始重新平衡
+                allocation_lines = [f"- {sym}: {pct:.1f}%" for sym, pct in target_allocations.items()]
+                if cash_pct > 0:
+                    allocation_lines.append(f"- 💵 现金: {cash_pct:.1f}%")
+                
                 await self.message_manager.send_message(
                     f"🔄 **LLM发起组合重新平衡**\n\n"
                     f"原因: {reason}\n\n"
-                    f"目标配置:\n" + 
-                    "\n".join([f"- {sym}: {pct:.1f}%" for sym, pct in target_allocations.items()]),
+                    f"目标配置:\n" + "\n".join(allocation_lines),
                     "warning"
                 )
                 
@@ -327,6 +391,15 @@ class LLMPortfolioAgent(WorkflowBase):
                     portfolio, 
                     target_allocations
                 )
+                
+                if not trades:
+                    no_trade_msg = "✅ 经计算，所有仓位都在阈值范围内，无需调整"
+                    await self.message_manager.send_message(no_trade_msg, "info")
+                    return json.dumps({
+                        "success": True,
+                        "message": "无需调整",
+                        "trades": []
+                    }, indent=2, ensure_ascii=False)
                 
                 # 执行交易
                 results = await self._execute_rebalance_trades(trades)
@@ -344,7 +417,7 @@ class LLMPortfolioAgent(WorkflowBase):
                     "success": True,
                     "message": result_msg,
                     "trades": results
-                }, indent=2, ensure_ascii=False)
+                }, indent=2, ensure_ascii=False, default=str)  # 添加default=str处理UUID等对象
                 
             except Exception as e:
                 logger.error(f"重新平衡失败: {e}")
@@ -369,8 +442,27 @@ class LLMPortfolioAgent(WorkflowBase):
         """计算需要执行的交易"""
         trades = []
         
+        # 最小调整阈值：市值差异小于$100或比例差异小于2%则不调整
+        MIN_VALUE_THRESHOLD = Decimal('100')
+        MIN_PCT_THRESHOLD = Decimal('2.0')
+        
         # 获取当前持仓
         current_positions = {pos.symbol: pos for pos in portfolio.positions if pos.quantity != 0}
+        
+        # 计算可用资金（现金 + 需要卖出的仓位市值）
+        available_cash = portfolio.cash
+        
+        # 先计算所有卖出订单，累加可用资金
+        sell_value = Decimal('0')
+        for symbol, position in current_positions.items():
+            if symbol not in target_allocations:
+                sell_value += position.market_value
+            else:
+                target_value = portfolio.equity * Decimal(str(target_allocations[symbol] / 100))
+                if position.market_value > target_value:
+                    sell_value += (position.market_value - target_value)
+        
+        available_for_buy = available_cash + sell_value
         
         # 计算目标市值
         for symbol, target_pct in target_allocations.items():
@@ -378,8 +470,15 @@ class LLMPortfolioAgent(WorkflowBase):
             
             current_position = current_positions.get(symbol)
             current_value = current_position.market_value if current_position else Decimal('0')
+            current_pct = (current_value / portfolio.equity * 100) if portfolio.equity > 0 else Decimal('0')
             
             value_diff = target_value - current_value
+            pct_diff = abs(target_pct - float(current_pct))
+            
+            # 检查是否超过调整阈值
+            if abs(value_diff) < MIN_VALUE_THRESHOLD and pct_diff < float(MIN_PCT_THRESHOLD):
+                logger.info(f"{symbol} 无需调整: 差异${value_diff:.2f} ({pct_diff:.1f}%) < 阈值")
+                continue
             
             # 获取当前价格
             price_data = await self.market_data_api.get_latest_price(symbol)
@@ -395,12 +494,27 @@ class LLMPortfolioAgent(WorkflowBase):
             
             if abs(shares_to_trade) >= 1:
                 action = "BUY" if shares_to_trade > 0 else "SELL"
+                shares = abs(int(shares_to_trade))
+                
+                # 对于买入订单，检查是否有足够资金
+                if action == "BUY":
+                    estimated_cost = shares * current_price
+                    if estimated_cost > available_for_buy * Decimal('0.95'):  # 留5%余地
+                        # 调整为可负担的股数
+                        shares = int((available_for_buy * Decimal('0.95')) / current_price)
+                        if shares < 1:
+                            logger.warning(f"资金不足，跳过{symbol}买入")
+                            continue
+                        available_for_buy -= shares * current_price
+                
                 trades.append({
                     "symbol": symbol,
                     "action": action,
-                    "shares": abs(int(shares_to_trade)),
+                    "shares": shares,
                     "price": float(current_price),
-                    "target_pct": target_pct
+                    "target_pct": target_pct,
+                    "current_pct": float(current_pct),
+                    "pct_diff": pct_diff
                 })
         
         # 清仓不在目标配置中的股票
@@ -411,7 +525,9 @@ class LLMPortfolioAgent(WorkflowBase):
                     "action": "SELL",
                     "shares": abs(int(position.quantity)),
                     "price": 0,  # 市价
-                    "target_pct": 0
+                    "target_pct": 0,
+                    "current_pct": float((position.market_value / portfolio.equity * 100)),
+                    "pct_diff": float((position.market_value / portfolio.equity * 100))
                 })
         
         return trades
@@ -457,7 +573,7 @@ class LLMPortfolioAgent(WorkflowBase):
                     "symbol": trade["symbol"],
                     "action": trade["action"],
                     "shares": trade["shares"],
-                    "order_id": order_id
+                    "order_id": str(order_id)  # 转换为字符串
                 }
             else:
                 return {
@@ -496,6 +612,14 @@ class LLMPortfolioAgent(WorkflowBase):
             # 构建初始提示
             user_message = self._build_analysis_prompt(context)
             
+            # 通知开始分析
+            await self.message_manager.send_message(
+                "🤖 **LLM Agent 开始分析**\n\n"
+                f"触发: {trigger}\n"
+                "LLM将自主调用工具进行分析...",
+                "info"
+            )
+            
             # 让LLM agent运行（它会自主使用tools）
             # 在messages中加入SystemMessage和HumanMessage
             result = await self.agent.ainvoke({
@@ -508,8 +632,29 @@ class LLMPortfolioAgent(WorkflowBase):
             # 提取LLM的分析和决策
             messages = result.get("messages", [])
             final_response = ""
-            if messages:
-                final_response = messages[-1].content if hasattr(messages[-1], 'content') else str(messages[-1])
+            tool_calls_summary = []
+            
+            # 分析消息历史，提取工具调用信息
+            for msg in messages:
+                if hasattr(msg, 'tool_calls') and msg.tool_calls:
+                    for tool_call in msg.tool_calls:
+                        tool_name = tool_call.get('name', 'unknown')
+                        tool_calls_summary.append(f"🔧 {tool_name}")
+                elif hasattr(msg, 'content') and msg.content:
+                    if isinstance(msg, AIMessage):
+                        final_response = msg.content
+            
+            # 发送工具调用摘要
+            if tool_calls_summary:
+                tools_msg = "**LLM调用的工具:**\n" + "\n".join(tool_calls_summary)
+                await self.message_manager.send_message(tools_msg, "info")
+            
+            # 发送LLM的最终分析（不转义，直接发送原始文本）
+            if final_response:
+                await self.message_manager.send_message(
+                    f"💭 LLM分析结果:\n\n{final_response}",
+                    "info"
+                )
             
             # 记录分析历史
             self.last_analysis_time = datetime.now()

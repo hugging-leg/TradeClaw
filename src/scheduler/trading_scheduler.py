@@ -90,45 +90,89 @@ class TradingScheduler:
         """Setup default scheduled jobs"""
         
         # Daily rebalancing at market open
-        rebalance_time = settings.rebalance_time
-        schedule.every().monday.at(rebalance_time).do(self._safe_run_async, self._daily_rebalance)
-        schedule.every().tuesday.at(rebalance_time).do(self._safe_run_async, self._daily_rebalance)
-        schedule.every().wednesday.at(rebalance_time).do(self._safe_run_async, self._daily_rebalance)
-        schedule.every().thursday.at(rebalance_time).do(self._safe_run_async, self._daily_rebalance)
-        schedule.every().friday.at(rebalance_time).do(self._safe_run_async, self._daily_rebalance)
+        # Convert from US/Eastern to local time
+        rebalance_time_et = settings.rebalance_time
+        rebalance_time_local = self._convert_et_to_local_time(rebalance_time_et)
+        logger.info(f"Daily rebalance scheduled at {rebalance_time_et} ET (local: {rebalance_time_local})")
         
-        # Portfolio monitoring every hour during market hours
+        schedule.every().monday.at(rebalance_time_local).do(self._safe_run_async, self._daily_rebalance)
+        schedule.every().tuesday.at(rebalance_time_local).do(self._safe_run_async, self._daily_rebalance)
+        schedule.every().wednesday.at(rebalance_time_local).do(self._safe_run_async, self._daily_rebalance)
+        schedule.every().thursday.at(rebalance_time_local).do(self._safe_run_async, self._daily_rebalance)
+        schedule.every().friday.at(rebalance_time_local).do(self._safe_run_async, self._daily_rebalance)
+        
+        # Portfolio monitoring every hour during market hours (9 AM - 4 PM ET)
         for hour in range(9, 16):  # 9 AM to 4 PM ET
-            schedule.every().monday.at(f"{hour:02d}:30").do(self._safe_run_async, self._portfolio_check)
-            schedule.every().tuesday.at(f"{hour:02d}:30").do(self._safe_run_async, self._portfolio_check)
-            schedule.every().wednesday.at(f"{hour:02d}:30").do(self._safe_run_async, self._portfolio_check)
-            schedule.every().thursday.at(f"{hour:02d}:30").do(self._safe_run_async, self._portfolio_check)
-            schedule.every().friday.at(f"{hour:02d}:30").do(self._safe_run_async, self._portfolio_check)
+            et_time = f"{hour:02d}:30"
+            local_time = self._convert_et_to_local_time(et_time)
+            schedule.every().monday.at(local_time).do(self._safe_run_async, self._portfolio_check)
+            schedule.every().tuesday.at(local_time).do(self._safe_run_async, self._portfolio_check)
+            schedule.every().wednesday.at(local_time).do(self._safe_run_async, self._portfolio_check)
+            schedule.every().thursday.at(local_time).do(self._safe_run_async, self._portfolio_check)
+            schedule.every().friday.at(local_time).do(self._safe_run_async, self._portfolio_check)
         
-        # Market close analysis
-        schedule.every().monday.at("16:05").do(self._safe_run_async, self._market_close_analysis)
-        schedule.every().tuesday.at("16:05").do(self._safe_run_async, self._market_close_analysis)
-        schedule.every().wednesday.at("16:05").do(self._safe_run_async, self._market_close_analysis)
-        schedule.every().thursday.at("16:05").do(self._safe_run_async, self._market_close_analysis)
-        schedule.every().friday.at("16:05").do(self._safe_run_async, self._market_close_analysis)
+        # Market close analysis (16:05 ET)
+        close_time_local = self._convert_et_to_local_time("16:05")
+        logger.info(f"Market close analysis scheduled at 16:05 ET (local: {close_time_local})")
+        schedule.every().monday.at(close_time_local).do(self._safe_run_async, self._market_close_analysis)
+        schedule.every().tuesday.at(close_time_local).do(self._safe_run_async, self._market_close_analysis)
+        schedule.every().wednesday.at(close_time_local).do(self._safe_run_async, self._market_close_analysis)
+        schedule.every().thursday.at(close_time_local).do(self._safe_run_async, self._market_close_analysis)
+        schedule.every().friday.at(close_time_local).do(self._safe_run_async, self._market_close_analysis)
         
-        # Risk management check every 15 minutes during market hours
+        # Risk management check every 15 minutes during market hours (9:00-16:00 ET)
         for hour in range(9, 16):
             for minute in [0, 15, 30, 45]:
-                time_str = f"{hour:02d}:{minute:02d}"
-                schedule.every().monday.at(time_str).do(self._safe_run_async, self._risk_check)
-                schedule.every().tuesday.at(time_str).do(self._safe_run_async, self._risk_check)
-                schedule.every().wednesday.at(time_str).do(self._safe_run_async, self._risk_check)
-                schedule.every().thursday.at(time_str).do(self._safe_run_async, self._risk_check)
-                schedule.every().friday.at(time_str).do(self._safe_run_async, self._risk_check)
+                et_time = f"{hour:02d}:{minute:02d}"
+                local_time = self._convert_et_to_local_time(et_time)
+                schedule.every().monday.at(local_time).do(self._safe_run_async, self._risk_check)
+                schedule.every().tuesday.at(local_time).do(self._safe_run_async, self._risk_check)
+                schedule.every().wednesday.at(local_time).do(self._safe_run_async, self._risk_check)
+                schedule.every().thursday.at(local_time).do(self._safe_run_async, self._risk_check)
+                schedule.every().friday.at(local_time).do(self._safe_run_async, self._risk_check)
         
         # Daily cleanup at midnight
         schedule.every().day.at("00:00").do(self._safe_run_async, self._daily_cleanup)
         
         logger.info("Default schedule configured")
     
+    def _convert_et_to_local_time(self, et_time_str: str) -> str:
+        """
+        Convert US/Eastern time to local system time
+        
+        Args:
+            et_time_str: Time string in HH:MM format (e.g., "09:30")
+        
+        Returns:
+            Local time string in HH:MM format
+        """
+        try:
+            # Parse the input time
+            hour, minute = map(int, et_time_str.split(':'))
+            
+            # Create a datetime in Eastern timezone (use a recent date to handle DST correctly)
+            eastern = pytz.timezone('US/Eastern')
+            local_tz = pytz.timezone('Asia/Shanghai')  # Get system timezone
+            try:
+                import tzlocal
+                local_tz = tzlocal.get_localzone()
+            except:
+                pass  # Fallback to Asia/Shanghai if tzlocal not available
+            
+            # Use today's date to properly handle DST
+            today = datetime.now()
+            et_time = eastern.localize(datetime(today.year, today.month, today.day, hour, minute))
+            
+            # Convert to local time
+            local_time = et_time.astimezone(local_tz)
+            
+            return local_time.strftime('%H:%M')
+        except Exception as e:
+            logger.error(f"Error converting ET time {et_time_str} to local: {e}")
+            return et_time_str  # Fallback to original time
+    
     def _run_scheduler(self):
-        """Run the scheduler loop"""
+        """Run the scheduler loop - automatically converts US/Eastern config times to local system time"""
         while self.is_running:
             try:
                 schedule.run_pending()
