@@ -14,6 +14,7 @@ from src.interfaces.factory import get_broker_api, get_market_data_api, get_news
 from src.events.event_system import EventSystem, event_system
 from src.agents.workflow_factory import WorkflowFactory, validate_workflow_config
 from src.scheduler.trading_scheduler import TradingScheduler
+from src.services.realtime_monitor import RealtimeMarketMonitor
 from src.models.trading_models import (
     Order, Portfolio, TradingEvent, OrderSide, OrderType, 
     TimeInForce, OrderStatus
@@ -55,9 +56,15 @@ class TradingSystem:
             message_manager=self.message_manager
         )
         self.scheduler = TradingScheduler(trading_system=self)
+        self.realtime_monitor = RealtimeMarketMonitor(trading_system=self)
         
         # Log workflow type being used
         logger.info(f"Initialized with {self.trading_workflow.get_workflow_type()} workflow")
+        
+        # Enable realtime monitoring for portfolio management workflows
+        self.enable_realtime_monitoring = (
+            self.trading_workflow.get_workflow_type() in ["balanced_portfolio", "llm_portfolio"]
+        )
         
         # System state
         self.is_running = False
@@ -146,6 +153,12 @@ class TradingSystem:
             # Initialize daily stats
             await self._initialize_daily_stats()
             
+            # Start realtime monitoring if enabled
+            if self.enable_realtime_monitoring:
+                logger.info("Starting realtime market monitoring...")
+                portfolio = await self.get_portfolio()
+                await self.realtime_monitor.start(portfolio)
+            
             # Set system state
             self.is_running = True
             self.is_trading_enabled = True
@@ -204,6 +217,11 @@ class TradingSystem:
             
             # Stop scheduler
             self.scheduler.stop()
+            
+            # Stop realtime monitoring
+            if self.enable_realtime_monitoring and self.realtime_monitor.is_monitoring:
+                logger.info("Stopping realtime market monitoring...")
+                await self.realtime_monitor.stop()
             
             # Note: We DON'T stop the message transport (Telegram service) so it can still receive commands like /start
             # Only stop the message manager's automated processing
@@ -542,10 +560,16 @@ End of Day Summary:
             # Get scheduler status
             scheduler_status = self.scheduler.get_schedule_status()
             
+            # Get realtime monitor status
+            monitor_status = None
+            if self.enable_realtime_monitoring:
+                monitor_status = self.realtime_monitor.get_status()
+            
             return {
                 "status": "running" if self.is_running else "stopped",
                 "trading_enabled": self.is_trading_enabled,
                 "market_open": await self.is_market_open(),
+                "workflow_type": self.trading_workflow.get_workflow_type(),
                 "equity": str(portfolio.equity),
                 "day_pnl": str(portfolio.day_pnl),
                 "active_orders": len(active_orders),
@@ -556,7 +580,8 @@ End of Day Summary:
                     "actually_running": scheduler_status.get("actually_running", False),
                     "total_jobs": scheduler_status.get("total_jobs", 0),
                     "next_run": scheduler_status.get("next_run")
-                }
+                },
+                "realtime_monitoring": monitor_status
             }
         except Exception as e:
             logger.error(f"Error getting system status: {e}")

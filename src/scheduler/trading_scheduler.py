@@ -138,21 +138,28 @@ class TradingScheduler:
                 time.sleep(5)
     
     def _safe_run_async(self, async_func):
-        """Safely run async function in scheduler"""
+        """Safely run async function in scheduler thread"""
         try:
-            # Create new event loop for this thread if needed
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+            # Scheduler runs in a separate thread, always create a new event loop
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
             
-            if loop.is_running():
-                # If loop is already running, create a task
-                asyncio.create_task(async_func())
-            else:
-                # Run the async function
+            try:
+                # Run the async function in this thread's event loop
                 loop.run_until_complete(async_func())
+            finally:
+                # Clean up the loop
+                try:
+                    # Cancel all pending tasks
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    # Wait for all tasks to complete cancellation
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                    loop.close()
+                except Exception as cleanup_error:
+                    logger.warning(f"Error during event loop cleanup: {cleanup_error}")
                 
         except Exception as e:
             logger.error(f"Error running scheduled task: {e}")

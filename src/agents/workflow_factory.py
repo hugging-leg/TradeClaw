@@ -29,6 +29,8 @@ from src.interfaces.factory import (
 from src.agents.workflow_base import WorkflowBase
 from src.agents.sequential_workflow import SequentialWorkflow
 from src.agents.tool_calling_workflow import ToolCallingWorkflow
+from src.agents.balanced_portfolio_workflow import BalancedPortfolioWorkflow
+from src.agents.llm_portfolio_agent import LLMPortfolioAgent
 
 
 logger = logging.getLogger(__name__)
@@ -38,6 +40,8 @@ class WorkflowType(Enum):
     """Enumeration of available workflow types."""
     SEQUENTIAL = "sequential"
     TOOL_CALLING = "tool_calling"
+    BALANCED_PORTFOLIO = "balanced_portfolio"  # 已弃用：基于规则的均衡组合
+    LLM_PORTFOLIO = "llm_portfolio"  # 推荐：完全由LLM驱动
     # Future workflow types
     # MULTI_AGENT = "multi_agent"
     # REINFORCEMENT_LEARNING = "rl"
@@ -62,6 +66,8 @@ class WorkflowFactory:
     _workflow_registry: Dict[WorkflowType, Type[WorkflowBase]] = {
         WorkflowType.SEQUENTIAL: SequentialWorkflow,
         WorkflowType.TOOL_CALLING: ToolCallingWorkflow,
+        WorkflowType.BALANCED_PORTFOLIO: BalancedPortfolioWorkflow,
+        WorkflowType.LLM_PORTFOLIO: LLMPortfolioAgent,
     }
     
     @staticmethod
@@ -114,6 +120,22 @@ class WorkflowFactory:
                 )
             elif workflow_type.lower() == 'tool_calling':
                 workflow = ToolCallingWorkflow(
+                    broker_api=broker_api,
+                    market_data_api=market_data_api,
+                    news_api=news_api,
+                    message_manager=message_manager,
+                    **kwargs
+                )
+            elif workflow_type.lower() == 'balanced_portfolio':
+                workflow = BalancedPortfolioWorkflow(
+                    broker_api=broker_api,
+                    market_data_api=market_data_api,
+                    news_api=news_api,
+                    message_manager=message_manager,
+                    **kwargs
+                )
+            elif workflow_type.lower() == 'llm_portfolio':
+                workflow = LLMPortfolioAgent(
                     broker_api=broker_api,
                     market_data_api=market_data_api,
                     news_api=news_api,
@@ -325,6 +347,28 @@ class WorkflowFactory:
                     "Real-time tool calling"
                 ]
                 info["best_for"] = "Adaptive, intelligent trading analysis"
+                
+            elif workflow_enum == WorkflowType.BALANCED_PORTFOLIO:
+                info["features"] = [
+                    "Balanced portfolio management (18% per position)",
+                    "Automatic rebalancing on triggers",
+                    "Position drift detection",
+                    "LLM-driven stock selection",
+                    "Risk diversification"
+                ]
+                info["best_for"] = "Balanced, diversified portfolio with 5-6 positions"
+                info["status"] = "⚠️ Deprecated - Use llm_portfolio instead"
+                
+            elif workflow_enum == WorkflowType.LLM_PORTFOLIO:
+                info["features"] = [
+                    "🆕 Fully LLM-driven decisions (no hard-coded rules)",
+                    "LLM analyzes market data, news, and positions",
+                    "LLM decides when and how to rebalance",
+                    "Flexible position allocation (LLM decides)",
+                    "ReAct agent with multiple tools",
+                    "Explainable decisions"
+                ]
+                info["best_for"] = "🌟 Intelligent, adaptive portfolio management (RECOMMENDED)"
             
             return info
             
