@@ -3,12 +3,17 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from decimal import Decimal
 from enum import Enum
+import pytz
+
+
+def utc_now():
+    """Get current UTC time (timezone-aware)"""
+    return datetime.now(pytz.UTC)
 
 
 class OrderSide(str, Enum):
     BUY = "buy"
     SELL = "sell"
-
 
 class OrderType(str, Enum):
     MARKET = "market"
@@ -17,16 +22,11 @@ class OrderType(str, Enum):
     TAKE_PROFIT = "take_profit"
     STOP_LIMIT = "stop_limit"
 
-
-
-
-
 class TimeInForce(str, Enum):
     DAY = "day"
     GTC = "gtc"
     IOC = "ioc"
     FOK = "fok"
-
 
 class OrderStatus(str, Enum):
     PENDING = "pending"
@@ -128,11 +128,31 @@ class NewsItem(BaseModel):
 
 
 class TradingEvent(BaseModel):
-    """Trading event model for event-driven system"""
-    event_type: str  # "order_created", "order_filled", "order_canceled", "portfolio_updated"
-    timestamp: datetime = Field(default_factory=datetime.now)
+    """
+    Trading event model for event-driven system with scheduled execution
+    
+    Events can be scheduled for future execution by setting scheduled_time.
+    If scheduled_time is None, event executes immediately.
+    All datetimes are timezone-aware (UTC) to avoid comparison issues.
+    """
+    event_type: str  # "trigger_daily_rebalance", "trigger_manual_analysis", etc.
+    timestamp: datetime = Field(default_factory=utc_now)  # When event was created (UTC)
+    scheduled_time: Optional[datetime] = None  # When event should execute (None = immediate)
     data: Dict[str, Any]
     processed: bool = False
+    priority: int = 0  # Lower number = higher priority (for events at same time)
+    
+    def __lt__(self, other):
+        """Compare events for priority queue ordering"""
+        if not isinstance(other, TradingEvent):
+            return NotImplemented
+        # Primary: scheduled_time (None = immediate = now)
+        self_time = self.scheduled_time or self.timestamp
+        other_time = other.scheduled_time or other.timestamp
+        if self_time != other_time:
+            return self_time < other_time
+        # Secondary: priority
+        return self.priority < other.priority
 
 
 class TradingDecision(BaseModel):

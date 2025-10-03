@@ -6,14 +6,17 @@ LLM驱动的投资组合管理Agent
 - 将rebalance、获取数据等作为tools提供给LLM
 - LLM基于市场数据、新闻、仓位等信息自主分析
 - LLM决定何时、如何调整组合
+- LLM可以自主安排下一次分析时间
 
 Tools提供给LLM：
 1. get_portfolio_status - 获取当前组合状态
 2. get_market_data - 获取市场数据
 3. get_latest_news - 获取最新新闻
 4. get_position_analysis - 分析持仓分布
-5. rebalance_portfolio - 执行组合重新平衡
-6. get_stock_info - 获取个股详细信息
+5. get_latest_price - 获取个股最新价格
+6. get_historical_prices - 获取历史K线数据（自定义时间框架和数量）
+7. rebalance_portfolio - 执行组合重新平衡
+8. schedule_next_analysis - 安排下一次分析时间（LLM自主调度）
 """
 
 import asyncio
@@ -22,6 +25,7 @@ import logging
 from typing import Dict, List, Any, Optional, Annotated
 from datetime import datetime, timedelta
 from decimal import Decimal
+import pytz
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_openai import ChatOpenAI
@@ -36,6 +40,7 @@ from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.news_api import NewsAPI
 from src.messaging.message_manager import MessageManager
+from src.events.event_system import event_system
 from src.models.trading_models import (
     Order, Portfolio, TradingDecision, OrderSide, OrderType, 
     TimeInForce, Position
@@ -88,6 +93,7 @@ class LLMPortfolioAgent(WorkflowBase):
         super().__init__(broker_api, market_data_api, news_api, message_manager)
         
         self.llm = create_llm_client()
+        self.event_system = event_system  # 用于LLM自主调度
         
         # 创建tools
         self.tools = self._create_tools()
@@ -105,11 +111,11 @@ class LLMPortfolioAgent(WorkflowBase):
         self.analysis_history = []
         self.last_analysis_time = None
         
-        logger.info("LLM Portfolio Agent 已初始化（完全由LLM驱动）")
+        logger.info("LLM Portfolio Agent 已初始化（完全由LLM驱动，支持自主调度）")
     
     def _get_system_prompt(self) -> str:
         """获取系统提示"""
-        return f"""你是一位专业的私募投资组合经理，负责管理美股以及ETF投资组合，争取达到sharpe ratio 2以上。
+        return f"""你是一位专业的私募投资组合经理，负责管理美股以及ETF投资组合，争取达到sharpe ratio 3以上。
 
 ## 你的职责
 1. 持续分析市场状况、新闻事件和组合配置
@@ -123,26 +129,30 @@ class LLMPortfolioAgent(WorkflowBase):
 - get_market_data: 获取市场概况（主要指数）
 - get_latest_news: 获取最新市场新闻
 - get_position_analysis: 分析当前持仓分布
-- get_stock_info: 获取个股详细信息
+- get_latest_price: 获取个股最新价格
+- get_historical_prices: 获取个股历史K线数据（可选时间框架：1Day/1Hour/15Min/5Min等）
 - rebalance_portfolio: 执行组合重新平衡（需要指定目标配置）
+- schedule_next_analysis: 安排下一次分析时间（你可以自主决定何时再次分析）
 
 ## 当前任务
 分析当前市场和组合状况，决定是否需要调整。如果需要调整，使用rebalance_portfolio工具执行。
 
 ## 重要提示
-- 你完全自主决策，根据市场情况灵活调整配置，做出理性、明智、专业的决策
+- 你可以持有多只股票/ETF，你完全自主决策，根据市场情况灵活调整配置，做出理性、明智、专业的决策
 - 注意分仓，避免单票梭哈，只做主升不做调整
 - 杠杆ETF要考虑磨损，非特殊情况不要长期持有，但合适的使用可以带来高收益
 - 重点关注美联储的消息，科技公司的消息，以及重大新闻事件
-- 你可以持有2-10只股票/ETF，具体数量由你决定
 - 重点关注科技公司、金融公司和黄金，也可以思考如何对冲风险
-- 不用考虑调仓对市场的影响，你的资金没那么多
 - **如果rebalance_portfolio返回market_open=false，说明市场休市，立即停止所有工具调用，只返回"市场休市，分析暂停"**
+
+## 自主调度
+- 分析完成后，如有需要，你可以使用schedule_next_analysis安排下一次分析时间
+- 例如：预期有重要新闻（如FOMC会议、财报发布），可以提前安排分析，市场波动剧烈，可以安排更频繁的检查
+- 你可以根据市场情况和自己的判断，灵活安排下一次分析的时间
 
 ## 现金仓位管理
 - **重要**: 调用rebalance_portfolio时，只指定股票/ETF的目标百分比，不要包含"CASH"或"现金"，因为可能会出现混淆
 - 百分比总和可以小于100%，剩余部分会自动保留为现金
-- 如果想全仓，就让百分比总和接近100%；如果想保留现金，就让总和小于100%
 - 可以根据市场情况灵活调整现金比例，如市场不确定时可以增加现金占比
 """
     
@@ -284,26 +294,22 @@ class LLMPortfolioAgent(WorkflowBase):
                 return f"错误: {str(e)}"
         
         @tool
-        async def get_stock_info(symbol: str) -> str:
+        async def get_latest_price(symbol: str) -> str:
             """
-            获取个股详细信息
+            获取个股最新价格
             
             Args:
                 symbol: 股票代码，如 AAPL
             """
             try:
-                await self.message_manager.send_message(f"🔎 正在查询 {symbol} 信息...", "info")
+                await self.message_manager.send_message(f"🔎 正在查询 {symbol} 最新价格...", "info")
                 
                 # 获取最新价格
                 price_data = await self.market_data_api.get_latest_price(symbol)
                 
-                # 获取股票信息
-                info = await self.market_data_api.get_symbol_info(symbol)
-                
                 result = {
                     "symbol": symbol,
-                    "price_data": price_data if price_data else "无法获取",
-                    "info": info if info else "无法获取"
+                    "latest_price": price_data if price_data else "无法获取"
                 }
                 
                 if price_data:
@@ -314,8 +320,67 @@ class LLMPortfolioAgent(WorkflowBase):
                 
                 return json.dumps(result, indent=2, ensure_ascii=False)
             except Exception as e:
-                logger.error(f"获取股票信息失败 {symbol}: {e}")
+                logger.error(f"获取最新价格失败 {symbol}: {e}")
                 return f"错误: {str(e)}"
+        
+        @tool
+        async def get_historical_prices(
+            symbol: str,
+            timeframe: str = "1Day",
+            limit: int = 100
+        ) -> str:
+            """
+            获取个股历史价格数据（支持自定义时间框架）
+            
+            Args:
+                symbol: 股票代码，如 AAPL, MSFT, SPY, QQQ
+                timeframe: 时间框架，可选值："1Day", "1Hour", "30Min", "15Min", "5Min", "1Min", "1Week", "1Month"
+                limit: 返回的K线数量，默认100条
+            
+            Returns:
+                历史价格数据的JSON字符串，包含时间戳、ohlcv
+            """
+            try:
+                # 参数验证
+                if limit < 1 or limit > 1000:
+                    return "错误: limit必须在1-1000之间"
+                
+                valid_timeframes = ["1Min", "5Min", "15Min", "30Min", "1Hour", "1Day", "1Week", "1Month"]
+                if timeframe not in valid_timeframes:
+                    return f"错误: timeframe必须是以下之一: {', '.join(valid_timeframes)}"
+                
+                await self.message_manager.send_message(
+                    f"📈 正在获取 {symbol} 历史数据 ({limit}条, {timeframe})...",
+                    "info"
+                )
+                
+                # 使用broker API获取市场数据
+                prices = await self.broker_api.get_market_data(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    limit=limit
+                )
+                
+                if not prices:
+                    await self.message_manager.send_message(
+                        f"⚠️ 无法获取 {symbol} 的历史数据",
+                        "warning"
+                    )
+                    return json.dumps({
+                        "success": False,
+                        "message": f"无法获取{symbol}的历史数据",
+                        "symbol": symbol,
+                        "timeframe": timeframe,
+                        "limit": limit
+                    }, indent=2, ensure_ascii=False)
+                return json.dumps(prices, indent=2, ensure_ascii=False)
+                
+                
+            except Exception as e:
+                logger.error(f"获取历史价格失败 {symbol}: {e}")
+                error_msg = f"错误: {str(e)}"
+                await self.message_manager.send_error(error_msg, f"获取{symbol}历史数据")
+                return error_msg
         
         @tool
         async def rebalance_portfolio(
@@ -425,13 +490,66 @@ class LLMPortfolioAgent(WorkflowBase):
                 await self.message_manager.send_error(error_msg, "重新平衡")
                 return error_msg
         
+        @tool
+        async def schedule_next_analysis(
+            hours_from_now: float,
+            reason: str,
+            priority: int = 0
+        ) -> str:
+            """
+            安排下一次组合分析时间（LLM自主调度）
+            
+            Args:
+                hours_from_now: 多少小时后执行，可以是小数（如0.5表示30分钟，2.5表示2.5小时）
+                reason: 安排原因，例如"预期FOMC会议结果公布"、"等待财报发布"、"市场波动监控"等
+                priority: 优先级（0-10，数字越小优先级越高），默认0为普通优先级
+            
+            Returns:
+                调度结果
+            """
+            try:
+                # 计算执行时间 (使用UTC时区以避免timezone比较问题)
+                scheduled_time = datetime.now(pytz.UTC) + timedelta(hours=hours_from_now)
+                
+                # 通知
+                await self.message_manager.send_message(
+                    f"⏰ **LLM自主调度**\n\n"
+                    f"安排时间: {scheduled_time.strftime('%Y-%m-%d %H:%M:%S UTC')}\n"
+                    f"距离现在: {hours_from_now:.1f}小时\n"
+                    f"原因: {reason}\n"
+                    f"优先级: {priority}",
+                    "info"
+                )
+                
+                # 发布事件
+                await self.event_system.schedule_next_analysis(
+                    scheduled_time=scheduled_time,
+                    reason=reason,
+                    priority=priority,
+                    context={"scheduled_by": "llm_agent"}
+                )
+                
+                return json.dumps({
+                    "success": True,
+                    "scheduled_time": scheduled_time.isoformat(),
+                    "hours_from_now": hours_from_now,
+                    "reason": reason,
+                    "message": f"已安排{hours_from_now:.1f}小时后的分析"
+                }, indent=2, ensure_ascii=False)
+                
+            except Exception as e:
+                logger.error(f"安排下一次分析失败: {e}")
+                return f"错误: {str(e)}"
+        
         return [
             get_portfolio_status,
             get_market_data,
             get_latest_news,
             get_position_analysis,
-            get_stock_info,
-            rebalance_portfolio
+            get_latest_price,
+            get_historical_prices,
+            rebalance_portfolio,
+            schedule_next_analysis
         ]
     
     async def _calculate_rebalance_trades(
@@ -620,8 +738,6 @@ class LLMPortfolioAgent(WorkflowBase):
                 "info"
             )
             
-            # 让LLM agent运行（它会自主使用tools）
-            # 在messages中加入SystemMessage和HumanMessage
             result = await self.agent.ainvoke({
                 "messages": [
                     SystemMessage(content=self.system_prompt),
@@ -714,6 +830,7 @@ class LLMPortfolioAgent(WorkflowBase):
     
     async def gather_data(self) -> Dict[str, Any]:
         """收集数据（LLM会通过tools自己获取）"""
+        # TODO: Deprecate this method, current align with abstract class
         return {}
     
     async def make_decision(self, data: Dict[str, Any]) -> Optional[TradingDecision]:

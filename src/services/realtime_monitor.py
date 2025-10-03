@@ -285,7 +285,7 @@ class RealtimeMarketMonitor:
             logger.error(f"检查触发器时出错: {e}")
     
     async def _trigger_rebalance(self, reason: str, details: Dict[str, Any]):
-        """触发重新平衡"""
+        """触发重新平衡 - 通过事件系统"""
         try:
             # 检查冷却期
             if self.last_rebalance_trigger:
@@ -294,7 +294,7 @@ class RealtimeMarketMonitor:
                     logger.info(f"重新平衡冷却中（剩余{self.REBALANCE_COOLDOWN - elapsed:.0f}秒）")
                     return
             
-            logger.warning(f"触发重新平衡: {reason} - {details}")
+            logger.warning(f"实时监控触发重新平衡: {reason} - {details}")
             
             # 记录触发
             self.last_rebalance_trigger = datetime.now()
@@ -304,32 +304,12 @@ class RealtimeMarketMonitor:
                 "details": details
             })
             
-            # 调用trading_system执行重新平衡
-            if self.trading_system:
-                # 构建上下文
-                context = {
-                    "trigger": reason,
-                    "timestamp": datetime.now().isoformat()
-                }
-                
-                if reason == "breaking_news":
-                    context["news_event"] = details
-                elif reason in ["price_change", "high_volatility"]:
-                    context["market_event"] = details
-                
-                # 如果使用portfolio management workflow，触发它
-                if hasattr(self.trading_system, 'trading_workflow'):
-                    workflow_type = self.trading_system.trading_workflow.get_workflow_type()
-                    if workflow_type in ["balanced_portfolio", "llm_portfolio"]:
-                        # 直接调用portfolio workflow
-                        asyncio.create_task(
-                            self.trading_system.trading_workflow.run_workflow(context)
-                        )
-                    else:
-                        # 使用通用的manual_analysis
-                        asyncio.create_task(
-                            self.trading_system.run_manual_analysis()
-                        )
+            # 通过事件系统触发重新平衡
+            if self.trading_system and hasattr(self.trading_system, 'event_system'):
+                await self.trading_system.event_system.trigger_realtime_rebalance(
+                    reason=reason,
+                    details=details
+                )
             
         except Exception as e:
             logger.error(f"触发重新平衡失败: {e}")

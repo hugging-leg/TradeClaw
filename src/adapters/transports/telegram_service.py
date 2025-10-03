@@ -838,14 +838,21 @@ class TelegramService(MessageTransport):
 
 🏃 *Running*: {("✅ Yes" if status.get('status') == 'running' else "❌ No")}
 💰 *Trading Enabled*: {("✅ Yes" if status.get('trading_enabled', False) else "❌ No")}
-🏪 *Market Open*: {("✅ Yes" if status.get('market_open', False) else "❌ No")}"""
+🏪 *Market Open*: {("✅ Yes" if status.get('market_open', False) else "❌ No")}
+🤖 *Workflow*: {status.get('workflow_type', 'N/A')}"""
             
-            # Add scheduler status
-            scheduler_info = status.get('scheduler', {})
-            if scheduler_info:
+            # Add event system status
+            event_status = status.get('event_system', {})
+            if event_status:
+                queue_size = event_status.get('queue_size', 0)
                 status_text += f"""
-📅 *Scheduler*: {("✅ Running" if scheduler_info.get('actually_running', False) else "❌ Stopped")}
-📋 *Scheduled Jobs*: {scheduler_info.get('total_jobs', 0)}"""
+📋 *Event Queue*: {queue_size} pending"""
+            
+            # Add realtime monitoring status if enabled
+            monitor_status = status.get('realtime_monitoring')
+            if monitor_status and isinstance(monitor_status, dict):
+                status_text += f"""
+📡 *Realtime Monitor*: {("✅ Active" if monitor_status.get('is_monitoring', False) else "❌ Inactive")}"""
             
             status_text += """
 

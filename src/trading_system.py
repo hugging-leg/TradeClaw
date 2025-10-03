@@ -3,8 +3,7 @@ import logging
 from typing import Dict, List, Any, Optional, Set
 from datetime import datetime, timedelta
 from decimal import Decimal
-
-# No need to import adapters - factory handles lazy loading
+import pytz
 
 from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
@@ -13,7 +12,6 @@ from src.messaging.message_manager import MessageManager
 from src.interfaces.factory import get_broker_api, get_market_data_api, get_news_api, MessageTransportFactory
 from src.events.event_system import EventSystem, event_system
 from src.agents.workflow_factory import WorkflowFactory, validate_workflow_config
-from src.scheduler.trading_scheduler import TradingScheduler
 from src.services.realtime_monitor import RealtimeMarketMonitor
 from src.models.trading_models import (
     Order, Portfolio, TradingEvent, OrderSide, OrderType, 
@@ -35,7 +33,6 @@ class TradingSystem:
         self.news_api = get_news_api()
         
         # Initialize message manager with transport
-        # Create transport using factory
         transport = MessageTransportFactory.create_message_transport(trading_system=self)
         transport._needs_async_init = True
         self.message_manager = MessageManager(transport=transport)
@@ -55,8 +52,8 @@ class TradingSystem:
         self.trading_workflow = WorkflowFactory.create_workflow(
             message_manager=self.message_manager
         )
-        self.scheduler = TradingScheduler(trading_system=self)
         self.realtime_monitor = RealtimeMarketMonitor(trading_system=self)
+        self.timezone = pytz.timezone('US/Eastern')  # Market timezone
         
         # Log workflow type being used
         logger.info(f"Initialized with {self.trading_workflow.get_workflow_type()} workflow")
@@ -85,25 +82,27 @@ class TradingSystem:
             'last_update': None
         }
         
+        # Scheduling intervals (in minutes) - configurable via settings
+        self.portfolio_check_interval = settings.portfolio_check_interval
+        self.risk_check_interval = settings.risk_check_interval
+        
         # Setup event handlers
         self._setup_event_handlers()
         
     def _setup_event_handlers(self):
-        """Setup event handlers for the trading system"""
+        """Setup event handlers for workflow triggers"""
         
-        # Order event handlers
-        self.event_system.register_handler("order_created", self._handle_order_created)
-        self.event_system.register_handler("order_filled", self._handle_order_filled)
-        self.event_system.register_handler("order_canceled", self._handle_order_canceled)
-        self.event_system.register_handler("order_rejected", self._handle_order_rejected)
+        # Workflow trigger event handlers
+        self.event_system.register_handler("trigger_daily_rebalance", self._handle_daily_rebalance_trigger)
+        self.event_system.register_handler("trigger_realtime_rebalance", self._handle_realtime_rebalance_trigger)
+        self.event_system.register_handler("trigger_manual_analysis", self._handle_manual_analysis_trigger)
+        self.event_system.register_handler("trigger_portfolio_check", self._handle_portfolio_check_trigger)
+        self.event_system.register_handler("trigger_risk_check", self._handle_risk_check_trigger)
+        self.event_system.register_handler("trigger_eod_analysis", self._handle_eod_analysis_trigger)
         
-        # Portfolio event handlers
-        self.event_system.register_handler("portfolio_updated", self._handle_portfolio_updated)
-        
-        # System event handlers
+        # System state event handlers
         self.event_system.register_handler("system_started", self._handle_system_started)
         self.event_system.register_handler("system_stopped", self._handle_system_stopped)
-        self.event_system.register_handler("error", self._handle_error)
         
     def _track_operation(self, coro):
         """Track an async operation for graceful shutdown"""
@@ -146,12 +145,11 @@ class TradingSystem:
             # Start message manager processing
             await self.message_manager.start_processing()
             
-            # Start scheduler with force restart to ensure clean start
-            logger.info("Starting scheduler...")
-            self.scheduler.start(force_restart=True)
-            
             # Initialize daily stats
             await self._initialize_daily_stats()
+            
+            # Initialize scheduled events (self-perpetuating event chains)
+            await self._initialize_scheduled_events()
             
             # Start realtime monitoring if enabled
             if self.enable_realtime_monitoring:
@@ -214,9 +212,6 @@ class TradingSystem:
                         )
                     except asyncio.TimeoutError:
                         logger.warning("Some operations did not respond to cancellation")
-            
-            # Stop scheduler
-            self.scheduler.stop()
             
             # Stop realtime monitoring
             if self.enable_realtime_monitoring and self.realtime_monitor.is_monitoring:
@@ -321,139 +316,227 @@ class TradingSystem:
     
 
     
+    async def _initialize_scheduled_events(self):
+        """
+        Initialize self-perpetuating event chains
+        
+        Publishes initial scheduled events. Each handler will schedule its next occurrence
+        after executing, creating self-perpetuating event chains.
+        """
+        try:
+            logger.info("Initializing scheduled events...")
+            
+            # Schedule next daily rebalance
+            next_rebalance = self._calculate_next_trading_day_time(
+                hour=9, minute=30  # Market open
+            )
+            await self.event_system.trigger_daily_rebalance(
+                scheduled_time=next_rebalance
+            )
+            logger.info(f"Next daily rebalance: {next_rebalance}")
+            
+            # Schedule next EOD analysis
+            next_eod = self._calculate_next_trading_day_time(
+                hour=16, minute=5  # After market close
+            )
+            await self.event_system.trigger_eod_analysis(
+                scheduled_time=next_eod
+            )
+            logger.info(f"Next EOD analysis: {next_eod}")
+            
+            # Schedule next portfolio check (configurable interval during market hours)
+            next_check = self._calculate_next_interval(self.portfolio_check_interval)
+            await self.event_system.trigger_portfolio_check(
+                scheduled_time=next_check
+            )
+            logger.info(f"Next portfolio check: {next_check} ({self.portfolio_check_interval}min interval)")
+            
+            # Schedule next risk check (configurable interval during market hours)
+            next_risk = self._calculate_next_interval(self.risk_check_interval)
+            await self.event_system.trigger_risk_check(
+                scheduled_time=next_risk
+            )
+            logger.info(f"Next risk check: {next_risk} ({self.risk_check_interval}min interval)")
+            
+            logger.info("Scheduled events initialized")
+            
+        except Exception as e:
+            logger.error(f"Error initializing scheduled events: {e}")
+    
+    def _calculate_next_trading_day_time(self, hour: int, minute: int) -> datetime:
+        """Calculate next occurrence of specific time on a trading day (Mon-Fri)"""
+        now = datetime.now(self.timezone)
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        
+        # If time has passed today, move to tomorrow
+        if target <= now:
+            target += timedelta(days=1)
+        
+        # Skip weekends
+        while target.weekday() >= 5:  # 5=Saturday, 6=Sunday
+            target += timedelta(days=1)
+        
+        return target
+    
+    def _calculate_next_interval(
+        self, 
+        interval_minutes: int, 
+        market_hours_only: bool = True,
+        market_open_hour: int = 9,
+        market_close_hour: int = 16
+    ) -> datetime:
+        """
+        Calculate next occurrence of a time interval during market hours
+        
+        Args:
+            interval_minutes: Interval in minutes (e.g., 15, 60)
+            market_hours_only: If True, only schedule during market hours
+            market_open_hour: Market opening hour (default 9 for 9:00 AM)
+            market_close_hour: Market closing hour (default 16 for 4:00 PM)
+        
+        Returns:
+            Next scheduled datetime (timezone-aware)
+        """
+        now = datetime.now(self.timezone)
+        
+        # Calculate next interval
+        if interval_minutes >= 60:
+            # For intervals >= 1 hour, align to hour boundaries
+            hours_interval = interval_minutes // 60
+            next_time = (now + timedelta(hours=hours_interval)).replace(
+                minute=30, second=0, microsecond=0
+            )
+        else:
+            # For sub-hour intervals, round up to next interval mark
+            minutes = ((now.minute // interval_minutes) + 1) * interval_minutes
+            if minutes >= 60:
+                next_time = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+            else:
+                next_time = now.replace(minute=minutes, second=0, microsecond=0)
+        
+        # If market hours only, check if within market hours
+        if market_hours_only:
+            # If outside market hours, move to next market day opening
+            if next_time.hour < market_open_hour or next_time.hour >= market_close_hour:
+                return self._calculate_next_trading_day_time(market_open_hour, 30)
+            
+            # Skip weekends
+            while next_time.weekday() >= 5:
+                next_time = self._calculate_next_trading_day_time(market_open_hour, 30)
+        else:
+            # Skip weekends even if not market hours only
+            while next_time.weekday() >= 5:
+                next_time += timedelta(days=1)
+        
+        return next_time
+    
     async def run_daily_rebalance(self):
-        """Run daily portfolio rebalancing"""
+        """Execute daily portfolio rebalancing (called by event handler)"""
         try:
             if not self.is_trading_enabled:
-                logger.info("Trading is disabled, skipping rebalancing")
+                logger.info("Trading disabled, skipping rebalance")
                 return
             
-            logger.info("Starting daily rebalancing workflow")
+            logger.info("Starting daily rebalance workflow")
             
-            # Run the trading workflow
+            # Run trading workflow
             result = await self.trading_workflow.run_workflow({
                 "trigger": "daily_rebalance",
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now(self.timezone).isoformat()
             })
             
-            # Extract decision from workflow result
+            # Extract decision if any
             decision = None
             if isinstance(result, dict):
                 decision = result.get('decision')
             else:
-                # Handle legacy TradingState objects
                 decision = getattr(result, 'decision', None)
             
-            # Update daily stats if trade was executed
+            # Update daily stats
             if decision and hasattr(decision, 'action') and decision.action != "HOLD":
                 self.daily_stats['trades_executed'] += 1
             
-            # Send rebalancing completed event
-            decision_action = decision.action.value if (decision and hasattr(decision, 'action') and hasattr(decision.action, 'value')) else 'HOLD'
-            await self.event_system.publish_system_event(
-                "daily_rebalance_completed",
-                f"Daily rebalancing completed. Decision: {decision_action}"
-            )
-            
-            logger.info("Daily rebalancing completed")
+            logger.info("Daily rebalance completed")
             
         except Exception as e:
-            logger.error(f"Error in daily rebalancing: {e}")
-            await self.event_system.publish_system_event(
-                "daily_rebalance_error",
-                f"Error in daily rebalancing: {e}",
-                "error"
-            )
+            logger.error(f"Daily rebalance failed: {e}")
     
     async def run_manual_analysis(self):
-        """Manually trigger the LLM trading workflow"""
+        """Manually trigger LLM trading workflow (called by event handler)"""
         try:
             if not self.is_trading_enabled:
-                logger.info("Trading is disabled, skipping manual analysis")
+                logger.info("Trading disabled, skipping manual analysis")
                 return {
                     "success": False,
-                    "message": "Trading is currently disabled"
+                    "message": "Trading currently disabled"
                 }
             
             if self.is_shutting_down:
-                logger.info("System is shutting down, skipping manual analysis")
+                logger.info("System shutting down, skipping manual analysis")
                 return {
                     "success": False,
-                    "message": "System is shutting down"
+                    "message": "System shutting down"
                 }
             
             logger.info("Starting manual LLM trading analysis")
             
-            # Create a cancellation-safe workflow execution
+            # Create cancellable workflow execution
             async def safe_workflow_execution():
                 try:
-                    # Run the trading workflow
                     result = await self.trading_workflow.run_workflow({
                         "trigger": "manual_analysis",
-                        "timestamp": datetime.now().isoformat()
+                        "timestamp": datetime.now(self.timezone).isoformat()
                     })
                     return result
                 except asyncio.CancelledError:
                     logger.info("Manual analysis cancelled due to system shutdown")
                     raise
                 except Exception as e:
-                    logger.error(f"Error in workflow execution: {e}")
+                    logger.error(f"Workflow execution failed: {e}")
                     raise
             
-            # Track the operation for graceful shutdown
+            # Track operation for graceful shutdown
             operation_task = self._track_operation(safe_workflow_execution())
             
             try:
                 result = await operation_task
             except asyncio.CancelledError:
-                logger.info("Manual analysis was cancelled")
+                logger.info("Manual analysis cancelled")
                 return {
                     "success": False,
-                    "message": "Analysis was cancelled due to system shutdown"
+                    "message": "Analysis cancelled due to system shutdown"
                 }
             
-            # Handle both dict and TradingState object returns
+            # Handle dict and TradingState object returns
             decision = None
             if hasattr(result, 'decision'):
                 decision = result.decision
             elif isinstance(result, dict) and 'decision' in result:
                 decision = result['decision']
             
-            # Update daily stats if trade was executed
+            # Update daily stats
             if decision and hasattr(decision, 'action') and decision.action != "HOLD":
                 self.daily_stats['trades_executed'] += 1
-            
-            # Send manual analysis completed event
-            decision_action = decision.action if (decision and hasattr(decision, 'action')) else 'HOLD'
-            await self.event_system.publish_system_event(
-                "manual_analysis_completed",
-                f"Manual analysis completed. Decision: {decision_action}"
-            )
             
             logger.info("Manual analysis completed")
             
             return {
                 "success": True,
                 "result": result,
-                "message": f"Analysis completed. Decision: {decision_action}"
+                "message": "Analysis completed"
             }
             
         except asyncio.CancelledError:
             logger.info("Manual analysis cancelled due to system shutdown")
             return {
                 "success": False,
-                "message": "Analysis was cancelled due to system shutdown"
+                "message": "Analysis cancelled due to system shutdown"
             }
         except Exception as e:
-            logger.error(f"Error in manual analysis: {e}")
-            await self.event_system.publish_system_event(
-                "manual_analysis_error",
-                f"Error in manual analysis: {e}",
-                "error"
-            )
+            logger.error(f"Manual analysis failed: {e}")
             return {
                 "success": False,
-                "message": f"Error during analysis: {str(e)}"
+                "message": f"Analysis error: {str(e)}"
             }
     
     async def run_risk_checks(self):
@@ -482,7 +565,7 @@ class TradingSystem:
             portfolio = await self.get_portfolio()
             
             # Update daily stats
-            self.daily_stats['last_update'] = datetime.now()
+            self.daily_stats['last_update'] = datetime.now(self.timezone)
             if self.daily_stats['start_equity'] is None:
                 self.daily_stats['start_equity'] = portfolio.equity
             
@@ -527,7 +610,7 @@ End of Day Summary:
             portfolio = await self.broker_api.get_portfolio()
             if portfolio is None:
                 raise Exception("Failed to get portfolio from broker API")
-            self.last_portfolio_update = datetime.now()
+            self.last_portfolio_update = datetime.now(self.timezone)
             return portfolio
         except Exception as e:
             logger.error(f"Error getting portfolio: {e}")
@@ -557,13 +640,13 @@ End of Day Summary:
             portfolio = await self.get_portfolio()
             active_orders = await self.get_active_orders()
             
-            # Get scheduler status
-            scheduler_status = self.scheduler.get_schedule_status()
-            
             # Get realtime monitor status
             monitor_status = None
             if self.enable_realtime_monitoring:
                 monitor_status = self.realtime_monitor.get_status()
+            
+            # Get event system status
+            event_status = self.event_system.get_status()
             
             return {
                 "status": "running" if self.is_running else "stopped",
@@ -574,13 +657,8 @@ End of Day Summary:
                 "day_pnl": str(portfolio.day_pnl),
                 "active_orders": len(active_orders),
                 "positions": len(portfolio.positions),
-                "last_update": datetime.now().isoformat(),
-                "scheduler": {
-                    "is_running": scheduler_status.get("is_running", False),
-                    "actually_running": scheduler_status.get("actually_running", False),
-                    "total_jobs": scheduler_status.get("total_jobs", 0),
-                    "next_run": scheduler_status.get("next_run")
-                },
+                "last_update": datetime.now(self.timezone).isoformat(),
+                "event_system": event_status,  # Event system status with queue size
                 "realtime_monitoring": monitor_status
             }
         except Exception as e:
@@ -594,71 +672,134 @@ End of Day Summary:
         except Exception as e:
             logger.error(f"Error sending portfolio alert: {e}")
     
-    # Event handlers
-    async def _handle_order_created(self, event: TradingEvent):
-        """Handle order created event"""
+    def _should_alert_portfolio_change(self, portfolio: Portfolio) -> bool:
+        """Check if portfolio change warrants an alert"""
         try:
-            if event.data and 'order' in event.data:
-                order = event.data['order']
-                await self.message_manager.send_order_notification(order, "created")
-                
-                # Log order creation
-                logger.info(f"Order created: {order.symbol} {order.side.value} {order.quantity}")
-                
+            # Alert if day P&L exceeds 5% of equity
+            if abs(portfolio.day_pnl) > (portfolio.equity * Decimal('0.05')):
+                return True
+            
+            # Alert if any position has unrealized loss > 10%
+            for position in portfolio.positions:
+                if position.unrealized_pnl_percentage < Decimal('-0.1'):
+                    return True
+            
+            return False
+            
         except Exception as e:
-            logger.error(f"Error handling order created event: {e}")
+            logger.error(f"Error checking portfolio change: {e}")
+            return False
     
-    async def _handle_order_filled(self, event: TradingEvent):
-        """Handle order filled event"""
-        try:
-            if event.data and 'order' in event.data:
-                order = event.data['order']
-                await self.message_manager.send_order_notification(order, "filled")
-                
-                # Update portfolio after fill
-                await self._update_portfolio()
-                
-                # Log order fill
-                logger.info(f"Order filled: {order.symbol} {order.side.value} {order.quantity}")
-                
-        except Exception as e:
-            logger.error(f"Error handling order filled event: {e}")
+    # === Workflow Trigger Event Handlers (Self-Perpetuating) ===
     
-    async def _handle_order_canceled(self, event: TradingEvent):
-        """Handle order canceled event"""
+    async def _handle_daily_rebalance_trigger(self, event: TradingEvent):
+        """Handle daily rebalance trigger - schedules next occurrence after execution"""
         try:
-            if event.data and 'order' in event.data:
-                order = event.data['order']
-                await self.message_manager.send_order_notification(order, "canceled")
-                
-                # Log order cancellation
-                logger.info(f"Order canceled: {order.symbol} {order.side.value} {order.quantity}")
-                
+            logger.info("Received daily rebalance trigger")
+            await self.run_daily_rebalance()
+            
+            # Schedule next daily rebalance (self-perpetuating)
+            if self.is_running:  # Only reschedule if system still running
+                next_rebalance = self._calculate_next_trading_day_time(hour=9, minute=30)
+                await self.event_system.trigger_daily_rebalance(
+                    scheduled_time=next_rebalance
+                )
+                logger.debug(f"Next daily rebalance scheduled: {next_rebalance}")
         except Exception as e:
-            logger.error(f"Error handling order canceled event: {e}")
+            logger.error(f"Daily rebalance trigger handling failed: {e}")
     
-    async def _handle_order_rejected(self, event: TradingEvent):
-        """Handle order rejected event"""
+    async def _handle_realtime_rebalance_trigger(self, event: TradingEvent):
+        """Handle realtime rebalance trigger (price volatility, news, etc.)"""
         try:
-            if event.data and 'order' in event.data:
-                order = event.data['order']
-                await self.message_manager.send_order_notification(order, "rejected")
-                
-                # Log order rejection
-                logger.error(f"Order rejected: {order.symbol} {order.side.value} {order.quantity}")
-                
+            reason = event.data.get("reason", "unknown") if event.data else "unknown"
+            details = event.data.get("details", {}) if event.data else {}
+            logger.info(f"Received realtime rebalance trigger: {reason}")
+            
+            # Build context
+            context = {
+                "trigger": "realtime_event",
+                "reason": reason,
+                "details": details,
+                "timestamp": datetime.now(self.timezone).isoformat()
+            }
+            
+            # Run workflow
+            if hasattr(self, 'trading_workflow'):
+                workflow_type = self.trading_workflow.get_workflow_type()
+                if workflow_type in ["balanced_portfolio", "llm_portfolio"]:
+                    await self.trading_workflow.run_workflow(context)
+                else:
+                    await self.run_manual_analysis()
+            
         except Exception as e:
-            logger.error(f"Error handling order rejected event: {e}")
+            logger.error(f"Realtime rebalance trigger handling failed: {e}")
     
-    async def _handle_portfolio_updated(self, event: TradingEvent):
-        """Handle portfolio updated event"""
+    async def _handle_manual_analysis_trigger(self, event: TradingEvent):
+        """Handle manual analysis trigger (does not auto-reschedule)"""
         try:
-            if event.data and 'portfolio' in event.data:
-                portfolio = event.data['portfolio']
-                await self.message_manager.send_portfolio_update(portfolio)
+            logger.info("Received manual analysis trigger")
+            await self.run_manual_analysis()
+        except Exception as e:
+            logger.error(f"Manual analysis trigger handling failed: {e}")
+    
+    async def _handle_portfolio_check_trigger(self, event: TradingEvent):
+        """Handle portfolio check trigger - schedules next check at configured interval"""
+        try:
+            logger.debug("Received portfolio check trigger")
+            
+            if not await self.is_market_open():
+                logger.debug("Market closed, skipping portfolio check")
+            else:
+                portfolio = await self.get_portfolio()
+                if self._should_alert_portfolio_change(portfolio):
+                    await self.send_portfolio_alert(portfolio)
+            
+            # Schedule next portfolio check (self-perpetuating)
+            if self.is_running:
+                next_check = self._calculate_next_interval(self.portfolio_check_interval)
+                await self.event_system.trigger_portfolio_check(
+                    scheduled_time=next_check
+                )
+                logger.debug(f"Next portfolio check scheduled: {next_check} ({self.portfolio_check_interval}min)")
                 
         except Exception as e:
-            logger.error(f"Error handling portfolio updated event: {e}")
+            logger.error(f"Portfolio check trigger handling failed: {e}")
+    
+    async def _handle_risk_check_trigger(self, event: TradingEvent):
+        """Handle risk check trigger - schedules next check at configured interval"""
+        try:
+            logger.debug("Received risk check trigger")
+            
+            if await self.is_market_open():
+                await self.run_risk_checks()
+            
+            # Schedule next risk check (self-perpetuating)
+            if self.is_running:
+                next_check = self._calculate_next_interval(self.risk_check_interval)
+                await self.event_system.trigger_risk_check(
+                    scheduled_time=next_check
+                )
+                logger.debug(f"Next risk check scheduled: {next_check} ({self.risk_check_interval}min)")
+                
+        except Exception as e:
+            logger.error(f"Risk check trigger handling failed: {e}")
+    
+    async def _handle_eod_analysis_trigger(self, event: TradingEvent):
+        """Handle EOD analysis trigger - schedules next trading day"""
+        try:
+            logger.info("Received EOD analysis trigger")
+            await self.run_eod_analysis()
+            
+            # Schedule next EOD analysis (self-perpetuating)
+            if self.is_running:
+                next_eod = self._calculate_next_trading_day_time(hour=16, minute=5)
+                await self.event_system.trigger_eod_analysis(
+                    scheduled_time=next_eod
+                )
+                logger.debug(f"Next EOD analysis scheduled: {next_eod}")
+                
+        except Exception as e:
+            logger.error(f"EOD analysis trigger handling failed: {e}")
     
     async def _handle_system_started(self, event: TradingEvent):
         """Handle system started event"""
@@ -708,7 +849,7 @@ End of Day Summary:
         try:
             portfolio = await self.get_portfolio()
             self.daily_stats['start_equity'] = portfolio.equity
-            self.daily_stats['last_update'] = datetime.now()
+            self.daily_stats['last_update'] = datetime.now(self.timezone)
         except Exception as e:
             logger.error(f"Error initializing daily stats: {e}")
     

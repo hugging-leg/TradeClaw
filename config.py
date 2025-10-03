@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     stop_loss_percentage: float = 0.05
     take_profit_percentage: float = 0.15
     
+    # Scheduling Intervals (in minutes)
+    portfolio_check_interval: int = 60  # Portfolio check interval (default: hourly)
+    risk_check_interval: int = 15  # Risk check interval (default: every 15 minutes)
+    
     # Environment
     environment: str = "development"
     log_level: str = "INFO"
