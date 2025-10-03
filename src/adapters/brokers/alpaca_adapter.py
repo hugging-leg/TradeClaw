@@ -260,9 +260,15 @@ class AlpacaBrokerAdapter(BrokerAPI):
             bars = self.data_client.get_stock_bars(request)
             market_data = []
             
+            # Check if symbol exists in response data
+            # Note: BarSet doesn't support 'in' operator, must check .data attribute
+            if not hasattr(bars, 'data') or symbol not in bars.data or not bars.data[symbol]:
+                logger.warning(f"No market data available for {symbol} (timeframe: {timeframe}, limit: {limit})")
+                return []
+            
             for bar in bars[symbol]:
                 market_data.append({
-                    "timestamp": bar.timestamp,
+                    "timestamp": bar.timestamp.isoformat() if hasattr(bar.timestamp, 'isoformat') else str(bar.timestamp),
                     "open": float(bar.open),
                     "high": float(bar.high),
                     "low": float(bar.low),
