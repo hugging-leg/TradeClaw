@@ -326,14 +326,17 @@ class TradingSystem:
         try:
             logger.info("Initializing scheduled events...")
             
+            # Parse rebalance time from settings (format: "HH:MM")
+            rebalance_hour, rebalance_minute = self._parse_time_config(settings.rebalance_time)
+            
             # Schedule next daily rebalance
             next_rebalance = self._calculate_next_trading_day_time(
-                hour=9, minute=30  # Market open
+                hour=rebalance_hour, minute=rebalance_minute
             )
             await self.event_system.trigger_daily_rebalance(
                 scheduled_time=next_rebalance
             )
-            logger.info(f"Next daily rebalance: {next_rebalance}")
+            logger.info(f"Next daily rebalance: {next_rebalance} (configured: {settings.rebalance_time} ET)")
             
             # Schedule next EOD analysis
             next_eod = self._calculate_next_trading_day_time(
@@ -700,7 +703,8 @@ End of Day Summary:
             
             # Schedule next daily rebalance (self-perpetuating)
             if self.is_running:  # Only reschedule if system still running
-                next_rebalance = self._calculate_next_trading_day_time(hour=9, minute=30)
+                rebalance_hour, rebalance_minute = self._parse_time_config(settings.rebalance_time)
+                next_rebalance = self._calculate_next_trading_day_time(hour=rebalance_hour, minute=rebalance_minute)
                 await self.event_system.trigger_daily_rebalance(
                     scheduled_time=next_rebalance
                 )
@@ -844,6 +848,39 @@ End of Day Summary:
             logger.error(f"Error handling error event: {e}")
     
     # Helper methods
+    def _parse_time_config(self, time_str: str) -> tuple[int, int]:
+        """
+        Parse time configuration string in HH:MM format
+        
+        Args:
+            time_str: Time string in format "HH:MM" (e.g., "09:30", "16:05")
+        
+        Returns:
+            Tuple of (hour, minute)
+        
+        Raises:
+            ValueError: If time_str format is invalid
+        """
+        try:
+            parts = time_str.strip().split(":")
+            if len(parts) != 2:
+                raise ValueError(f"Invalid time format: {time_str}. Expected HH:MM")
+            
+            hour = int(parts[0])
+            minute = int(parts[1])
+            
+            if not (0 <= hour <= 23):
+                raise ValueError(f"Invalid hour: {hour}. Must be 0-23")
+            if not (0 <= minute <= 59):
+                raise ValueError(f"Invalid minute: {minute}. Must be 0-59")
+            
+            return hour, minute
+        except (ValueError, IndexError) as e:
+            logger.error(f"Error parsing time config '{time_str}': {e}")
+            # Fallback to market open time
+            logger.warning("Falling back to default time 09:30")
+            return 9, 30
+    
     async def _initialize_daily_stats(self):
         """Initialize daily statistics"""
         try:
