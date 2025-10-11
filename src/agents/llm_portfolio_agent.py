@@ -552,7 +552,7 @@ class LLMPortfolioAgent(WorkflowBase):
                 
                 status_emoji = "🟢" if is_open else "🔴"
                 await self.message_manager.send_message(
-                    f"{status_emoji} 市场状态: {result['status']}",
+                    f"{status_emoji} 市场状态: {'Open' if is_open else 'Closed'}",
                     "info"
                 )
                 
@@ -711,7 +711,7 @@ class LLMPortfolioAgent(WorkflowBase):
             Args:
                 hours_from_now: 多少小时后执行，可以是小数（如0.5表示30分钟，2.5表示2.5小时）
                 reason: 安排原因，例如"预期FOMC会议结果公布"、"等待财报发布"、"市场波动监控"等
-                priority: 优先级（0-10，数字越小优先级越高），默认0为普通优先级
+                priority: 优先级（-10-10，数字越小优先级越高），默认0为普通优先级
             
             Returns:
                 调度结果
@@ -1013,8 +1013,8 @@ class LLMPortfolioAgent(WorkflowBase):
     
     def _build_analysis_prompt(self, context: Dict[str, Any]) -> str:
         
-        # Stringify context
-        context_str = json.dumps(context, indent=2)
+        # Stringify context (use default=str to handle any non-serializable objects)
+        context_str = json.dumps(context, indent=2, ensure_ascii=False, default=str)
         prompt = f"请分析当前市场和组合状况。如有必要，可以调仓。Context: {context_str}"
         logger.info(f"Analysis prompt: {prompt}")
         

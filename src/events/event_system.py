@@ -199,20 +199,22 @@ class EventSystem:
             event_type: Type of event (trigger_workflow, enable_trading, query_status, etc.)
             data: Event data dictionary
             scheduled_time: When to execute (None = immediate)
-            priority: Event priority (higher = more urgent, default: 0)
+            priority: Event priority (lower number = higher priority, default: 0)
         
         Examples:
-            # Workflow trigger
+            # Normal priority workflow trigger
             await event_system.publish("trigger_workflow", {"trigger": "daily_rebalance"})
             
-            # Trading control
-            await event_system.publish("enable_trading", {"chat_id": "123"})
+            # High priority risk alert
+            from src.models.trading_models import EventPriority
+            await event_system.publish("trigger_workflow", 
+                                      {"trigger": "risk_alert"}, 
+                                      priority=EventPriority.HIGH)
             
-            # Query
-            await event_system.publish("query_status", {"chat_id": "123"})
-            
-            # Scheduled event
-            await event_system.publish("trigger_portfolio_check", scheduled_time=next_check)
+            # Low priority background check
+            await event_system.publish("trigger_portfolio_check", 
+                                      scheduled_time=next_check,
+                                      priority=EventPriority.LOW)
         """
         # Ensure data has timestamp
         event_data = data or {}

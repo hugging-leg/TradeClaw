@@ -77,6 +77,18 @@ class TradingSystem:
         self.last_portfolio_update = None
         self.active_orders = []
         
+        # Workflow execution tracking (for event throttling)
+        self.last_workflow_execution: Dict[str, datetime] = {}  # trigger -> last execution time
+        self.min_workflow_interval_minutes = 30  # Minimum interval between workflow executions
+        self.throttle_priority_threshold = -7
+        self.throttled_events: Dict[str, List[TradingEvent]] = {}  # trigger -> list of throttled events
+        
+        # Triggers that require throttling (only LLM self-scheduled for now)
+        self.throttled_triggers = {"llm_scheduled"}  # Set of triggers to throttle
+        
+        # Track pending throttle check events to avoid duplicates
+        self.pending_throttle_checks: Dict[str, bool] = {}  # trigger -> has_pending_check
+        
         
         # Performance tracking
         self.daily_stats = {
@@ -327,6 +339,18 @@ Ready to trade! 📊"""
             event_status = self.event_system.get_status()
             queue_size = event_status.get('queue_size', 0)
             
+            # Get throttle status
+            total_throttled = sum(len(events) for events in self.throttled_events.values())
+            throttle_details = []
+            if total_throttled > 0:
+                for trigger, events in self.throttled_events.items():
+                    if events:
+                        throttle_details.append(f"  • {trigger}: {len(events)} events")
+            
+            throttle_text = ""
+            if total_throttled > 0:
+                throttle_text = f"\n⏱️ **Throttled Events**: {total_throttled}\n" + "\n".join(throttle_details)
+            
             # Get realtime monitor status
             monitor_status_text = ""
             if self.enable_realtime_monitoring:
@@ -342,7 +366,7 @@ Ready to trade! 📊"""
 💰 **Trading Enabled**: {("✅ Yes" if self.is_trading_enabled else "❌ No")}
 🏪 **Market Open**: {("✅ Yes" if await self.is_market_open() else "❌ No")}
 🤖 **Workflow**: {self.trading_workflow.get_workflow_type()}
-📋 **Event Queue**: {queue_size} pending{monitor_status_text}
+📋 **Event Queue**: {queue_size} pending{throttle_text}{monitor_status_text}
 
 📈 **Portfolio Summary**:
 • Total Equity: ${float(portfolio.equity):,.2f}
@@ -474,17 +498,16 @@ Ready to trade! 📊"""
             
             logger.info(f"Starting workflow execution: {trigger}")
             
-            # Build context for workflow
-            context = {
-                "trigger": trigger,
-                "timestamp": datetime.now(self.timezone).isoformat()
-            }
+            # Use event.data directly as context (already contains all info)
+            context = event.data if (event and event.data) else {}
             
-            # Extract and merge context from event if available
-            if event and event.data:
-                # Merge historical context if present (contains reason, details, etc.)
-                if "context" in event.data:
-                    context.update(event.data["context"])
+            # Ensure trigger is set
+            if "trigger" not in context:
+                context["trigger"] = trigger
+            
+            # Ensure timestamp is set
+            if "timestamp" not in context:
+                context["timestamp"] = datetime.now(self.timezone).isoformat()
             
             # Execute workflow - all execution logic is in the workflow itself
             await self.trading_workflow.run_workflow(context)
@@ -609,9 +632,15 @@ End of Day Summary:
     
     async def _handle_workflow_trigger(self, event: TradingEvent):
         """
-        Unified workflow trigger handler
+        Unified workflow trigger handler with event throttling and merging
         
-        Handles all workflow triggers and manages auto-rescheduling based on trigger type:
+        Features:
+        - Throttles frequent workflow executions (minimum interval)
+        - Merges context from multiple pending events
+        - High-priority events bypass throttling
+        - Auto-rescheduling based on trigger type
+        
+        Handles all workflow triggers:
         - daily_rebalance: Auto-reschedules to next trading day
         - realtime_rebalance: One-time execution
         - manual_analysis: One-time execution
@@ -620,12 +649,122 @@ End of Day Summary:
         try:
             # Extract trigger type from event data
             trigger = event.data.get("trigger", "unknown") if event.data else "unknown"
-            logger.info(f"Received workflow trigger: {trigger}")
+            priority = event.priority if hasattr(event, 'priority') else 0
             
-            # Execute workflow with context from event
+            logger.info(f"Received workflow trigger: {trigger} (priority: {priority})")
+            
+            # === Event Throttling Logic ===
+            # Only throttle specific triggers (e.g., llm_scheduled)
+            # High-priority events (priority < 0) bypass throttling
+            should_throttle = trigger in self.throttled_triggers and priority >= self.throttle_priority_threshold
+            
+            if should_throttle:
+                current_time = datetime.now(pytz.UTC)
+                last_execution = self.last_workflow_execution.get(trigger)
+                
+                if last_execution:
+                    time_since_last = (current_time - last_execution).total_seconds() / 60  # minutes
+                    
+                    # Check if we're within minimum interval (TOO SOON)
+                    if time_since_last < self.min_workflow_interval_minutes:
+                        # Too soon! Store event in throttled_events, don't execute
+                        if trigger not in self.throttled_events:
+                            self.throttled_events[trigger] = []
+                        
+                        self.throttled_events[trigger].append(event)
+                        
+                        throttle_msg = (
+                            f"⏱️ **事件节流**\n\n"
+                            f"触发器: {trigger}\n"
+                            f"距上次执行: {time_since_last:.1f}分钟\n"
+                            f"最小间隔: {self.min_workflow_interval_minutes}分钟\n"
+                            f"已暂存事件数: {len(self.throttled_events[trigger])}\n\n"
+                            f"将在达到最小间隔后合并执行"
+                        )
+                        await self.message_manager.send_message(throttle_msg, "info")
+                        
+                        logger.info(
+                            f"⏱️ Workflow throttling: Last execution {time_since_last:.1f}min ago. "
+                            f"Storing event (total throttled: {len(self.throttled_events[trigger])}). "
+                            f"Will merge and execute when interval passes."
+                        )
+                        
+                        # Schedule a check event if not already pending
+                        if not self.pending_throttle_checks.get(trigger, False):
+                            check_time = last_execution + timedelta(minutes=self.min_workflow_interval_minutes)
+                            await self.event_system.publish(
+                                "trigger_workflow",
+                                {
+                                    "trigger": trigger,
+                                    "throttle_check": True  # Mark as throttle check event
+                                },
+                                scheduled_time=check_time
+                            )
+                            self.pending_throttle_checks[trigger] = True
+                            logger.info(f"Scheduled throttle check for {trigger} at {check_time.isoformat()}")
+                        
+                        # Don't execute now
+                        return
+                    
+                    # Time has passed! Check if this is a throttle check event or normal event
+                    throttled = self.throttled_events.get(trigger, [])
+                    is_check_event = event.data.get("throttle_check", False) if event.data else False
+                    
+                    if is_check_event:
+                        # This is a scheduled check event (no real data, just trigger)
+                        if not throttled:
+                            # No throttled events, nothing to do
+                            logger.info(f"Throttle check for {trigger}: no throttled events found")
+                            self.pending_throttle_checks[trigger] = False
+                            return
+                        
+                        # Execute throttled events only
+                        logger.info(f"📦 Throttle check triggered: merging {len(throttled)} throttled events")
+                        all_events = throttled
+                    else:
+                        # Normal event that arrived after interval - merge with throttled
+                        all_events = throttled + [event]  # Include current event
+                    
+                    if len(all_events) > 1:
+                        merge_msg = (
+                            f"📦 **事件合并执行**\n\n"
+                            f"触发器: {trigger}\n"
+                            f"合并事件数: {len(all_events)}\n"
+                            f"距上次执行: {time_since_last:.1f}分钟\n\n"
+                            f"正在合并所有暂存事件的数据..."
+                        )
+                        await self.message_manager.send_message(merge_msg, "info")
+                        
+                        logger.info(
+                            f"📦 Time interval met ({time_since_last:.1f}min >= {self.min_workflow_interval_minutes}min). "
+                            f"Merging {len(all_events)} events and executing once."
+                        )
+                        
+                        # Merge data from ALL events (dynamic key merging)
+                        merged_data = self._merge_event_data(all_events)
+                        event.data = merged_data
+                        
+                        # Clear throttled events and pending check flag
+                        self.throttled_events[trigger] = []
+                        self.pending_throttle_checks[trigger] = False
+                    else:
+                        logger.info(
+                            f"✅ Time interval met ({time_since_last:.1f}min >= {self.min_workflow_interval_minutes}min). "
+                            f"Executing single event."
+                        )
+                        self.pending_throttle_checks[trigger] = False
+            elif priority < self.throttle_priority_threshold:
+                logger.info(f"⚡ High-priority event (priority={priority}), bypassing throttling")
+            else:
+                logger.debug(f"📋 Trigger '{trigger}' not in throttled list, executing normally")
+            
+            # === Execute Workflow ===
             await self._execute_workflow(trigger=trigger, event=event)
             
-            # Auto-reschedule based on trigger type
+            # Update last execution time
+            self.last_workflow_execution[trigger] = datetime.now(pytz.UTC)
+            
+            # === Auto-reschedule based on trigger type ===
             if self.is_running and trigger == "daily_rebalance":
                 # Schedule next daily rebalance (self-perpetuating)
                 rebalance_hour, rebalance_minute = parse_time_config(settings.rebalance_time)
@@ -641,6 +780,45 @@ End of Day Summary:
             
         except Exception as e:
             logger.error(f"Workflow trigger handling failed: {e}")
+    
+    def _merge_event_data(self, events: List[TradingEvent]) -> Dict[str, Any]:
+        """
+        Simply merge data from multiple workflow events
+        
+        Strategy: For each key, collect all values into a list
+        
+        Args:
+            events: List of events to merge
+        
+        Returns:
+            Merged data dictionary with all values as lists
+        """
+        if not events:
+            return {}
+        
+        merged = {
+            "merged": True,
+            "merged_events_count": len(events)
+        }
+        
+        # Collect all keys from all events
+        all_keys = set()
+        for event in events:
+            if event.data:
+                all_keys.update(event.data.keys())
+        
+        # For each key, collect all values into a list
+        for key in all_keys:
+            values = []
+            for event in events:
+                if event.data and key in event.data:
+                    values.append(event.data[key])
+            
+            if values:
+                # Store as list if multiple values, single value if only one
+                merged[key] = values if len(values) > 1 else values[0]
+        
+        return merged
     
     async def _handle_portfolio_check_trigger(self, event: TradingEvent):
         """Handle portfolio check trigger - schedules next check at configured interval"""

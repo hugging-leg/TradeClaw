@@ -2,13 +2,30 @@ from datetime import datetime
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from decimal import Decimal
-from enum import Enum
+from enum import Enum, IntEnum
 import pytz
 
 
 def utc_now():
     """Get current UTC time (timezone-aware)"""
     return datetime.now(pytz.UTC)
+
+
+class EventPriority(IntEnum):
+    """
+    Event priority levels (lower number = higher priority)
+    
+    This follows Python PriorityQueue convention where smaller numbers
+    are dequeued first.
+    
+    Usage:
+        event_system.publish("trigger_workflow", data, priority=EventPriority.HIGH)
+    """
+    CRITICAL = -10    # Emergency/critical events (e.g., system failures)
+    HIGH = -5         # High priority (e.g., risk alerts)
+    NORMAL = 0        # Normal priority (default)
+    LOW = 5           # Low priority (e.g., routine checks)
+    BACKGROUND = 10   # Background tasks
 
 
 class OrderSide(str, Enum):
@@ -134,13 +151,19 @@ class TradingEvent(BaseModel):
     Events can be scheduled for future execution by setting scheduled_time.
     If scheduled_time is None, event executes immediately.
     All datetimes are timezone-aware (UTC) to avoid comparison issues.
+    
+    Priority Levels:
+    - Use EventPriority enum for semantic clarity
+    - Lower number = higher priority (Python PriorityQueue convention)
+    - Examples:
+        EventPriority.CRITICAL (-10) > EventPriority.HIGH (-5) > EventPriority.NORMAL (0)
     """
     event_type: str  # "trigger_daily_rebalance", "trigger_manual_analysis", etc.
     timestamp: datetime = Field(default_factory=utc_now)  # When event was created (UTC)
     scheduled_time: Optional[datetime] = None  # When event should execute (None = immediate)
     data: Dict[str, Any]
     processed: bool = False
-    priority: int = 0  # Lower number = higher priority (for events at same time)
+    priority: int = Field(default=0, description="Lower number = higher priority (use EventPriority enum)")
     
     def __lt__(self, other):
         """Compare events for priority queue ordering"""
