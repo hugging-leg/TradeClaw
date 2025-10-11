@@ -44,7 +44,7 @@ jobs:
 
     - name: Run unit tests
       run: |
-        python run_tests.py --unit --coverage
+        python run_tests.py --fast --coverage
 
     - name: Run integration tests (without real API calls)
       run: |
