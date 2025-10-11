@@ -154,13 +154,13 @@ class MessageTransportFactory:
     }
     
     @classmethod
-    def create_message_transport(cls, provider: Optional[str] = None, trading_system=None, **kwargs):
+    def create_message_transport(cls, provider: Optional[str] = None, event_system=None, **kwargs):
         """
         Create a message transport implementation.
         
         Args:
             provider: Optional provider name, defaults to config setting
-            trading_system: TradingSystem instance (if not provided, will create one)
+            event_system: EventSystem instance for publishing events
             **kwargs: Additional arguments passed to the transport constructor
             
         Returns:
@@ -182,7 +182,7 @@ class MessageTransportFactory:
             transport_class = getattr(module, class_name)
             
             logger.info(f"Creating {provider_name} message transport")
-            return transport_class(trading_system=trading_system, **kwargs)
+            return transport_class(event_system=event_system, **kwargs)
             
         except Exception as e:
             logger.error(f"Failed to create message transport: {e}")

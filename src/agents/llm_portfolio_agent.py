@@ -16,7 +16,7 @@ Tools提供给LLM：
 5. get_latest_price - 获取个股最新价格
 6. get_historical_prices - 获取历史K线数据（自定义时间框架和数量）
 7. rebalance_portfolio - 执行组合重新平衡
-8. schedule_next_analysis - 安排下一次分析时间（LLM自主调度）
+8. schedule_next_analysis - 安排下一次分析时间（LLM自主调度，发布workflow事件）
 """
 
 import asyncio
@@ -132,7 +132,7 @@ class LLMPortfolioAgent(WorkflowBase):
 - get_latest_price: 获取个股最新价格
 - get_historical_prices: 获取个股历史K线数据（可选时间框架：1Day/1Hour/15Min/5Min等）
 - rebalance_portfolio: 执行组合重新平衡（需要指定目标配置）
-- schedule_next_analysis: 安排下一次分析时间（你可以自主决定何时再次分析）
+- schedule_next_analysis: 安排下一次分析时间（你可以自主决定何时再次分析，将触发新的workflow执行）
 
 ## 当前任务
 分析当前市场和组合状况，决定是否需要调整。如果需要调整，使用rebalance_portfolio工具执行。
@@ -146,7 +146,7 @@ class LLMPortfolioAgent(WorkflowBase):
 - **如果rebalance_portfolio返回market_open=false，说明市场休市，立即停止所有工具调用，只返回"市场休市，分析暂停"**
 
 ## 自主调度
-- 分析完成后，如有需要，你可以使用schedule_next_analysis安排下一次分析时间
+- 分析完成后，如有需要，你可以使用schedule_next_analysis安排下一次分析时间（将作为workflow事件触发）
 - 例如：预期有重要新闻（如FOMC会议、财报发布），可以提前安排分析，市场波动剧烈，可以安排更频繁的检查
 - 每日例行分析默认开启，不需要手动安排。
 
@@ -522,12 +522,20 @@ class LLMPortfolioAgent(WorkflowBase):
                 )
                 
                 # 发布事件
-                await self.event_system.schedule_next_analysis(
+                await self.event_system.publish(
+                    "trigger_workflow",
+                    {
+                        "trigger": "llm_scheduled",
+                        "context": {
+                            "reason": reason,
+                            "scheduled_by": "llm_agent"
+                        }
+                    },
                     scheduled_time=scheduled_time,
-                    reason=reason,
-                    priority=priority,
-                    context={"scheduled_by": "llm_agent"}
+                    priority=priority
                 )
+                
+                logger.info(f"LLM Scheduled Analysis: {scheduled_time.isoformat()} - {reason}")
                 
                 return json.dumps({
                     "success": True,

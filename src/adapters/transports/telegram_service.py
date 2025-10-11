@@ -53,18 +53,18 @@ class TelegramService(MessageTransport):
     def __init__(self, 
                  bot_token: str = None, 
                  chat_id: str = None,
-                 trading_system=None):
+                 event_system=None):
         """
         Initialize Telegram service.
         
         Args:
             bot_token: Telegram bot token (defaults to settings)
             chat_id: Authorized chat ID (defaults to settings)
-            trading_system: Reference to TradingSystem instance
+            event_system: Reference to EventSystem instance for publishing events
         """
         self.bot_token = bot_token or settings.telegram_bot_token
         self.chat_id = chat_id or settings.telegram_chat_id
-        self.trading_system = trading_system
+        self.event_system = event_system
         self.instance_id = f"{self.bot_token}_{self.chat_id}"
         
         self.bot = None
@@ -86,8 +86,8 @@ class TelegramService(MessageTransport):
         
         # Command descriptions
         self.commands = {
-            'start': 'Start the trading system',
-            'stop': 'Stop the trading system',
+            'start': 'Enable trading (resume operations)',
+            'stop': 'Disable trading (pause operations)',
             'help': 'Show available commands',
             'status': 'Get trading system status',
             'portfolio': 'Get current portfolio summary',
@@ -184,6 +184,18 @@ class TelegramService(MessageTransport):
             # Register this instance
             async with self._instance_lock:
                 self._active_instances[self.instance_id] = self
+            
+            # Set bot commands for UI autocomplete
+            try:
+                from telegram import BotCommand
+                commands = [
+                    BotCommand(cmd, desc) 
+                    for cmd, desc in self.commands.items()
+                ]
+                await self.bot.set_my_commands(commands)
+                logger.info("Bot commands registered for autocomplete")
+            except Exception as e:
+                logger.debug(f"Could not set bot commands: {e}")
             
             logger.info("Telegram service initialized successfully")
             return True
@@ -568,7 +580,7 @@ class TelegramService(MessageTransport):
                 "running": self.is_running,
                 "bot_configured": bool(self.bot_token),
                 "chat_configured": bool(self.chat_id),
-                "trading_system_connected": self.trading_system is not None,
+                "event_system_connected": self.event_system is not None,
                 "instance_id": self.instance_id
             },
             "commands": self.commands,
@@ -711,80 +723,50 @@ class TelegramService(MessageTransport):
     # Command handlers
     
     async def _handle_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /start command - start the trading system."""
+        """Handle /start command - enable trading."""
         if not self._is_authorized(update):
             await update.message.reply_text("❌ Unauthorized access")
             return
         
         try:
-            if not self.trading_system:
-                await update.message.reply_text("❌ Trading system not available")
+            if not self.event_system:
+                await update.message.reply_text("❌ Event system not available")
                 return
             
-            # Check if system is shutting down
-            if hasattr(self.trading_system, 'is_shutting_down') and self.trading_system.is_shutting_down:
-                await update.message.reply_text("🔄 System is shutting down, command not available")
-                return
-            
-            # Check if system is already running
-            if self.trading_system.is_running:
-                success = await self.send_message("ℹ️ **Trading System Already Running**\n\nThe system is currently active and operational.", update.effective_chat.id)
-                if success:
-                    # Show current status
-                    await self._handle_status(update, context)
-                else:
-                    await update.message.reply_text("ℹ️ Trading System Already Running - The system is currently active and operational.")
-                return
-            
-            # System is not running, start it
-            success = await self.send_message("🚀 **Starting Trading System**\n\nInitializing...", update.effective_chat.id)
-            if not success:
-                await update.message.reply_text("🚀 Starting Trading System - Initializing...")
-            
-            # Start the trading system
-            result = await self.trading_system.start()
-            
-            if result:
-                # Send current status after starting
-                await self._handle_status(update, context)
-            else:
-                await update.message.reply_text("❌ Failed to start trading system")
+            # Publish enable_trading event
+            await self.event_system.publish(
+                "enable_trading",
+                {"chat_id": str(update.effective_chat.id)}
+            )
             
         except Exception as e:
             logger.error(f"Error handling start command: {e}")
             try:
-                await update.message.reply_text("❌ Error starting trading system")
+                await update.message.reply_text("❌ Error enabling trading")
             except Exception as reply_error:
                 logger.debug(f"Could not send error reply: {reply_error}")
     
     async def _handle_stop(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /stop command - stop the trading system."""
+        """Handle /stop command - disable trading."""
         if not self._is_authorized(update):
             await update.message.reply_text("❌ Unauthorized access")
             return
         
         try:
-            if not self.trading_system:
-                await update.message.reply_text("❌ Trading system not available")
+            if not self.event_system:
+                await update.message.reply_text("❌ Event system not available")
                 return
             
-            # Send stopping message with proper markdown
-            success = await self.send_message("⏹️ **Stopping Trading System**\n\nShutting down...", update.effective_chat.id)
-            if not success:
-                await update.message.reply_text("⏹️ Stopping Trading System - Shutting down...")
-            
-            # Stop the trading system
-            await self.trading_system.stop()
-            
-            # Send success message with proper markdown
-            success = await self.send_message("✅ **Trading System Stopped**\n\nSystem has been shut down successfully.", update.effective_chat.id)
-            if not success:
-                await update.message.reply_text("✅ Trading System Stopped - System has been shut down successfully.")
+            # Publish disable_trading event
+            await self.event_system.publish(
+                "disable_trading",
+                {"chat_id": str(update.effective_chat.id), "reason": "Manual pause via Telegram"}
+            )
             
         except Exception as e:
             logger.error(f"Error handling stop command: {e}")
             try:
-                await update.message.reply_text("❌ Error stopping trading system")
+                await update.message.reply_text("❌ Error disabling trading")
             except Exception as reply_error:
                 logger.debug(f"Could not send error reply: {reply_error}")
     
@@ -808,172 +790,57 @@ class TelegramService(MessageTransport):
         )
     
     async def _handle_status(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /status command."""
+        """Handle /status command via event."""
         if not self._is_authorized(update):
             await update.message.reply_text("❌ Unauthorized access")
             return
         
         try:
-            if not self.trading_system:
-                await update.message.reply_text("❌ Trading system not available")
+            if not self.event_system:
+                await update.message.reply_text("❌ Event system not available")
                 return
             
-            status = await self.trading_system.get_status()
-            
-            # Check if there's an error in the status
-            if "error" in status:
-                await update.message.reply_text(f"❌ Error getting system status: {status['error']}")
-                return
-            
-            # Get portfolio data if available
-            portfolio = None
-            try:
-                portfolio = await self.trading_system.get_portfolio()
-            except Exception as e:
-                logger.warning(f"Could not get portfolio for status: {e}")
-            
-            # Build status text with correct keys
-            status_text = f"""
-📊 *Trading System Status*
-
-🏃 *Running*: {("✅ Yes" if status.get('status') == 'running' else "❌ No")}
-💰 *Trading Enabled*: {("✅ Yes" if status.get('trading_enabled', False) else "❌ No")}
-🏪 *Market Open*: {("✅ Yes" if status.get('market_open', False) else "❌ No")}
-🤖 *Workflow*: {status.get('workflow_type', 'N/A')}"""
-            
-            # Add event system status
-            event_status = status.get('event_system', {})
-            if event_status:
-                queue_size = event_status.get('queue_size', 0)
-                status_text += f"""
-📋 *Event Queue*: {queue_size} pending"""
-            
-            # Add realtime monitoring status if enabled
-            monitor_status = status.get('realtime_monitoring')
-            if monitor_status and isinstance(monitor_status, dict):
-                status_text += f"""
-📡 *Realtime Monitor*: {("✅ Active" if monitor_status.get('is_monitoring', False) else "❌ Inactive")}"""
-            
-            status_text += """
-
-📈 *Portfolio Summary*:"""
-            
-            if portfolio:
-                status_text += f"""
-• Total Equity: ${float(portfolio.equity):,.2f}
-• Cash: ${float(portfolio.cash):,.2f}
-• Day P&L: ${float(portfolio.day_pnl):,.2f}
-• Positions: {len(portfolio.positions)}"""
-            else:
-                # Use status data if available
-                status_text += f"""
-• Total Equity: ${float(status.get('equity', 0)):,.2f}
-• Day P&L: ${float(status.get('day_pnl', 0)):,.2f}
-• Active Orders: {status.get('active_orders', 0)}
-• Positions: {status.get('positions', 0)}"""
-            
-            status_text += f"""
-
-🕒 *Last Update*: {status.get('last_update', 'N/A')}
-            """
-            
-            # Send status message with refresh button
-            await update.message.reply_text(
-                status_text.strip(),
-                reply_markup=self._create_refresh_keyboard("status"),
-                parse_mode='Markdown'
-            )
+            # Publish query_status event
+            await self.event_system.publish("query_status", {"chat_id": str(update.effective_chat.id)})
             
         except Exception as e:
-            logger.error(f"Error getting system status: {e}")
+            logger.error(f"Error handling status command: {e}")
             await update.message.reply_text("❌ Error retrieving system status")
     
     async def _handle_portfolio(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /portfolio command."""
+        """Handle /portfolio command via event."""
         if not self._is_authorized(update):
             await update.message.reply_text("❌ Unauthorized access")
             return
         
         try:
-            if not self.trading_system:
-                await update.message.reply_text("❌ Trading system not available")
+            if not self.event_system:
+                await update.message.reply_text("❌ Event system not available")
                 return
             
-            portfolio = await self.trading_system.get_portfolio()
-            
-            if not portfolio:
-                await update.message.reply_text("❌ Unable to retrieve portfolio")
-                return
-            
-            portfolio_text = f"""
-💼 *Portfolio Details*
-
-💰 *Total Equity*: ${float(portfolio.equity):,.2f}
-💵 *Cash*: ${float(portfolio.cash):,.2f}
-📊 *Market Value*: ${float(portfolio.market_value):,.2f}
-📈 *Day P&L*: ${float(portfolio.day_pnl):,.2f}
-📊 *Total P&L*: ${float(portfolio.total_pnl):,.2f}
-
-💪 *Buying Power*: ${float(portfolio.buying_power):,.2f}
-📦 *Positions*: {len(portfolio.positions)}
-            """
-            
-            if portfolio.positions:
-                portfolio_text += "\n\n📋 *Current Positions:*\n"
-                for position in portfolio.positions[:5]:  # Show first 5 positions
-                    # Escape underscores in symbol names to prevent markdown parsing issues
-                    safe_symbol = escape_markdown_symbols(str(position.symbol), "_")
-                    portfolio_text += f"• {safe_symbol}: {position.quantity} shares\n"
-                
-                if len(portfolio.positions) > 5:
-                    portfolio_text += f"• ... and {len(portfolio.positions) - 5} more positions\n"
-            
-            # Send portfolio message with refresh button
-            await update.message.reply_text(
-                portfolio_text.strip(),
-                reply_markup=self._create_refresh_keyboard("portfolio"),
-                parse_mode='Markdown'
-            )
+            # Publish query_portfolio event
+            await self.event_system.publish("query_portfolio", {"chat_id": str(update.effective_chat.id)})
             
         except Exception as e:
-            logger.error(f"Error getting portfolio: {e}")
+            logger.error(f"Error handling portfolio command: {e}")
             await update.message.reply_text("❌ Error retrieving portfolio")
     
     async def _handle_orders(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /orders command."""
+        """Handle /orders command via event."""
         if not self._is_authorized(update):
             await update.message.reply_text("❌ Unauthorized access")
             return
         
         try:
-            if not self.trading_system:
-                await update.message.reply_text("❌ Trading system not available")
+            if not self.event_system:
+                await update.message.reply_text("❌ Event system not available")
                 return
             
-            await update.message.reply_text("📋 Retrieving active orders...")
-            
-            orders = await self.trading_system.get_active_orders()
-            
-            if not orders:
-                await update.message.reply_text("ℹ️ No active orders found")
-                return
-            
-            orders_text = f"📋 *Active Orders* ({len(orders)}):\n\n"
-            
-            for order in orders:
-                # Escape underscores in symbol names to prevent markdown parsing issues
-                safe_symbol = escape_markdown_symbols(str(order.symbol), "_")
-                orders_text += f"• {safe_symbol} - {order.side.value} {order.quantity} @ {order.order_type.value}\n"
-            
-            # Send orders message with refresh button
-            await update.message.reply_text(
-                orders_text.strip(),
-                reply_markup=self._create_refresh_keyboard("orders"),
-                parse_mode='Markdown'
-            )
+            # Publish query_orders event
+            await self.event_system.publish("query_orders", {"chat_id": str(update.effective_chat.id)})
             
         except Exception as e:
-            logger.error(f"Error getting orders: {e}")
+            logger.error(f"Error handling orders command: {e}")
             await update.message.reply_text("❌ Error retrieving orders")
     
     async def _handle_positions(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -985,53 +852,27 @@ class TelegramService(MessageTransport):
         )
     
     async def _handle_analyze(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /analyze command - manually trigger AI trading analysis."""
+        """Handle /analyze command - manually trigger AI trading analysis via event."""
         if not self._is_authorized(update):
             await update.message.reply_text("❌ Unauthorized access")
             return
         
         try:
-            if not self.trading_system:
-                await update.message.reply_text("❌ Trading system not available")
+            if not self.event_system:
+                await update.message.reply_text("❌ Event system not available")
                 return
             
-            # Check if system is shutting down
-            if hasattr(self.trading_system, 'is_shutting_down') and self.trading_system.is_shutting_down:
-                await update.message.reply_text("🔄 System is shutting down, please try again after restart")
-                return
+            # Send immediate confirmation
+            await self.send_message(
+                "🤖 **AI Analysis Started**\n\n"
+                "Running intelligent trading analysis...\n\n"
+                "Watch for detailed step-by-step updates below!", 
+                update.effective_chat.id
+            )
             
-            # Send immediate confirmation with proper formatting
-            await self.send_message("🤖 **AI Analysis Started**\n\nRunning intelligent trading analysis...\n\nWatch for detailed step-by-step updates below!", update.effective_chat.id)
+            # Publish workflow event for manual analysis
+            await self.event_system.publish("trigger_workflow", {"trigger": "manual_analysis", "context": {"source": "telegram_command"}})
             
-            # Trigger manual analysis with cancellation handling
-            try:
-                result = await self.trading_system.run_manual_analysis()
-                
-                # Handle different result types
-                if isinstance(result, dict):
-                    if result.get("success"):
-                        await self.send_message("✅ **Analysis Complete**\n\nAI analysis has been completed successfully!", update.effective_chat.id)
-                    else:
-                        message = result.get("message", "Analysis failed")
-                        if "cancelled" in message.lower() or "shutting down" in message.lower():
-                            await self.send_message("🔄 **Analysis Cancelled**\n\nSystem is shutting down. Please try again after restart.", update.effective_chat.id)
-                        else:
-                            await self.send_message(f"❌ **Analysis Failed**\n\n{message}", update.effective_chat.id)
-                else:
-                    # Fallback for unexpected result types
-                    await self.send_message("✅ **Analysis Complete**\n\nAI analysis has been completed successfully!", update.effective_chat.id)
-                    
-            except asyncio.CancelledError:
-                logger.info("Analysis command cancelled due to system shutdown")
-                try:
-                    await self.send_message("🔄 **Analysis Cancelled**\n\nSystem is shutting down. Please try again after restart.", update.effective_chat.id)
-                except Exception as e:
-                    logger.debug(f"Could not send cancellation message: {e}")
-                return
-            
-        except asyncio.CancelledError:
-            logger.info("Analysis command handler cancelled due to system shutdown")
-            return
         except Exception as e:
             logger.error(f"Error handling analyze command: {e}")
             try:
@@ -1040,24 +881,25 @@ class TelegramService(MessageTransport):
                 logger.debug(f"Could not send error reply: {reply_error}")
     
     async def _handle_emergency(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle /emergency command."""
+        """Handle /emergency command via event."""
         if not self._is_authorized(update):
             await update.message.reply_text("❌ Unauthorized access")
             return
         
         try:
-            if not self.trading_system:
-                await update.message.reply_text("❌ Trading system not available")
+            if not self.event_system:
+                await update.message.reply_text("❌ Event system not available")
                 return
             
-            await self.send_message("🚨 **EMERGENCY STOP INITIATED**\n\nStopping all trading operations immediately...", update.effective_chat.id)
+            await self.send_message(
+                "🚨 **EMERGENCY STOP INITIATED**\n\n"
+                "Stopping all trading operations immediately...", 
+                update.effective_chat.id
+            )
             
-            await self.trading_system.emergency_stop()
-            await self.send_message("⛔ **EMERGENCY STOP COMPLETE**\n\nAll trading operations have been stopped.", update.effective_chat.id)
+            # Publish emergency_stop event
+            await self.event_system.publish("emergency_stop", {"chat_id": str(update.effective_chat.id)})
             
-        except asyncio.CancelledError:
-            logger.info("Emergency command cancelled due to system shutdown")
-            return
         except Exception as e:
             logger.error(f"Error handling emergency command: {e}")
             try:
@@ -1211,33 +1053,20 @@ Ready to trade! Use /help for detailed information."""
     
     async def _handle_status_callback(self, query, context):
         """Handle status button callback."""
-        if not self.trading_system:
-            await query.edit_message_text(
-                "❌ **Trading System Not Available**",
-                reply_markup=self._create_refresh_keyboard("status"),
-                parse_mode='Markdown'
-            )
-            return
-        
         try:
-            # Get system status
-            is_running = self.trading_system.is_running
-            is_trading_enabled = getattr(self.trading_system, 'is_trading_enabled', False)
+            if not self.event_system:
+                await query.edit_message_text(
+                    "❌ **Event System Not Available**",
+                    reply_markup=self._create_refresh_keyboard("status"),
+                    parse_mode='Markdown'
+                )
+                return
             
-            status_message = f"""📊 **Trading System Status**
-
-🔄 **System**: {'🟢 Running' if is_running else '🔴 Stopped'}
-💰 **Trading**: {'🟢 Enabled' if is_trading_enabled else '🔴 Disabled'}
-⏰ **Last Update**: {datetime.now().strftime('%H:%M:%S')}"""
-            
-            await query.edit_message_text(
-                status_message,
-                reply_markup=self._create_refresh_keyboard("status"),
-                parse_mode='Markdown'
-            )
+            # Publish query_status event
+            await self.event_system.publish("query_status", {"chat_id": str(query.message.chat_id)})
             
         except Exception as e:
-            logger.error(f"Error getting status via callback: {e}")
+            logger.error(f"Error handling status callback: {e}")
             await query.edit_message_text(
                 "❌ **Error Getting Status**",
                 reply_markup=self._create_refresh_keyboard("status"),
@@ -1246,32 +1075,20 @@ Ready to trade! Use /help for detailed information."""
     
     async def _handle_portfolio_callback(self, query, context):
         """Handle portfolio button callback."""
-        if not self.trading_system:
-            await query.edit_message_text(
-                "❌ **Trading System Not Available**",
-                reply_markup=self._create_refresh_keyboard("portfolio"),
-                parse_mode='Markdown'
-            )
-            return
-        
         try:
-            portfolio = await self.trading_system.get_portfolio()
-            if portfolio:
-                formatted_message = format_portfolio_message(portfolio)
+            if not self.event_system:
                 await query.edit_message_text(
-                    formatted_message,
+                    "❌ **Event System Not Available**",
                     reply_markup=self._create_refresh_keyboard("portfolio"),
                     parse_mode='Markdown'
                 )
-            else:
-                await query.edit_message_text(
-                    "❌ **Portfolio Not Available**",
-                    reply_markup=self._create_refresh_keyboard("portfolio"),
-                    parse_mode='Markdown'
-                )
+                return
+            
+            # Publish query_portfolio event
+            await self.event_system.publish("query_portfolio", {"chat_id": str(query.message.chat_id)})
                 
         except Exception as e:
-            logger.error(f"Error getting portfolio via callback: {e}")
+            logger.error(f"Error handling portfolio callback: {e}")
             await query.edit_message_text(
                 "❌ **Error Getting Portfolio**",
                 reply_markup=self._create_refresh_keyboard("portfolio"),
@@ -1280,33 +1097,20 @@ Ready to trade! Use /help for detailed information."""
     
     async def _handle_orders_callback(self, query, context):
         """Handle orders button callback."""
-        if not self.trading_system:
-            await query.edit_message_text(
-                "❌ **Trading System Not Available**",
-                reply_markup=self._create_refresh_keyboard("orders"),
-                parse_mode='Markdown'
-            )
-            return
-        
         try:
-            orders = await self.trading_system.get_active_orders()
-            if orders:
-                message = "📈 **Active Orders:**\n\n"
-                for order in orders[:5]:  # Limit to 5 orders to avoid message too long
-                    message += f"• {order.symbol}: {order.side.value} {order.quantity} @ {order.order_type.value}\n"
-                if len(orders) > 5:
-                    message += f"\n... and {len(orders) - 5} more orders"
-            else:
-                message = "📈 **Active Orders:**\n\nNo active orders found."
+            if not self.event_system:
+                await query.edit_message_text(
+                    "❌ **Event System Not Available**",
+                    reply_markup=self._create_refresh_keyboard("orders"),
+                    parse_mode='Markdown'
+                )
+                return
             
-            await query.edit_message_text(
-                message,
-                reply_markup=self._create_refresh_keyboard("orders"),
-                parse_mode='Markdown'
-            )
+            # Publish query_orders event
+            await self.event_system.publish("query_orders", {"chat_id": str(query.message.chat_id)})
             
         except Exception as e:
-            logger.error(f"Error getting orders via callback: {e}")
+            logger.error(f"Error handling orders callback: {e}")
             await query.edit_message_text(
                 "❌ **Error Getting Orders**",
                 reply_markup=self._create_refresh_keyboard("orders"),
@@ -1314,72 +1118,31 @@ Ready to trade! Use /help for detailed information."""
             )
     
     async def _handle_positions_callback(self, query, context):
-        """Handle positions button callback."""
-        if not self.trading_system:
-            await query.edit_message_text(
-                "❌ **Trading System Not Available**",
-                reply_markup=self._create_refresh_keyboard("positions"),
-                parse_mode='Markdown'
-            )
-            return
-        
-        try:
-            portfolio = await self.trading_system.get_portfolio()
-            if portfolio and portfolio.positions:
-                message = "🎯 **Current Positions:**\n\n"
-                for position in portfolio.positions[:5]:  # Limit to 5 positions
-                    pnl_emoji = "📈" if position.unrealized_pnl >= 0 else "📉"
-                    message += f"{pnl_emoji} {position.symbol}: {position.quantity} shares\n"
-                    message += f"   P&L: ${position.unrealized_pnl:.2f} ({position.unrealized_pnl_percentage:.2%})\n\n"
-                if len(portfolio.positions) > 5:
-                    message += f"... and {len(portfolio.positions) - 5} more positions"
-            else:
-                message = "🎯 **Current Positions:**\n\nNo open positions found."
-            
-            await query.edit_message_text(
-                message,
-                reply_markup=self._create_refresh_keyboard("positions"),
-                parse_mode='Markdown'
-            )
-            
-        except Exception as e:
-            logger.error(f"Error getting positions via callback: {e}")
-            await query.edit_message_text(
-                "❌ **Error Getting Positions**",
-                reply_markup=self._create_refresh_keyboard("positions"),
-                parse_mode='Markdown'
-            )
+        """Handle positions button callback - same as portfolio."""
+        # Positions are part of portfolio, so we just query portfolio
+        await self._handle_portfolio_callback(query, context)
     
     async def _handle_analyze_callback(self, query, context):
-        """Handle analyze button callback."""
-        if not self.trading_system:
-            await query.edit_message_text(
-                "❌ **Trading System Not Available**",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Check if system is shutting down
-        if hasattr(self.trading_system, 'is_shutting_down') and self.trading_system.is_shutting_down:
-            await query.edit_message_text(
-                "🔄 **System Shutting Down**\n\nPlease try again after restart.",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Start analysis
-        await query.edit_message_text(
-            "🤖 **AI Analysis Started**\n\nRunning intelligent trading analysis...\n\nWatch for detailed step-by-step updates below!",
-            parse_mode='Markdown'
-        )
-        
+        """Handle analyze button callback via event."""
         try:
-            result = await self.trading_system.run_manual_analysis()
-            # The analysis progress will be sent via the message manager
-            # Just update the button message with completion status
-            if isinstance(result, dict) and result.get("success"):
-                completion_keyboard = [[InlineKeyboardButton("🏠 Main Menu", callback_data="main_menu")]]
-                await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup(completion_keyboard))
+            if not self.event_system:
+                await query.edit_message_text(
+                    "❌ **Event System Not Available**",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            # Start analysis
+            await query.edit_message_text(
+                "🤖 **AI Analysis Started**\n\n"
+                "Running intelligent trading analysis...\n\n"
+                "Watch for detailed step-by-step updates below!",
+                parse_mode='Markdown'
+            )
+            
+            # Publish workflow event for manual analysis
+            await self.event_system.publish("trigger_workflow", {"trigger": "manual_analysis", "context": {"source": "telegram_callback"}})
+            
         except Exception as e:
             logger.error(f"Error in analyze callback: {e}")
             await query.edit_message_text(
@@ -1432,8 +1195,8 @@ Ready to trade! Use /help for detailed information."""
     async def _handle_confirm_callback(self, query, context, action: str):
         """Handle confirmation button callback."""
         if action == "emergency":
-            if not self.trading_system:
-                await query.edit_message_text("❌ **Trading System Not Available**", parse_mode='Markdown')
+            if not self.event_system:
+                await query.edit_message_text("❌ **Event System Not Available**", parse_mode='Markdown')
                 return
             
             await query.edit_message_text(
@@ -1442,14 +1205,10 @@ Ready to trade! Use /help for detailed information."""
             )
             
             try:
-                await self.trading_system.emergency_stop()
-                await query.edit_message_text(
-                    "⛔ **EMERGENCY STOP COMPLETE**\n\nAll trading operations have been stopped.",
-                    reply_markup=self._create_main_menu_keyboard(),
-                    parse_mode='Markdown'
-                )
+                # Publish emergency_stop event
+                await self.event_system.publish("emergency_stop", {"chat_id": str(query.message.chat_id)})
             except Exception as e:
-                logger.error(f"Error in emergency stop: {e}")
+                logger.error(f"Error publishing emergency stop: {e}")
                 await query.edit_message_text(
                     "❌ **Error During Emergency Stop**",
                     reply_markup=self._create_main_menu_keyboard(),

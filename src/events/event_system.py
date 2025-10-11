@@ -19,14 +19,11 @@ class EventSystem:
     4. Keep simple, avoid over-engineering
     
     Event Types:
-    - trigger_daily_rebalance: Daily scheduled trigger
-    - trigger_realtime_rebalance: Real-time market event trigger (price volatility, news, etc.)
-    - trigger_manual_analysis: Manual trigger
+    - trigger_workflow: Unified workflow trigger (with trigger type in data)
     - trigger_portfolio_check: Scheduled portfolio check
     - trigger_risk_check: Risk check
     - trigger_eod_analysis: End-of-day analysis
-    - schedule_next_analysis: LLM decides next analysis time (optional)
-    - system_started / system_stopped: System state events
+    - enable_trading / disable_trading: Trading control events
     
     Features:
     - Time-based scheduling: Events can be scheduled for future execution
@@ -72,7 +69,7 @@ class EventSystem:
         Register Event Handler
         
         Args:
-            event_type: Event Type (e.g. trigger_daily_rebalance)
+            event_type: Event Type
             handler: Async Handler Function
         """
         if event_type not in self.event_handlers:
@@ -188,153 +185,45 @@ class EventSystem:
     
     # === Convenient Event Publishing Methods ===
     
-    async def trigger_daily_rebalance(self, context: Dict[str, Any] = None, scheduled_time: Optional[datetime] = None):
+    async def publish(
+        self,
+        event_type: str,
+        data: Dict[str, Any] = None,
+        scheduled_time: Optional[datetime] = None,
+        priority: int = 0
+    ):
         """
-        Trigger Daily Rebalance
+        Unified event publishing method
         
         Args:
-            context: Event context data
+            event_type: Type of event (trigger_workflow, enable_trading, query_status, etc.)
+            data: Event data dictionary
             scheduled_time: When to execute (None = immediate)
-        """
-        event = TradingEvent(
-            event_type="trigger_daily_rebalance",
-            data=context or {"timestamp": datetime.now().isoformat()},
-            scheduled_time=scheduled_time
-        )
-        await self.publish_event(event)
-    
-    async def trigger_realtime_rebalance(self, reason: str, details: Dict[str, Any], scheduled_time: Optional[datetime] = None):
-        """
-        Trigger Real-time Rebalance
+            priority: Event priority (higher = more urgent, default: 0)
         
-        Args:
-            reason: Trigger reason (price_change, high_volatility, breaking_news, etc.)
-            details: Detailed information
-            scheduled_time: When to execute (None = immediate)
+        Examples:
+            # Workflow trigger
+            await event_system.publish("trigger_workflow", {"trigger": "daily_rebalance"})
+            
+            # Trading control
+            await event_system.publish("enable_trading", {"chat_id": "123"})
+            
+            # Query
+            await event_system.publish("query_status", {"chat_id": "123"})
+            
+            # Scheduled event
+            await event_system.publish("trigger_portfolio_check", scheduled_time=next_check)
         """
-        event = TradingEvent(
-            event_type="trigger_realtime_rebalance",
-            data={
-                "reason": reason,
-                "details": details,
-                "timestamp": datetime.now().isoformat()
-            },
-            scheduled_time=scheduled_time
-        )
-        await self.publish_event(event)
-    
-    async def trigger_manual_analysis(self, context: Dict[str, Any] = None, scheduled_time: Optional[datetime] = None):
-        """
-        Trigger Manual Analysis
-        
-        Args:
-            context: Event context data
-            scheduled_time: When to execute (None = immediate)
-        """
-        event = TradingEvent(
-            event_type="trigger_manual_analysis",
-            data=context or {"timestamp": datetime.now().isoformat()},
-            scheduled_time=scheduled_time
-        )
-        await self.publish_event(event)
-    
-    async def trigger_portfolio_check(self, scheduled_time: Optional[datetime] = None):
-        """
-        Trigger Portfolio Check
-        
-        Args:
-            scheduled_time: When to execute (None = immediate)
-        """
-        event = TradingEvent(
-            event_type="trigger_portfolio_check",
-            data={"timestamp": datetime.now().isoformat()},
-            scheduled_time=scheduled_time
-        )
-        await self.publish_event(event)
-    
-    async def trigger_risk_check(self, scheduled_time: Optional[datetime] = None):
-        """
-        Trigger Risk Check
-        
-        Args:
-            scheduled_time: When to execute (None = immediate)
-        """
-        event = TradingEvent(
-            event_type="trigger_risk_check",
-            data={"timestamp": datetime.now().isoformat()},
-            scheduled_time=scheduled_time
-        )
-        await self.publish_event(event)
-    
-    async def trigger_eod_analysis(self, scheduled_time: Optional[datetime] = None):
-        """
-        Trigger End-of-Day Analysis
-        
-        Args:
-            scheduled_time: When to execute (None = immediate)
-        """
-        event = TradingEvent(
-            event_type="trigger_eod_analysis",
-            data={"timestamp": datetime.now().isoformat()},
-            scheduled_time=scheduled_time
-        )
-        await self.publish_event(event)
-    
-    async def schedule_next_analysis(self, scheduled_time: datetime, reason: str, priority: int = 0, context: Dict[str, Any] = None):
-        """
-        Schedule Next Analysis (LLM Self-Scheduling)
-        
-        This allows LLM agents to autonomously schedule their next analysis
-        based on their decision-making process.
-        
-        Args:
-            scheduled_time: When to execute the analysis
-            reason: Reason for scheduling (e.g., "Expected FOMC announcement")
-            priority: Event priority (lower = higher priority)
-            context: Additional context data
-        
-        Example:
-            await event_system.schedule_next_analysis(
-                scheduled_time=datetime.now() + timedelta(hours=2),
-                reason="Expected earnings report for AAPL",
-                priority=1
-            )
-        """
-        event_data = {
-            "reason": reason,
-            "scheduled_by": "llm_agent",
-            "timestamp": datetime.now().isoformat()
-        }
-        if context:
-            event_data.update(context)
+        # Ensure data has timestamp
+        event_data = data or {}
+        if "timestamp" not in event_data:
+            event_data["timestamp"] = datetime.now().isoformat()
         
         event = TradingEvent(
-            event_type="trigger_manual_analysis",
+            event_type=event_type,
             data=event_data,
             scheduled_time=scheduled_time,
             priority=priority
-        )
-        await self.publish_event(event)
-        logger.info(f"LLM Scheduled Analysis: {scheduled_time.isoformat()} - {reason}")
-    
-    async def publish_system_event(self, event_type: str, message: str, level: str = "info", scheduled_time: Optional[datetime] = None):
-        """
-        Publish System Event
-        
-        Args:
-            event_type: system_started, system_stopped, etc.
-            message: Message content
-            level: Log level
-            scheduled_time: When to execute (None = immediate)
-        """
-        event = TradingEvent(
-            event_type=event_type,
-            data={
-                "message": message,
-                "level": level,
-                "timestamp": datetime.now().isoformat()
-            },
-            scheduled_time=scheduled_time
         )
         await self.publish_event(event)
 

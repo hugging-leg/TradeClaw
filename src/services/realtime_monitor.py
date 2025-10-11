@@ -306,10 +306,10 @@ class RealtimeMarketMonitor:
             
             # 通过事件系统触发重新平衡
             if self.trading_system and hasattr(self.trading_system, 'event_system'):
-                await self.trading_system.event_system.trigger_realtime_rebalance(
-                    reason=reason,
-                    details=details
-                )
+                await self.trading_system.event_system.publish("trigger_workflow", {"trigger": "realtime_rebalance", "context": {
+                        "reason": reason,
+                        "details": details
+                    }})
             
         except Exception as e:
             logger.error(f"触发重新平衡失败: {e}")
