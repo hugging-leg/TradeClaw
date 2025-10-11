@@ -1,214 +1,371 @@
-# 🤖 AI Trading Agent
+# 🤖 LLM Agent Trading System
 
-Intelligent trading agent powered by LLM for automated US stock trading with multiple API provider support.
+**AI-Powered Autonomous Trading System for US Stocks & ETFs**
+
+A fully event-driven, LLM-powered trading system that makes intelligent investment decisions with zero hardcoded rules. Built for high Sharpe ratio (target: 3+) through adaptive portfolio management.
+
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
+
+---
+
+## 🌟 Key Features
+
+### 🧠 **100% LLM-Driven Decision Making**
+- **Zero Hardcoded Rules** - LLM makes all trading decisions autonomously
+- **Intelligent Tools** - From market data to position adjustment
+- **ReAct Agent Architecture** - Think → Act → Observe → Repeat
+- **Self-Scheduling** - LLM decides when to analyze next
+
+### 📡 **Event-Driven Architecture**
+- **Unified Event System** - All operations triggered by events
+- **Real-time Processing** - Async event queue with priority support
+- **Fully Decoupled** - Components communicate only via events
+- **Scalable Design** - Easy to add new event handlers
+
+### 🎯 **Intelligent Trading Strategies**
+- **Adaptive Portfolio Management** - LLM adjusts based on market conditions
+- **Multi-dimensional Analysis** - Market data + news + technical indicators
+- **Risk-Aware** - Focus on momentum, avoid penny stocks, strict position sizing
+- **Long/Short Flexibility** - Support for leveraged and inverse ETFs
+
+### 🔒 **Production-Ready**
+- **Paper Trading** - Safe testing environment
+- **Risk Management** - Automatic position limits and thresholds
+- **Telegram Control** - Remote monitoring and command execution
+- **Comprehensive Logging** - Full audit trail of all decisions
+
+---
 
 ## 🏗️ System Architecture
 
-### Core Components
+### High-Level Overview
 
-- **TradingSystem**: Main system orchestrator managing all component lifecycles
-- **API Adapters**: Unified interfaces for brokers, market data, news, and other services
-- **AI Workflows**: Supports Sequential (fixed steps) and ToolCalling (dynamic decisions) modes
-- **Event System**: Real-time processing of orders, portfolio, and trading events
-- **Task Scheduler**: Automated execution of daily trading tasks
-- **Telegram Bot**: Remote control and real-time notifications
-
-### System Architecture
-
-![System Architecture](assets/images/diagrams/system-architecture.svg)
+![System Architecture](assets/images/system-architecture.svg)
 
 *Complete system architecture showing all components and their relationships*
 
-### Workflow Process
+### LLM Agent Tools
 
-![Workflow Process](assets/images/diagrams/workflow-flow.svg)
+![LLM Tools Architecture](assets/images/llm-tools.svg)
 
-*Simplified workflow showing the main process flow*
+*The 11 intelligent tools available to the LLM agent for autonomous decision making*
 
-**📊 Documentation Links:**
-- **[System Architecture Details](docs/system-architecture.md)** - Detailed component descriptions
-- **[Workflow Documentation](docs/workflow-diagram.md)** - Process flow explanations
+### Event Flow
+
+![Event Flow](assets/images/event-flow.svg)
+
+*Sequence diagram showing how events flow through the system during a manual analysis*
+
+### System State Machine
+
+![State Machine](assets/images/state-machine.svg)
+
+*State transitions of the trading system (Initializing → Running → Trading/Paused → Emergency → Stopped)*
+
+---
 
 
+### Core Components
+
+#### 🎮 **Trading System**
+- Central orchestrator managing all components
+- Event-driven lifecycle management
+- System start/stop and trading enable/disable control
+- Status monitoring and reporting
+
+#### 📬 **Event System**
+- **Unified event publishing** via single `publish()` method
+- **Priority queue** for urgent events (emergency stop, etc.)
+- **Scheduled events** for time-based triggers
+- **Event types**: `trigger_workflow`, `enable_trading`, `disable_trading`, `query_status`, etc.
+
+#### 🤖 **LLM Portfolio Agent**
+- **11 intelligent tools** for market analysis and trading
+- **Fully autonomous** - makes all decisions independently
+- **Self-aware** - knows current time and market status
+- **Adaptive** - adjusts strategy based on market conditions
+
+#### 📱 **Message Service**
+- **Event-based commands** - all commands publish events
+- **Real-time notifications** - instant updates on trades and status
+- **Command autocomplete** - user-friendly bot interface
+- **Remote control** - manage system from anywhere
+
+---
+
+## 🛠️ LLM Agent Tools
+
+Current implementation has access to 11 powerful tools for autonomous trading:
+
+### 📊 **Market Intelligence**
+
+1. **`get_current_time()`**
+   - Get current UTC time, date, weekday
+   - LLM uses this to make time-aware decisions
+
+2. **`check_market_status()`**
+   - Check if market is open or closed
+   - Prevents trading during market hours
+
+3. **`get_market_data()`**
+   - Fetch major indices (SPY, QQQ, DIA, IWM)
+   - Overall market sentiment and trends
+
+4. **`get_latest_news(limit, symbol, sector)`**
+   - Get latest market news
+   - **Filter by stock** (e.g., `symbol="AAPL"`)
+   - **Filter by sector** (e.g., `sector="Technology"`)
+   - Shows title previews in notifications
+
+### 💼 **Portfolio Management**
+
+5. **`get_portfolio_status()`**
+   - Total equity, cash, positions
+   - Market value and P&L
+   - Current allocation percentages
+
+6. **`get_position_analysis()`**
+   - Position concentration analysis
+   - Top holdings analysis
+   - Risk distribution metrics
+
+### 📈 **Market Data**
+
+7. **`get_latest_price(symbol)`**
+   - Real-time price for any symbol
+   - Current bid/ask and volume
+
+8. **`get_historical_prices(symbol, timeframe, limit)`**
+   - Historical OHLCV data
+   - **Timeframes**: 1Min, 5Min, 15Min, 30Min, 1Hour, 1Day, 1Week, 1Month
+   - Up to 1000 bars
+
+### ⚡ **Trading Execution**
+
+9. **`adjust_position(symbol, target_percentage, reason)`**
+   - **Precision tool** for single position adjustment
+   - Set position to exact percentage (e.g., AAPL → 25%)
+   - Perfect for: building positions, quick adjustments, taking profits
+
+10. **`rebalance_portfolio(target_allocations, reason)`**
+    - **Full portfolio rebalance**
+    - Takes complete allocation dictionary
+    - Executes multiple trades (sell first, then buy)
+    - Perfect for: major portfolio restructuring
+
+11. **`schedule_next_analysis(hours_from_now, reason, priority)`**
+    - **LLM self-scheduling**
+    - Schedule future analysis (e.g., before FOMC, earnings)
+    - Priority levels for urgent vs routine checks
+
+---
 
 ## 🚀 Quick Start
 
-### 1. Install Dependencies
+### 1. Clone & Install
+
 ```bash
+git clone <repository-url>
+cd Agent-Trader
 pip install -r requirements.txt
 ```
 
-### 2. Environment Setup
+### 2. Configure Environment
+
 ```bash
 cp env.template .env
 ```
 
-Configure `.env` file:
+Edit `.env` file:
+
 ```bash
-# API Keys
+# API Keys (Required)
 ALPACA_API_KEY=your_alpaca_key
 ALPACA_SECRET_KEY=your_alpaca_secret
 TIINGO_API_KEY=your_tiingo_key
 
-# AI Configuration
-LLM_PROVIDER=openai  # or deepseek
-OPENAI_API_KEY=your_openai_key
-WORKFLOW_TYPE=sequential  # or tool_calling
+# LLM Configuration (Required)
+LLM_PROVIDER=deepseek              # deepseek or openai
+DEEPSEEK_API_KEY=your_deepseek_key
+DEEPSEEK_MODEL=deepseek-chat
 
-# Telegram Configuration
+# or use OpenAI
+# LLM_PROVIDER=openai
+# OPENAI_API_KEY=your_openai_key
+# OPENAI_MODEL=gpt-4o
+
+# Workflow Type (Required)
+WORKFLOW_TYPE=llm_portfolio        # 🌟 Recommended
+
+# Telegram (Optional but Recommended)
 TELEGRAM_BOT_TOKEN=your_bot_token
 TELEGRAM_CHAT_ID=your_chat_id
 
 # Trading Parameters
-PAPER_TRADING=true
-MAX_POSITION_SIZE=0.1
-STOP_LOSS_PERCENTAGE=0.05
-TAKE_PROFIT_PERCENTAGE=0.15
+PAPER_TRADING=true                 # IMPORTANT: Start with paper trading!
+TRADING_SCHEDULE_TIME=09:35        # Daily analysis time (market time)
 ```
 
-### 3. Start System
+### 3. Run the System
+
 ```bash
 python main.py
 ```
 
-## 🤖 AI Workflows
+You should see:
+```
+🚀 LLM Agent Trading System
 
-### Sequential Workflow
-- **Execution Flow**: Data Collection → Market Analysis → Decision Making → Trade Execution
-- **Characteristics**: Predictable, cost-effective, suitable for systematic trading strategies
-- **Use Case**: Daily automated trading
+All components initialized successfully.
 
-### Tool Calling Workflow
-- **Execution Method**: LLM dynamically selects tools and execution order
-- **Characteristics**: More intelligent, adaptive, higher cost
-- **Use Case**: Complex market analysis and decision making
+Trading: enabled
+Workflow: llm_portfolio_agent
+Market: 🟢 Open
 
-#### Available Tools
-- `get_portfolio_info`: Get portfolio information
-- `get_market_data`: Fetch market data
-- `get_news`: Retrieve news feed
-- `get_market_status`: Check market status
-- `get_active_orders`: View active orders
-- `make_trading_decision`: Make trading decisions
-
-### **🌟 LLM Portfolio Agent** (🆕 推荐)
-**完全由LLM驱动的投资组合管理 - 无硬编码规则！**
-
-- **核心理念**: 
-  - ❌ **不使用**固定规则（如18%仓位、±3%触发）
-  - ✅ **完全由LLM自主决策** - 何时调整、如何配置
-  
-- **工作方式**:
-  - LLM作为ReAct Agent，可使用多个tools
-  - 持续分析市场数据、新闻、持仓状况
-  - LLM自主判断是否需要rebalance
-  - LLM决定目标股票和仓位配置
-
-- **可用Tools**:
-  ```
-  get_portfolio_status    - 获取组合状态
-  get_market_data         - 获取市场数据  
-  get_latest_news         - 获取最新新闻
-  get_position_analysis   - 分析持仓分布
-  get_stock_info          - 获取个股信息
-  rebalance_portfolio     - 执行重新平衡
-  ```
-
-- **优势**:
-  - 🧠 智能灵活 - LLM基于实际情况决策
-  - 🔄 自适应 - 无需调整参数，LLM自动适应市场
-  - 📊 可解释 - LLM提供决策理由
-  - 🎯 精准 - 基于多维度分析（市场、新闻、技术指标）
-
-- **Use Case**: 最智能的组合管理方式，适合希望完全由AI驱动的用户
+Ready to trade! 📊
+```
 
 ---
 
-### Balanced Portfolio Workflow (⚠️ 已弃用)
-- **Strategy**: Maintain balanced portfolio with ~18% position per stock (5-6 stocks total)
-- **Note**: 基于固定规则，推荐使用 `llm_portfolio` 替代
+## 📱 Telegram Commands
 
-## 📱 Telegram Control
+### Basic Control
 
-### Basic Commands
-- `/start` - Start trading system
-- `/stop` - Stop trading system
-- `/status` - Check system status
+- `/start` - **Enable trading** (starts automated trading)
+- `/stop` - **Disable trading** (pauses automated trading, system keeps running)
+- `/status` - System status (shows queue size, market status, etc.)
 - `/portfolio` - Portfolio overview
-- `/analyze` - Manually trigger AI analysis
-- `/emergency` - Emergency stop all trading
+- `/orders` - View active orders
+
+### Analysis & Emergency
+
+- `/analyze` - Trigger manual LLM analysis
+- `/emergency` - Emergency stop (disables trading + attempts to close positions)
+
+### Command Autocomplete
+
+The bot supports command autocomplete - just type `/` in Telegram and see all available commands with descriptions!
+
+---
+
+## 🎯 How It Works
+
+### Event-Driven Flow
+
+```
+1. Trigger Event Published
+   ├─ Daily scheduled trigger (09:35)
+   ├─ Manual /analyze command
+   └─ LLM self-scheduled trigger
+
+2. TradingSystem receives event
+   └─ Calls LLM Agent workflow
+
+3. LLM Agent executes
+   ├─ Calls tools to gather information
+   │  ├─ get_current_time()
+   │  ├─ check_market_status()
+   │  ├─ get_portfolio_status()
+   │  ├─ get_latest_news()
+   │  └─ get_market_data()
+   │
+   ├─ LLM analyzes all data
+   │  └─ Decides: rebalance or hold
+   │
+   └─ If rebalance needed:
+      ├─ Option 1: adjust_position() for single stock
+      └─ Option 2: rebalance_portfolio() for full rebalance
+
+4. Telegram notifications sent
+   └─ Real-time updates on all actions
+
+5. Optional: LLM schedules next analysis
+   └─ schedule_next_analysis(hours=2, reason="Monitor FOMC")
+```
+
+### LLM Decision Making
+
+The LLM makes completely autonomous decisions based on:
+
+- **Market conditions** - Overall indices, volatility, trends
+- **News events** - Breaking news, sector news, company-specific news
+- **Portfolio state** - Current positions, P&L, concentration
+- **Technical data** - Historical prices, price action, momentum
+- **Time context** - Day of week, time of day, market hours
+- **Risk factors** - Position sizes, leverage, correlation
+
+**No hardcoded rules!** The LLM decides:
+- ✅ When to trade
+- ✅ What to buy/sell
+- ✅ How much to allocate
+- ✅ When to hold cash
+- ✅ When to analyze next
+
+---
 
 ## ⚙️ Configuration
 
 ### Trading Parameters
+
 ```bash
-PAPER_TRADING=true              # Paper trading mode
-MAX_POSITION_SIZE=0.1          # Max position size (10%)
-MAX_POSITIONS=10               # Max number of positions
-STOP_LOSS_PERCENTAGE=0.05      # Stop loss percentage (5%)
-TAKE_PROFIT_PERCENTAGE=0.15    # Take profit percentage (15%)
-REBALANCE_TIME=09:30           # Daily rebalancing time
+# Risk Management (Current Deprecated)
+MAX_POSITION_SIZE=0.3              # Max 30% per position
+STOP_LOSS_PERCENTAGE=0.05          # 5% stop loss (if used)
+TAKE_PROFIT_PERCENTAGE=0.15        # 15% take profit (if used)
+
+# Schedule
+TRADING_SCHEDULE_TIME=09:35        # Daily analysis time (HH:MM in market time)
+PORTFOLIO_CHECK_INTERVAL=60        # Portfolio check every 60 min
+RISK_CHECK_INTERVAL=30             # Risk check every 30 min
+EOD_ANALYSIS_TIME=15:45            # End-of-day analysis time
+
+# Mode
+PAPER_TRADING=true                 # Paper trading (RECOMMENDED for testing)
 ```
 
-### AI Model Configuration
+### LLM Configuration
+
 ```bash
-LLM_PROVIDER=openai                    # AI provider: openai or deepseek
-OPENAI_MODEL=gpt-4o                   # OpenAI model
-DEEPSEEK_MODEL=deepseek-chat          # DeepSeek model
-WORKFLOW_TYPE=llm_portfolio           # 🌟 推荐: llm_portfolio (完全LLM驱动)
-                                       # 其他选项: sequential, tool_calling, balanced_portfolio
+# Provider Selection
+LLM_PROVIDER=deepseek              # deepseek or openai
+
+# DeepSeek (Recommended - Cost-effective)
+DEEPSEEK_API_KEY=sk-...
+DEEPSEEK_MODEL=deepseek-chat
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+
+# OpenAI (Alternative)
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-4o
 ```
 
 ### API Providers
+
 ```bash
-BROKER_PROVIDER=alpaca          # Broker: alpaca
-MARKET_DATA_PROVIDER=tiingo     # Market data: tiingo
-NEWS_PROVIDER=tiingo            # News: tiingo
-MESSAGE_PROVIDER=telegram       # Messaging: telegram
+# Broker (Required)
+BROKER_PROVIDER=alpaca
+ALPACA_API_KEY=...
+ALPACA_SECRET_KEY=...
+ALPACA_BASE_URL=https://paper-api.alpaca.markets  # Paper trading
+
+# Market Data (Required)
+MARKET_DATA_PROVIDER=tiingo
+TIINGO_API_KEY=...
+
+# News (Required)
+NEWS_PROVIDER=tiingo
+TIINGO_API_KEY=...
+
+# Messaging (Optional)
+MESSAGE_PROVIDER=telegram
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
 ```
 
-## 🏗️ Project Structure
 
-```
-src/
-├── adapters/                   # API Adapters
-│   ├── brokers/
-│   │   └── alpaca_adapter.py           # Alpaca broker interface
-│   ├── market_data/
-│   │   ├── tiingo_market_data_adapter.py      # Tiingo REST API
-│   │   └── 🆕 tiingo_websocket_adapter.py     # Tiingo WebSocket (real-time data)
-│   ├── news/
-│   │   └── tiingo_news_adapter.py             # Tiingo news
-│   └── transports/
-│       └── telegram_service.py                # Telegram service
-├── interfaces/                 # Abstract Interfaces
-│   ├── broker_api.py               # Broker interface definition
-│   ├── market_data_api.py          # Market data interface
-│   ├── news_api.py                 # News interface
-│   ├── message_transport.py        # Message transport interface
-│   └── factory.py                  # Service creation
-├── agents/                     # AI Workflows
-│   ├── workflow_factory.py         # Workflow creation
-│   ├── workflow_base.py            # Base class
-│   ├── sequential_workflow.py      # Sequential workflow
-│   ├── tool_calling_workflow.py    # Tool calling workflow
-│   └── 🆕 balanced_portfolio_workflow.py  # Balanced portfolio strategy
-├── 🆕 services/                    # Background Services
-│   └── realtime_monitor.py         # Real-time market monitoring
-├── events/
-│   └── event_system.py             # Event system
-├── messaging/
-│   └── message_manager.py          # Message management
-├── scheduler/
-│   └── trading_scheduler.py        # Task scheduling (🔧 bug fixed)
-├── models/
-│   └── trading_models.py           # Data models
-├── utils/                      # Utility functions
-│   ├── string_utils.py        
-│   ├── telegram_utils.py      
-│   └── message_formatters.py  
-└── trading_system.py           # Main system (🔧 enhanced)
-```
+---
 
 ## 🧪 Testing
 
@@ -216,150 +373,139 @@ src/
 # Run all tests
 python run_tests.py
 
-# Run specific tests
+# Run specific test
 pytest tests/test_workflow_factory.py -v
-pytest tests/test_alpaca_api.py -v
-```
-
-## 📊 System Features
-
-### Automated Trading
-- **AI Decision Making**: Intelligent analysis based on market data and news
-- **Risk Control**: Automatic stop-loss and take-profit mechanisms
-- **Position Management**: Smart position allocation and rebalancing
-- **🆕 Real-time Monitoring**: Live market data streaming via Tiingo WebSocket
-- **🆕 Event-driven Rebalancing**: Auto-trigger on price changes, volatility, and breaking news
-- **🆕 Balanced Portfolio Strategy**: Maintain 5-6 positions with ~18% each for optimal diversification
-
-### Remote Control
-- **Telegram Integration**: Control trading system anytime, anywhere
-- **Real-time Notifications**: Instant notifications for trades, system status
-- **Command Control**: Complete control with start, stop, query commands
-
-### Security
-- **Paper Trading**: Enabled by default, zero-risk testing
-- **Multi-layer Security**: API keys, permissions, and access controls
-- **Emergency Stop**: One-click position closure for capital protection
-
-## 🔒 Risk Management
-
-- **Paper Trading**: Enabled by default, safe testing environment
-- **Position Limits**: Maximum 10% per position, total position control
-- **Stop Loss**: Automatic 5% stop-loss protection
-- **Take Profit**: Automatic 15% take-profit to lock in gains
-- **Emergency Controls**: One-click liquidation and emergency stop
-
-## 📄 License
-
-MIT License
-
-## 🆕 Recent Updates
-
-### Version 2.1 - LLM-Driven Portfolio Management (Latest)
-
-#### 🌟 核心改进：完全LLM驱动，零硬编码规则
-
-之前的 `balanced_portfolio` 使用固定规则（18%仓位、±3%触发等）。
-现在的 `llm_portfolio` **完全由LLM自主决策**！
-
-**新设计理念**：
-```python
-# ❌ 旧方式 (Rule-Based)
-if position_drift > 3%:
-    rebalance_to_18_percent()
-
-# ✅ 新方式 (LLM-Driven)  
-llm.analyze({
-    tools: [get_portfolio, get_news, get_market_data, rebalance],
-    task: "分析并决定是否需要调整组合"
-})
-# LLM自己决定：
-# - 是否需要调整
-# - 调整多少仓位
-# - 选择哪些股票
-# - 何时执行
-```
-
-**关键特性**：
-- ✅ **无规则约束** - LLM完全自由决策
-- ✅ **多工具支持** - LLM可调用6个tools获取信息和执行操作
-- ✅ **ReAct Agent** - LLM推理→执行→观察→再推理的循环
-- ✅ **实时响应** - 结合WebSocket实时数据
-- ✅ **可解释** - LLM提供决策理由
-
-**使用方式**：
-```bash
-# .env配置
-WORKFLOW_TYPE=llm_portfolio
-
-# 就这么简单！系统将：
-# 1. LLM持续分析市场、新闻、组合
-# 2. LLM自主决定是否rebalance
-# 3. LLM决定目标配置
-# 4. 自动执行并监控
+pytest tests/test_event_system.py -v
 ```
 
 ---
 
-### Version 2.0 - Enhanced Trading System
 
-#### 1. **Balanced Portfolio Workflow**
-   - New intelligent portfolio management strategy
-   - Maintains 5-6 positions with ~18% allocation each
-   - LLM-driven stock selection based on market analysis
-   - Automatic rebalancing on multiple triggers
 
-#### 2. **Real-time Market Monitoring**
-   - Integrated Tiingo WebSocket for live data streaming
-   - Real-time price tracking and volatility detection
-   - Event-driven rebalancing on:
-     - Price changes (±5%)
-     - High volatility (±8%)
-     - Breaking news events
-   - Smart cooldown period to prevent overtrading
+## Risk Warnings
 
-#### 3. **System Improvements**
-   - **Fixed**: Scheduler asyncio threading bug
-   - **Enhanced**: Event system for better performance
-   - **Added**: Real-time monitoring service
-   - **Improved**: System status reporting
+⚠️ **IMPORTANT**: 
+- This is educational software
+- Trading involves significant risk
+- Past performance ≠ future results
+- Start with paper trading
+- Never invest more than you can afford to lose
 
-#### 4. **Code Architecture**
-   - Clear separation of concerns
-   - Zero redundancy in codebase
-   - Modular design for easy maintenance
-   - Well-documented components
+---
 
-### Usage Example - LLM Portfolio Agent
 
-```python
-# In .env file
-WORKFLOW_TYPE=llm_portfolio
+## 🎓 How LLM Agent Makes Decisions
 
-# 就这么简单！系统将：
-# 1. LLM作为ReAct Agent运行
-# 2. LLM使用tools分析市场、新闻、组合
-# 3. LLM自主决定是否需要rebalance
-# 4. LLM决定目标配置（无固定规则）
-# 5. 实时WebSocket监控触发LLM分析
-# 6. 完全自动化、智能化
+### Example Analysis Flow
+
+```
+1. Daily Trigger at 09:35
+   └─ LLM: "Let me start my analysis"
+
+2. LLM calls: get_current_time()
+   └─ Response: {"current_time_utc": "2025-10-11 13:35:00 UTC"}
+   └─ LLM: "It's Friday, market just opened"
+
+3. LLM calls: check_market_status()
+   └─ Response: {"market_open": true}
+   └─ LLM: "Market is open, I can trade"
+
+4. LLM calls: get_portfolio_status()
+   └─ Response: {equity: $100k, positions: [AAPL 20%, MSFT 25%, Cash 55%]}
+   └─ LLM: "Significant cash position, let me check market"
+
+5. LLM calls: get_market_data()
+   └─ Response: {SPY: +0.5%, QQQ: +1.2%, market trending up}
+   └─ LLM: "Tech is strong today"
+
+6. LLM calls: get_latest_news(sector="Technology", limit=10)
+   └─ Response: [5 positive tech news items]
+   └─ LLM: "Good tech sentiment, consider increasing tech exposure"
+
+7. LLM calls: get_historical_prices("QQQ", "1Day", 30)
+   └─ Response: {30 days of OHLCV data}
+   └─ LLM: "QQQ showing strong momentum, breaking resistance"
+
+8. LLM Decision: "I'll increase QQQ from 0% to 20%"
+   └─ Calls: adjust_position("QQQ", 20.0, "Strong tech momentum + positive news")
+
+9. LLM: "Analysis complete. I'll schedule next check in 4 hours"
+   └─ Calls: schedule_next_analysis(4.0, "Monitor QQQ position", 0)
 ```
 
-### Configuration Options
+---
 
-```bash
-# Workflow Selection (推荐)
-WORKFLOW_TYPE=llm_portfolio       # 🌟 完全LLM驱动，无规则约束
 
-# Other Options
-WORKFLOW_TYPE=sequential          # 固定步骤工作流
-WORKFLOW_TYPE=tool_calling        # 动态工具调用
-WORKFLOW_TYPE=balanced_portfolio  # ⚠️ 已弃用（基于规则）
 
-# LLM Portfolio Agent 无需额外参数配置
-# LLM会自主决定所有策略参数
-```
+## 🛣️ Roadmap
+
+### Planned Features
+
+- [ ] Multi-broker support (IBKR, Robinhood, etc.)
+- [ ] Backtesting framework
+- [ ] Performance analytics dashboard
+- [ ] Multiple portfolio strategies
+- [ ] Options trading support
+- [ ] Risk-adjusted portfolio optimization
+- [ ] Web UI for monitoring
+
+---
+
+## 🤝 Contributing
+
+Contributions welcome! Please:
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests
+5. Submit a pull request
+
+---
+
+## 📚 Documentation
+
+Comprehensive docs in `/docs`:
+
+- [Trading System Refactoring](docs/TRADING_SYSTEM_REFACTORING.md)
+- [Event-Driven Architecture](docs/EVENT_DRIVEN_TRADING_CONTROL.md)
+- [Telegram Integration](docs/TELEGRAM_EVENT_DRIVEN_REFACTORING.md)
+- [Unified Event System](docs/UNIFIED_EVENT_SYSTEM.md)
+- [Recent Improvements](docs/FINAL_IMPROVEMENTS.md)
+- [News Tool Enhancement](docs/NEWS_TOOL_IMPROVEMENT.md)
+- [New Agent Tools](docs/NEW_AGENT_TOOLS.md)
+
+---
+
+## 📄 License
+
+MIT License - see [LICENSE](LICENSE) file for details.
+
+---
 
 ## ⚠️ Disclaimer
 
-This software is for educational purposes only. Trading involves significant risk and may result in financial loss. Past performance does not guarantee future results. Use with caution. 
+**This software is for educational and research purposes only.**
+
+- Trading stocks, ETFs, and other securities involves substantial risk
+- You may lose all or part of your investment
+- Past performance does not guarantee future results
+- This is not financial advice
+- Always start with paper trading
+- Consult a licensed financial advisor before making investment decisions
+
+**USE AT YOUR OWN RISK.**
+
+---
+
+## 🎉 Acknowledgments
+
+Built with:
+- [LangChain](https://github.com/langchain-ai/langchain) - LLM framework
+- [Alpaca](https://alpaca.markets/) - Broker API
+- [Tiingo](https://www.tiingo.com/) - Market data & news
+- [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - Telegram integration
+
+---
+
+*Last updated: 2025-10-11*

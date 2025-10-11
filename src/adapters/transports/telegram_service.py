@@ -862,14 +862,6 @@ class TelegramService(MessageTransport):
                 await update.message.reply_text("❌ Event system not available")
                 return
             
-            # Send immediate confirmation
-            await self.send_message(
-                "🤖 **AI Analysis Started**\n\n"
-                "Running intelligent trading analysis...\n\n"
-                "Watch for detailed step-by-step updates below!", 
-                update.effective_chat.id
-            )
-            
             # Publish workflow event for manual analysis
             await self.event_system.publish("trigger_workflow", {"trigger": "manual_analysis", "context": {"source": "telegram_command"}})
             

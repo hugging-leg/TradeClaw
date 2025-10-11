@@ -1,123 +1,114 @@
 graph TB
-    %% External Services
-    subgraph "External APIs"
-        ALPACA[Alpaca API<br/>📈 Trading & Portfolio]
-        TIINGO[Tiingo API<br/>📊 Market Data & News]
-        TELEGRAM[Telegram API<br/>💬 Messaging]
-        OPENAI[OpenAI/DeepSeek<br/>🤖 LLM Services]
+    subgraph External["External Services"]
+        Telegram[Telegram Bot API]
+        Alpaca[Alpaca Broker API]
+        Tiingo[Tiingo Data & News API]
+        LLMProvider[OpenAI / DeepSeek]
     end
-    
-    %% Main System
-    subgraph "Trading System Core"
-        TS[TradingSystem<br/>🎯 Main Orchestrator]
+
+    subgraph TradingSystem["Trading System Core"]
+        Main[main.py<br/>Entry Point]
+        TS[TradingSystem<br/>Orchestrator]
+        
+        subgraph EventSys["Event System"]
+            ES[EventSystem<br/>Priority Queue<br/>Async Processing]
+        end
+        
+        subgraph Workflow["LLM Agent Workflow"]
+            LLM[LLM Portfolio Agent<br/>ReAct Agent<br/>Autonomous Decision]
+            
+            subgraph Tools["11 Agent Tools"]
+                T1[get_current_time]
+                T2[check_market_status]
+                T3[get_portfolio_status]
+                T4[get_market_data]
+                T5[get_latest_news]
+                T6[get_position_analysis]
+                T7[get_latest_price]
+                T8[get_historical_prices]
+                T9[adjust_position]
+                T10[rebalance_portfolio]
+                T11[schedule_next_analysis]
+            end
+        end
+        
+        subgraph Services["Background Services"]
+            Scheduler[Task Scheduler<br/>Daily Triggers]
+            MM[Message Manager<br/>Notification Router]
+        end
+        
+        subgraph Adapters["API Adapters"]
+            BA[Broker Adapter<br/>Alpaca]
+            MDA[Market Data Adapter<br/>Tiingo]
+            NA[News Adapter<br/>Tiingo]
+            TeleService[Telegram Service<br/>Commands & Callbacks]
+        end
     end
+
+    %% Main initialization flow
+    Main -->|Initialize & Start| TS
+    TS -->|Register Handlers| ES
+    TS -->|Start Scheduler| Scheduler
+    TS -->|Initialize| TeleService
     
-    %% Service Factories
-    subgraph "Service Factories"
-        BF[BrokerFactory]
-        MDF[MarketDataFactory]
-        NF[NewsFactory]
-        MTF[MessageTransportFactory]
-        WF[WorkflowFactory]
-    end
+    %% Event publishing flows
+    Scheduler -->|Publish Events| ES
+    TeleService -->|Publish Events| ES
     
-    %% Adapters
-    subgraph "Adapter Layer"
-        AA[AlpacaBrokerAdapter<br/>🏦 Trading Interface]
-        TMA[TiingoMarketDataAdapter<br/>📈 Market Data]
-        TNA[TiingoNewsAdapter<br/>📰 News Feed]
-        TGS[TelegramService<br/>📱 Bot Interface]
-    end
+    %% Event handling flows
+    ES -->|trigger_workflow| TS
+    ES -->|enable/disable_trading| TS
+    ES -->|query_status| TS
+    ES -->|emergency_stop| TS
     
-    %% Workflows
-    subgraph "AI Workflow Engine"
-        WB[WorkflowBase<br/>Abstract]
-        SW[SequentialWorkflow<br/>🔄 Fixed Steps]
-        TCW[ToolCallingWorkflow<br/>🛠️ Dynamic LLM]
-    end
+    %% Workflow execution
+    TS -->|Execute| LLM
     
-    %% Core Components
-    subgraph "Core Components"
-        ES[EventSystem<br/>⚡ Real-time Events]
-        SCH[TradingScheduler<br/>⏰ Task Automation]
-        MM[MessageManager<br/>📧 Notification Hub]
-    end
+    %% LLM tool usage
+    LLM -->|Use Tools| T1
+    LLM -->|Use Tools| T2
+    LLM -->|Use Tools| T3
+    LLM -->|Use Tools| T4
+    LLM -->|Use Tools| T5
+    LLM -->|Use Tools| T6
+    LLM -->|Use Tools| T7
+    LLM -->|Use Tools| T8
+    LLM -->|Use Tools| T9
+    LLM -->|Use Tools| T10
+    LLM -->|Use Tools| T11
     
-    %% User Interface
-    subgraph "User Interface"
-        USER[👤 User]
-        TGBOT[📱 Telegram Bot<br/>Remote Control]
-    end
+    %% Tool to API connections
+    T3 & T4 & T7 & T8 & T9 & T10 -->|API Calls| BA
+    T4 & T7 & T8 -->|API Calls| MDA
+    T5 -->|API Calls| NA
+    T11 -->|Schedule Event| ES
     
-    %% Data Models
-    subgraph "Data Models"
-        TM[TradingModels<br/>📋 Data Structures]
-    end
+    %% External API connections
+    BA <-->|REST API| Alpaca
+    MDA <-->|REST API| Tiingo
+    NA <-->|REST API| Tiingo
+    TeleService <-->|Bot API| Telegram
+    LLM <-->|API Calls| LLMProvider
     
-    %% Utilities
-    subgraph "Utilities"
-        UTILS[Utils<br/>🔧 Helper Functions]
-    end
-    
-    %% User interactions
-    USER --> TGBOT
-    TGBOT --> TGS
-    
-    %% Main system connections
-    TS --> BF
-    TS --> MDF
-    TS --> NF
-    TS --> MTF
-    TS --> WF
-    TS --> ES
-    TS --> SCH
-    TS --> MM
-    
-    %% Factory to adapter connections
-    BF --> AA
-    MDF --> TMA
-    NF --> TNA
-    MTF --> TGS
-    
-    %% Workflow factory connections
-    WF --> SW
-    WF --> TCW
-    SW -.-> WB
-    TCW -.-> WB
-    
-    %% Adapter to external API connections
-    AA --> ALPACA
-    TMA --> TIINGO
-    TNA --> TIINGO
-    TGS --> TELEGRAM
-    
-    %% AI connections
-    SW --> OPENAI
-    TCW --> OPENAI
-    
-    %% Data flow
-    TS --> TM
-    MM --> UTILS
-    
-    %% Event flows
-    ES -.-> MM
-    SCH -.-> TS
-    
+    %% Notification flows
+    LLM -->|Send Messages| MM
+    TS -->|Send Messages| MM
+    MM -->|Route Messages| TeleService
+    TeleService -->|Send| Telegram
+
     %% Styling
-    classDef external fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef factory fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef adapter fill:#e8f5e8,stroke:#1b5e20,stroke-width:2px
-    classDef workflow fill:#fff3e0,stroke:#e65100,stroke-width:2px
-    classDef core fill:#ffebee,stroke:#b71c1c,stroke-width:2px
-    classDef ui fill:#f1f8e9,stroke:#33691e,stroke-width:2px
-    classDef data fill:#fce4ec,stroke:#880e4f,stroke-width:2px
-    classDef main fill:#e3f2fd,stroke:#0d47a1,stroke-width:3px
+    classDef coreClass fill:#4A90E2,stroke:#2E5C8A,stroke-width:2px,color:#fff
+    classDef eventClass fill:#50C878,stroke:#2D7A4A,stroke-width:2px,color:#fff
+    classDef llmClass fill:#9B59B6,stroke:#6C3483,stroke-width:2px,color:#fff
+    classDef toolClass fill:#E67E22,stroke:#A04000,stroke-width:2px,color:#fff
+    classDef adapterClass fill:#F39C12,stroke:#B8860B,stroke-width:2px,color:#fff
+    classDef externalClass fill:#95A5A6,stroke:#5D6D7E,stroke-width:2px,color:#fff
+    classDef serviceClass fill:#3498DB,stroke:#2C3E50,stroke-width:2px,color:#fff
     
-    class ALPACA,TIINGO,TELEGRAM,OPENAI external
-    class BF,MDF,NF,MTF,WF factory
-    class AA,TMA,TNA,TGS adapter
-    class WB,SW,TCW workflow
-    class ES,SCH,MM core
-    class USER,TGBOT ui
-    class TM,UTILS data
-    class TS main
+    class TS,Main coreClass
+    class ES eventClass
+    class LLM llmClass
+    class T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11 toolClass
+    class BA,MDA,NA,TeleService adapterClass
+    class Telegram,Alpaca,Tiingo,LLMProvider externalClass
+    class Scheduler,MM serviceClass

@@ -1,0 +1,47 @@
+sequenceDiagram
+    participant User
+    participant Telegram as Telegram Bot
+    participant TeleService as Telegram Service
+    participant EventSys as Event System
+    participant TradingSys as Trading System
+    participant LLM as LLM Agent
+    participant Broker as Broker API
+    participant MsgMgr as Message Manager
+
+    Note over User,MsgMgr: Manual Analysis Trigger Flow
+    
+    User->>Telegram: /analyze
+    Telegram->>TeleService: handle_analyze()
+    TeleService->>EventSys: publish("trigger_workflow")
+    EventSys->>TradingSys: _handle_workflow_trigger(event)
+    TradingSys->>LLM: run_workflow(context)
+    
+    Note over LLM: LLM Agent Analysis Loop
+    
+    LLM->>MsgMgr: "🔍 Checking portfolio..."
+    MsgMgr->>Telegram: Notification
+    Telegram->>User: Message
+    
+    LLM->>LLM: get_portfolio_status()
+    LLM->>LLM: get_market_data()
+    LLM->>LLM: get_latest_news()
+    LLM->>LLM: get_historical_prices()
+    
+    Note over LLM: Decision: Buy QQQ
+    
+    LLM->>MsgMgr: "💭 Analysis: Buy QQQ"
+    MsgMgr->>Telegram: Analysis result
+    Telegram->>User: Message
+    
+    LLM->>Broker: adjust_position("QQQ", 20%)
+    Broker-->>LLM: Order ID: xxx
+    
+    LLM->>MsgMgr: "✅ QQQ adjusted to 20%"
+    MsgMgr->>Telegram: Success notification
+    Telegram->>User: Message
+    
+    LLM->>EventSys: schedule_next_analysis(4h)
+    EventSys->>EventSys: Add scheduled event
+    
+    Note over LLM,EventSys: Workflow Complete
+

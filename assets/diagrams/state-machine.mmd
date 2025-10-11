@@ -1,0 +1,30 @@
+stateDiagram-v2
+    [*] --> Initializing: main.py starts
+    
+    Initializing --> Running: start() called
+    
+    Running --> Trading: enable_trading event
+    Running --> Paused: disable_trading event
+    
+    Trading --> Paused: disable_trading event
+    Paused --> Trading: enable_trading event
+    
+    Trading --> Emergency: emergency_stop event
+    Paused --> Emergency: emergency_stop event
+    Running --> Emergency: emergency_stop event
+    
+    Emergency --> Paused: Recovery complete
+    
+    Trading --> Stopped: stop() called
+    Paused --> Stopped: stop() called
+    Emergency --> Stopped: stop() called
+    Running --> Stopped: stop() called
+    
+    Stopped --> [*]
+    
+    Running: System Online<br/>is_running = True<br/>is_trading_enabled = False
+    Trading: Active Trading<br/>is_running = True<br/>is_trading_enabled = True<br/>✅ Workflows Execute
+    Paused: Standby Mode<br/>is_running = True<br/>is_trading_enabled = False<br/>⏸️ No Workflows
+    Emergency: Emergency Mode<br/>is_running = True<br/>is_trading_enabled = False<br/>🚨 Closing Positions
+    Stopped: System Shutdown<br/>is_running = False
+

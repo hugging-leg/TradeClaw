@@ -95,9 +95,8 @@ async def main():
             logger.warning(f"Failed to get news provider info: {e}")
         
         logger.info(f"Rebalance Time: {settings.rebalance_time}")
-        logger.info(f"Max Position Size: {settings.max_position_size * 100}%")
-        logger.info(f"Stop Loss: {settings.stop_loss_percentage * 100}%")
-        logger.info(f"Take Profit: {settings.take_profit_percentage * 100}%")
+        logger.info(f"Stop Loss: {settings.stop_loss_percentage}%")
+        logger.info(f"Take Profit: {settings.take_profit_percentage}%")
         
         # Start the trading system
         await trading_system.start()
