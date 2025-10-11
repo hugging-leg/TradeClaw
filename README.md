@@ -167,7 +167,7 @@ Current implementation has access to 11 powerful tools for autonomous trading:
 ### 1. Clone & Install
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/BryantSuen/Agent-Trader
 cd Agent-Trader
 pip install -r requirements.txt
 ```
@@ -460,26 +460,6 @@ Contributions welcome! Please:
 3. Make your changes
 4. Add tests
 5. Submit a pull request
-
----
-
-## 📚 Documentation
-
-Comprehensive docs in `/docs`:
-
-- [Trading System Refactoring](docs/TRADING_SYSTEM_REFACTORING.md)
-- [Event-Driven Architecture](docs/EVENT_DRIVEN_TRADING_CONTROL.md)
-- [Telegram Integration](docs/TELEGRAM_EVENT_DRIVEN_REFACTORING.md)
-- [Unified Event System](docs/UNIFIED_EVENT_SYSTEM.md)
-- [Recent Improvements](docs/FINAL_IMPROVEMENTS.md)
-- [News Tool Enhancement](docs/NEWS_TOOL_IMPROVEMENT.md)
-- [New Agent Tools](docs/NEW_AGENT_TOOLS.md)
-
----
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) file for details.
 
 ---
 
