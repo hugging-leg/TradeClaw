@@ -549,13 +549,14 @@ Ready to trade! 📊"""
                 self.daily_stats['start_equity'] = portfolio.equity
             
             # Calculate daily performance
-            daily_return = (portfolio.equity - self.daily_stats['start_equity']) / self.daily_stats['start_equity']
+            day_pnl = portfolio.equity - self.daily_stats['start_equity']
+            daily_return = day_pnl / self.daily_stats['start_equity']
             
             # Create summary report
             summary = f"""
 End of Day Summary:
 - Equity: ${portfolio.equity:,.2f}
-- Day P&L: ${portfolio.day_pnl:,.2f}
+- Day P&L: ${day_pnl:,.2f}
 - Daily Return: {daily_return:.2%}
 - Trades Executed: {self.daily_stats['trades_executed']}
 - Active Positions: {len(portfolio.positions)}
