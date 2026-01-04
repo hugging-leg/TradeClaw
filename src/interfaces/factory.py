@@ -1,273 +1,309 @@
 """
 Factory classes for creating API implementations.
 
-This module provides factory classes that manage the creation of different API adapters,
-enabling easy switching between different providers and implementations.
+使用装饰器注册模式：
+- 每个适配器使用 @register_xxx 装饰器自注册
+- Factory 不需要硬编码适配器路径
+- 新增适配器只需添加装饰器，无需修改 factory
 """
 
-import logging
-from typing import Dict, Any, Optional, Type, List
-from enum import Enum
+from src.utils.logging_config import get_logger
+from typing import Dict, Optional, List, Type, Callable
+from functools import wraps
 
 from config import settings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-class BrokerProvider(Enum):
-    """Enumeration of available broker providers"""
-    ALPACA = "alpaca"
-    INTERACTIVE_BROKERS = "interactive_brokers"
-    TD_AMERITRADE = "td_ameritrade"
-    SCHWAB = "schwab"
-
-
-class MarketDataProvider(Enum):
-    """Enumeration of available market data providers"""
-    TIINGO = "tiingo"
-    ALPHA_VANTAGE = "alpha_vantage"
-    YAHOO_FINANCE = "yahoo_finance"
-    POLYGON = "polygon"
-    FINNHUB = "finnhub"
-
-
-class MessageTransportProvider(Enum):
-    """Enumeration of available message transport providers"""
-    TELEGRAM = "telegram"
-    DISCORD = "discord"
-    SLACK = "slack"
-    EMAIL = "email"
-
+# ========== Broker Factory ==========
 
 class BrokerFactory:
-    """Factory for creating broker API implementations"""
-    
-    _registry: Dict[BrokerProvider, str] = {
-        BrokerProvider.ALPACA: "src.adapters.brokers.alpaca_adapter:AlpacaBrokerAdapter",
-        # Add more providers as they're implemented
-    }
-    
+    """Broker API 工厂"""
+
+    _registry: Dict[str, Type] = {}
+    _initialized: bool = False
+
+    @classmethod
+    def _ensure_initialized(cls):
+        """确保内置适配器已注册"""
+        if cls._initialized:
+            return
+        cls._initialized = True
+        # 导入内置适配器模块以触发装饰器注册
+        try:
+            import src.adapters.brokers.alpaca_adapter
+            import src.adapters.brokers.ibkr_adapter
+        except ImportError as e:
+            logger.debug(f"部分 Broker 适配器导入失败: {e}")
+
     @classmethod
     def create_broker_api(cls, provider: Optional[str] = None):
-        """
-        Create a broker API implementation.
-        
-        Args:
-            provider: Optional provider name, defaults to config setting
-            
-        Returns:
-            BrokerAPI implementation instance
-        """
-        try:
-            # Determine provider
-            provider_name = provider or getattr(settings, 'broker_provider', 'alpaca')
-            provider_enum = BrokerProvider(provider_name.lower())
-            
-            # Get implementation class
-            module_path = cls._registry.get(provider_enum)
-            if not module_path:
-                raise ValueError(f"Unsupported broker provider: {provider_name}")
-            
-            # Import and instantiate
-            module_name, class_name = module_path.split(':')
-            module = __import__(module_name, fromlist=[class_name])
-            adapter_class = getattr(module, class_name)
-            
-            logger.info(f"Creating {provider_name} broker API")
-            return adapter_class()
-            
-        except Exception as e:
-            logger.error(f"Failed to create broker API: {e}")
-            raise RuntimeError(f"Broker API creation failed: {e}") from e
-    
+        """创建 Broker API"""
+        cls._ensure_initialized()
+        provider_name = (provider or settings.broker_provider).lower()
+
+        if provider_name not in cls._registry:
+            raise ValueError(f"Unknown broker: {provider_name}. Available: {list(cls._registry.keys())}")
+
+        logger.info(f"Creating {provider_name} broker API")
+        return cls._registry[provider_name]()
+
     @classmethod
     def get_available_providers(cls) -> List[str]:
-        """Get list of available broker providers"""
-        return [provider.value for provider in BrokerProvider]
-    
-    @classmethod
-    def register_provider(cls, provider: BrokerProvider, implementation_path: str):
-        """Register a new broker provider"""
-        cls._registry[provider] = implementation_path
-        logger.info(f"Registered broker provider: {provider.value}")
+        cls._ensure_initialized()
+        return list(cls._registry.keys())
 
+    @classmethod
+    def register(cls, name: str):
+        """装饰器：注册 Broker 适配器"""
+        def decorator(adapter_class: Type):
+            cls._registry[name.lower()] = adapter_class
+            logger.debug(f"Registered broker: {name}")
+            return adapter_class
+        return decorator
+
+
+def register_broker(name: str):
+    """装饰器：注册 Broker 适配器"""
+    return BrokerFactory.register(name)
+
+
+# ========== Market Data Factory ==========
 
 class MarketDataFactory:
-    """Factory for creating market data API implementations"""
-    
-    _registry: Dict[MarketDataProvider, str] = {
-        MarketDataProvider.TIINGO: "src.adapters.market_data.tiingo_market_data_adapter:TiingoMarketDataAdapter",
-        # Add more providers as they're implemented
-    }
-    
+    """Market Data API 工厂"""
+
+    _registry: Dict[str, Type] = {}
+    _initialized: bool = False
+
+    @classmethod
+    def _ensure_initialized(cls):
+        if cls._initialized:
+            return
+        cls._initialized = True
+        try:
+            import src.adapters.market_data.tiingo_market_data_adapter
+        except ImportError as e:
+            logger.debug(f"部分 MarketData 适配器导入失败: {e}")
+
     @classmethod
     def create_market_data_api(cls, provider: Optional[str] = None):
-        """
-        Create a market data API implementation.
-        
-        Args:
-            provider: Optional provider name, defaults to config setting
-            
-        Returns:
-            MarketDataAPI implementation instance
-        """
-        try:
-            # Determine provider
-            provider_name = provider or getattr(settings, 'market_data_provider', 'tiingo')
-            provider_enum = MarketDataProvider(provider_name.lower())
-            
-            # Get implementation class
-            module_path = cls._registry.get(provider_enum)
-            if not module_path:
-                raise ValueError(f"Unsupported market data provider: {provider_name}")
-            
-            # Import and instantiate
-            module_name, class_name = module_path.split(':')
-            module = __import__(module_name, fromlist=[class_name])
-            adapter_class = getattr(module, class_name)
-            
-            logger.info(f"Creating {provider_name} market data API")
-            return adapter_class()
-            
-        except Exception as e:
-            logger.error(f"Failed to create market data API: {e}")
-            raise RuntimeError(f"Market data API creation failed: {e}") from e
-    
+        """创建 Market Data API"""
+        cls._ensure_initialized()
+        provider_name = (provider or settings.market_data_provider).lower()
+
+        if provider_name not in cls._registry:
+            raise ValueError(f"Unknown market data provider: {provider_name}. Available: {list(cls._registry.keys())}")
+
+        logger.info(f"Creating {provider_name} market data API")
+        return cls._registry[provider_name]()
+
     @classmethod
     def get_available_providers(cls) -> List[str]:
-        """Get list of available market data providers"""
-        return [provider.value for provider in MarketDataProvider]
-    
-    @classmethod
-    def register_provider(cls, provider: MarketDataProvider, implementation_path: str):
-        """Register a new market data provider"""
-        cls._registry[provider] = implementation_path
-        logger.info(f"Registered market data provider: {provider.value}")
+        cls._ensure_initialized()
+        return list(cls._registry.keys())
 
+    @classmethod
+    def register(cls, name: str):
+        """装饰器：注册 MarketData 适配器"""
+        def decorator(adapter_class: Type):
+            cls._registry[name.lower()] = adapter_class
+            logger.debug(f"Registered market data: {name}")
+            return adapter_class
+        return decorator
+
+
+def register_market_data(name: str):
+    """装饰器：注册 MarketData 适配器"""
+    return MarketDataFactory.register(name)
+
+
+# ========== Message Transport Factory ==========
 
 class MessageTransportFactory:
-    """Factory for creating message transport implementations"""
-    
-    _registry: Dict[MessageTransportProvider, str] = {
-        MessageTransportProvider.TELEGRAM: "src.adapters.transports.telegram_service:TelegramService",
-        # Add more providers as they're implemented
-    }
-    
+    """Message Transport 工厂"""
+
+    _registry: Dict[str, Type] = {}
+    _initialized: bool = False
+
+    @classmethod
+    def _ensure_initialized(cls):
+        if cls._initialized:
+            return
+        cls._initialized = True
+        try:
+            import src.adapters.transports.telegram.service
+        except ImportError as e:
+            logger.debug(f"部分 MessageTransport 适配器导入失败: {e}")
+
     @classmethod
     def create_message_transport(cls, provider: Optional[str] = None, event_system=None, **kwargs):
-        """
-        Create a message transport implementation.
-        
-        Args:
-            provider: Optional provider name, defaults to config setting
-            event_system: EventSystem instance for publishing events
-            **kwargs: Additional arguments passed to the transport constructor
-            
-        Returns:
-            MessageTransport implementation instance
-        """
-        try:
-            # Determine provider
-            provider_name = provider or getattr(settings, 'message_provider', 'telegram')
-            provider_enum = MessageTransportProvider(provider_name.lower())
-            
-            # Get implementation class
-            module_path = cls._registry.get(provider_enum)
-            if not module_path:
-                raise ValueError(f"Unsupported message transport provider: {provider_name}")
-            
-            # Import and instantiate
-            module_name, class_name = module_path.split(':')
-            module = __import__(module_name, fromlist=[class_name])
-            transport_class = getattr(module, class_name)
-            
-            logger.info(f"Creating {provider_name} message transport")
-            return transport_class(event_system=event_system, **kwargs)
-            
-        except Exception as e:
-            logger.error(f"Failed to create message transport: {e}")
-            raise RuntimeError(f"Message transport creation failed: {e}") from e
-    
+        """创建 Message Transport"""
+        cls._ensure_initialized()
+        provider_name = (provider or settings.message_provider).lower()
+
+        if provider_name not in cls._registry:
+            raise ValueError(f"Unknown message transport: {provider_name}. Available: {list(cls._registry.keys())}")
+
+        logger.info(f"Creating {provider_name} message transport")
+        return cls._registry[provider_name](event_system=event_system, **kwargs)
+
     @classmethod
     def get_available_providers(cls) -> List[str]:
-        """Get list of available message transport providers"""
-        return [provider.value for provider in MessageTransportProvider]
-    
-    @classmethod
-    def register_provider(cls, provider: MessageTransportProvider, implementation_path: str):
-        """Register a new message transport provider"""
-        cls._registry[provider] = implementation_path
-        logger.info(f"Registered message transport provider: {provider.value}")
+        cls._ensure_initialized()
+        return list(cls._registry.keys())
 
+    @classmethod
+    def register(cls, name: str):
+        """装饰器：注册 MessageTransport 适配器"""
+        def decorator(adapter_class: Type):
+            cls._registry[name.lower()] = adapter_class
+            logger.debug(f"Registered message transport: {name}")
+            return adapter_class
+        return decorator
+
+
+def register_message_transport(name: str):
+    """装饰器：注册 MessageTransport 适配器"""
+    return MessageTransportFactory.register(name)
+
+
+# ========== News Factory ==========
 
 class NewsFactory:
-    """Factory for creating news API implementations"""
-    
-    _registry: Dict[str, str] = {
-        "tiingo": "src.adapters.news.tiingo_news_adapter:TiingoNewsAdapter",
-        # Add more providers as they're implemented
-    }
-    
+    """News API 工厂"""
+
+    _registry: Dict[str, Type] = {}
+    _initialized: bool = False
+
     @classmethod
-    def create_news_api(cls, provider: Optional[str] = None):
-        """
-        Create a news API implementation.
-        
-        Args:
-            provider: Optional provider name, defaults to config setting
-            
-        Returns:
-            NewsAPI implementation instance
-        """
+    def _ensure_initialized(cls):
+        if cls._initialized:
+            return
+        cls._initialized = True
         try:
-            # Determine provider
-            provider_name = provider or getattr(settings, 'news_provider', 'tiingo')
-            
-            # Get implementation class
-            module_path = cls._registry.get(provider_name.lower())
-            if not module_path:
-                raise ValueError(f"Unsupported news provider: {provider_name}")
-            
-            # Import and instantiate
-            module_name, class_name = module_path.split(':')
-            module = __import__(module_name, fromlist=[class_name])
-            adapter_class = getattr(module, class_name)
-            
+            import src.adapters.news.tiingo_news_adapter
+            import src.adapters.news.unusual_whales_adapter
+            import src.adapters.news.finnhub_news_adapter
+        except ImportError as e:
+            logger.debug(f"部分 News 适配器导入失败: {e}")
+
+    @classmethod
+    def create_news_api(cls, providers: Optional[List[str]] = None):
+        """创建 News API"""
+        cls._ensure_initialized()
+
+        if providers is None:
+            providers = settings.get_news_providers()
+        if not providers:
+            providers = ["tiingo"]
+
+        # 单个提供商
+        if len(providers) == 1:
+            provider_name = providers[0].lower()
+            if provider_name not in cls._registry:
+                raise ValueError(f"Unknown news provider: {provider_name}. Available: {list(cls._registry.keys())}")
             logger.info(f"Creating {provider_name} news API")
-            return adapter_class()
-            
-        except Exception as e:
-            logger.error(f"Failed to create news API: {e}")
-            raise RuntimeError(f"News API creation failed: {e}") from e
-    
+            return cls._registry[provider_name]()
+
+        # 多个提供商：使用 CompositeNewsAdapter
+        logger.info(f"Creating composite news API: {providers}")
+        from src.adapters.news.composite_news_adapter import CompositeNewsAdapter
+        return CompositeNewsAdapter(providers=providers)
+
     @classmethod
     def get_available_providers(cls) -> List[str]:
-        """Get list of available news providers"""
+        cls._ensure_initialized()
         return list(cls._registry.keys())
-    
+
     @classmethod
-    def register_provider(cls, provider: str, implementation_path: str):
-        """Register a new news provider"""
-        cls._registry[provider] = implementation_path
-        logger.info(f"Registered news provider: {provider}")
+    def register(cls, name: str):
+        """装饰器：注册 News 适配器"""
+        def decorator(adapter_class: Type):
+            cls._registry[name.lower()] = adapter_class
+            logger.debug(f"Registered news provider: {name}")
+            return adapter_class
+        return decorator
 
 
-# Convenience functions for easy API creation
+def register_news(name: str):
+    """装饰器：注册 News 适配器"""
+    return NewsFactory.register(name)
+
+
+# ========== Realtime Data Factory ==========
+
+class RealtimeDataFactory:
+    """实时数据 API 工厂"""
+
+    _registry: Dict[str, Type] = {}
+    _initialized: bool = False
+
+    @classmethod
+    def _ensure_initialized(cls):
+        if cls._initialized:
+            return
+        cls._initialized = True
+        try:
+            import src.adapters.realtime.finnhub_realtime
+        except ImportError as e:
+            logger.debug(f"部分 Realtime 适配器导入失败: {e}")
+
+    @classmethod
+    def create_realtime_api(cls, provider: Optional[str] = None):
+        """创建实时数据 API"""
+        cls._ensure_initialized()
+        provider_name = (provider or settings.realtime_data_provider).lower()
+
+        if provider_name not in cls._registry:
+            raise ValueError(f"Unknown realtime provider: {provider_name}. Available: {list(cls._registry.keys())}")
+
+        logger.info(f"Creating {provider_name} realtime data API")
+        return cls._registry[provider_name]()
+
+    @classmethod
+    def get_available_providers(cls) -> List[str]:
+        cls._ensure_initialized()
+        return list(cls._registry.keys())
+
+    @classmethod
+    def register(cls, name: str):
+        """装饰器：注册 Realtime 适配器"""
+        def decorator(adapter_class: Type):
+            cls._registry[name.lower()] = adapter_class
+            logger.debug(f"Registered realtime provider: {name}")
+            return adapter_class
+        return decorator
+
+
+def register_realtime(name: str):
+    """装饰器：注册 Realtime 适配器"""
+    return RealtimeDataFactory.register(name)
+
+
+# ========== 便捷函数 ==========
+
 def get_broker_api(provider: Optional[str] = None):
-    """Convenience function to create a broker API"""
+    """创建 Broker API"""
     return BrokerFactory.create_broker_api(provider)
 
 
 def get_market_data_api(provider: Optional[str] = None):
-    """Convenience function to create a market data API"""
+    """创建 Market Data API"""
     return MarketDataFactory.create_market_data_api(provider)
 
 
 def get_message_transport(provider: Optional[str] = None, **kwargs):
-    """Convenience function to create a message transport"""
+    """创建 Message Transport"""
     return MessageTransportFactory.create_message_transport(provider, **kwargs)
 
 
-def get_news_api(provider: Optional[str] = None):
-    """Convenience function to create a news API"""
-    return NewsFactory.create_news_api(provider) 
+def get_news_api(providers: Optional[List[str]] = None):
+    """创建 News API"""
+    return NewsFactory.create_news_api(providers)
+
+
+def get_realtime_data_api(provider: Optional[str] = None):
+    """创建实时数据 API"""
+    return RealtimeDataFactory.create_realtime_api(provider)

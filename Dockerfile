@@ -1,39 +1,41 @@
-FROM python:3.13-slim
+# LLM Trading Agent Dockerfile
+FROM python:3.11-slim
 
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1
-ENV PYTHONUNBUFFERED=1
-ENV PYTHONPATH="/app"
-
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    g++ \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Set working directory
+# 设置工作目录
 WORKDIR /app
 
-# Copy requirements first for better Docker layer caching
+# 设置环境变量
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 复制依赖文件
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# 安装 Python 依赖
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# 复制应用代码
 COPY . .
 
-# Create logs directory
-RUN mkdir -p /app/logs /app/data
+# 创建数据目录
+RUN mkdir -p /app/user_data/logs
 
-# Expose port
-EXPOSE 8000
+# 创建非 root 用户
+RUN useradd -m -u 1000 trader && \
+    chown -R trader:trader /app
+USER trader
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD python -c "import sys; sys.exit(0)" || exit 1
+# 健康检查
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)"
 
-# Start command
-CMD ["python", "main.py"] 
+# 启动命令
+CMD ["python", "main.py"]

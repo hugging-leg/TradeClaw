@@ -6,18 +6,20 @@ adapting the Tiingo API for news data to the standardized news interface.
 """
 
 import requests
-import logging
+from src.utils.logging_config import get_logger
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
 from src.interfaces.news_api import NewsAPI, NewsProvider
+from src.interfaces.factory import register_news
 from src.models.trading_models import NewsItem
 from config import settings
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
+@register_news("tiingo")
 class TiingoNewsAdapter(NewsAPI):
     """
     Tiingo News API adapter implementing the NewsAPI interface.

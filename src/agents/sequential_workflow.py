@@ -12,14 +12,12 @@ This represents the original workflow logic that was in trading_workflow.py
 
 import asyncio
 import json
-import logging
+from src.utils.logging_config import get_logger
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from langchain_openai import ChatOpenAI
-from langchain_deepseek import ChatDeepSeek
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langchain.tools import tool
@@ -27,6 +25,8 @@ from pydantic import BaseModel, Field
 
 from config import settings
 from src.agents.workflow_base import WorkflowBase
+from src.agents.workflow_factory import register_workflow
+from src.utils.llm_utils import create_llm_client
 from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.news_api import NewsAPI
@@ -37,35 +37,9 @@ from src.models.trading_models import (
 )
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-def create_llm_client():
-    """
-    Factory function to create LLM client based on provider setting.
-    
-    Returns:
-        Chat client instance configured for the specified provider
-    """
-    if settings.llm_provider.lower() == "deepseek":
-        return ChatDeepSeek(
-            model=settings.deepseek_model,
-            api_key=settings.deepseek_api_key,
-            temperature=0.1
-        )
-    elif settings.llm_provider.lower() == "openai":
-        return ChatOpenAI(
-            model=settings.openai_model,
-            api_key=settings.openai_api_key,
-            temperature=0.1
-        )
-    else:
-        logger.warning(f"Unknown LLM provider: {settings.llm_provider}. Defaulting to OpenAI.")
-        return ChatOpenAI(
-            model=settings.openai_model,
-            api_key=settings.openai_api_key,
-            temperature=0.1
-        )
 
 
 class TradingState(BaseModel):
@@ -78,6 +52,12 @@ class TradingState(BaseModel):
     context: Dict[str, Any] = Field(default_factory=dict)
 
 
+@register_workflow(
+    "sequential",
+    description="Fixed-step sequential workflow",
+    features=["固定执行顺序", "LangGraph 状态管理", "结构化分析流程"],
+    best_for="稳定可预测的交易分析"
+)
 class SequentialWorkflow(WorkflowBase):
     """
     Sequential AI trading workflow implementation.
@@ -160,7 +140,9 @@ class SequentialWorkflow(WorkflowBase):
             
             # Initialize context
             context = initial_context or {}
-            await self.initialize_workflow(context)
+            context.setdefault("trigger", "manual")
+            context.setdefault("timestamp", datetime.now().isoformat())
+            context.setdefault("workflow_type", "sequential")
             
             # Create initial state
             initial_state = TradingState(
@@ -193,39 +175,8 @@ class SequentialWorkflow(WorkflowBase):
         except Exception as e:
             logger.error(f"Error in sequential workflow: {e}")
             return await self._handle_workflow_error(e, "Workflow Execution")
-    
-    async def initialize_workflow(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Initialize the workflow with given context."""
-        # Set default context values
-        context.setdefault("trigger", "manual")
-        context.setdefault("timestamp", datetime.now().isoformat())
-        context.setdefault("workflow_type", "sequential")
-        
-        return self._update_context(context)
-    
-    async def gather_data(self) -> Dict[str, Any]:
-        """Gather necessary data for trading decisions."""
-        data = {
-            "portfolio": await self.get_portfolio(),
-            "market_data": await self.get_market_data(),
-            "news": await self.get_news(),
-            "market_open": await self.is_market_open()
-        }
-        return data
-    
-    async def make_decision(self, data: Dict[str, Any]) -> Optional[TradingDecision]:
-        """Make a trading decision based on gathered data."""
-        # This is implemented in the _make_decision method that's part of the LangGraph workflow
-        # For the base class interface, we'll return None as this is handled by the workflow
-        return None
-    
-    async def execute_decision(self, decision: Optional[TradingDecision]) -> Dict[str, Any]:
-        """Execute the trading decision."""
-        # This is implemented in the _execute_trades method that's part of the LangGraph workflow
-        # For the base class interface, we'll return a basic response
-        return {"success": False, "message": "Use workflow execution"}
-    
-    # LangGraph workflow methods
+
+    # ========== LangGraph workflow methods ==========
     
     async def _gather_data(self, state: TradingState) -> TradingState:
         """Gather market data and portfolio information"""

@@ -18,6 +18,7 @@ class NewsProvider(Enum):
     TIINGO = "tiingo"
     ALPHA_VANTAGE = "alpha_vantage"
     NEWS_API = "news_api"
+    UNUSUAL_WHALES = "unusual_whales"
     CUSTOM = "custom"
 
 

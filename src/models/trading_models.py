@@ -75,6 +75,13 @@ class Position(BaseModel):
     unrealized_pnl_percentage: Decimal = Decimal('0')
     side: PositionSide
     avg_entry_price: Optional[Decimal] = None
+
+    @property
+    def current_price(self) -> Decimal:
+        """计算当前价格（市值 / 数量）"""
+        if self.quantity == 0:
+            return Decimal('0')
+        return self.market_value / abs(self.quantity)
     
 
 class Order(BaseModel):

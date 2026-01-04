@@ -6,10 +6,10 @@ Markdown processing, and content cleaning.
 """
 
 import re
-import logging
+from src.utils.logging_config import get_logger
 from typing import Optional
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def escape_markdown_symbols(text: str, symbols: str = "_") -> str:

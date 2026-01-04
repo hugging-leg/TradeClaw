@@ -17,18 +17,18 @@
 
 import asyncio
 import json
-import logging
+from src.utils.logging_config import get_logger
 from typing import Dict, List, Any, Optional, Set
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-from langchain_deepseek import ChatDeepSeek
 from pydantic import BaseModel, Field
 
 from config import settings
 from src.agents.workflow_base import WorkflowBase
+from src.agents.workflow_factory import register_workflow
+from src.utils.llm_utils import create_llm_client
 from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.news_api import NewsAPI
@@ -38,23 +38,9 @@ from src.models.trading_models import (
     TimeInForce, TradingAction, Position
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-def create_llm_client():
-    """创建LLM客户端"""
-    if settings.llm_provider.lower() == "deepseek":
-        return ChatDeepSeek(
-            model=settings.deepseek_model,
-            api_key=settings.deepseek_api_key,
-            temperature=0.1
-        )
-    else:
-        return ChatOpenAI(
-            model=settings.openai_model,
-            api_key=settings.openai_api_key,
-            temperature=0.1
-        )
 
 
 class PortfolioTarget(BaseModel):
@@ -74,6 +60,13 @@ class RebalanceDecision(BaseModel):
     total_adjustments: int = 0
 
 
+@register_workflow(
+    "balanced_portfolio",
+    description="均衡组合策略工作流",
+    features=["自动再平衡", "仓位偏离检测", "LLM 选股"],
+    best_for="分散化组合管理",
+    deprecated=True  # 推荐使用 llm_portfolio
+)
 class BalancedPortfolioWorkflow(WorkflowBase):
     """
     均衡组合策略工作流
@@ -182,14 +175,7 @@ class BalancedPortfolioWorkflow(WorkflowBase):
         except Exception as e:
             logger.error(f"均衡组合工作流错误: {e}")
             return await self._handle_workflow_error(e, "均衡组合执行")
-    
-    async def initialize_workflow(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """初始化工作流"""
-        context.setdefault("trigger", "manual")
-        context.setdefault("timestamp", datetime.now().isoformat())
-        context.setdefault("workflow_type", "balanced_portfolio")
-        return self._update_context(context)
-    
+
     async def gather_data(self) -> Dict[str, Any]:
         """收集必要数据"""
         portfolio = await self.get_portfolio()
@@ -611,15 +597,3 @@ REASONING: [简要说明整体选股逻辑]
                     message += f"- {result['symbol']} {result['action']}: {result.get('error', 'Unknown')}\n"
         
         await self.message_manager.send_message(message, "info")
-    
-    async def make_decision(self, data: Dict[str, Any]) -> Optional[TradingDecision]:
-        """为兼容基类接口而实现，但实际逻辑在run_workflow中"""
-        return None
-    
-    async def execute_decision(self, decision: Optional[TradingDecision]) -> Dict[str, Any]:
-        """为兼容基类接口而实现，但实际逻辑在run_workflow中"""
-        return {"success": False, "message": "Use run_workflow instead"}
-    
-    def get_workflow_type(self) -> str:
-        """获取工作流类型"""
-        return "balanced_portfolio"

@@ -7,58 +7,16 @@ from datetime import datetime
 
 from src.trading_system import TradingSystem
 from src.interfaces.factory import get_news_api
+from src.utils.logging_config import setup_logging as setup_structlog, get_logger
 from config import settings
-
-
-# Setup logging
-def setup_logging():
-    """Setup logging configuration"""
-    log_dir = Path("logs")
-    log_dir.mkdir(exist_ok=True)
-    
-    # Create formatters
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Setup file handler with UTF-8 encoding
-    file_handler = logging.FileHandler(
-        log_dir / f"trading_agent_{datetime.now().strftime('%Y%m%d')}.log",
-        encoding='utf-8'
-    )
-    file_handler.setFormatter(formatter)
-    file_handler.setLevel(logging.INFO)
-    
-    # Setup console handler with UTF-8 encoding
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    console_handler.setLevel(logging.INFO)
-    
-    # Force UTF-8 encoding for Windows
-    if hasattr(console_handler.stream, 'reconfigure'):
-        try:
-            console_handler.stream.reconfigure(encoding='utf-8')
-        except Exception:
-            pass  # Fallback to default encoding
-    
-    # Setup root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(getattr(logging, settings.log_level.upper()))
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
-    
-    # Reduce noise from external libraries
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("telegram").setLevel(logging.WARNING)
 
 
 async def main():
     """Main entry point for the trading system"""
-    
-    # Setup logging
-    setup_logging()
-    logger = logging.getLogger(__name__)
+
+    # Setup structured logging
+    setup_structlog()
+    logger = get_logger(__name__)
     
     # Create trading system
     trading_system = TradingSystem()
@@ -79,12 +37,12 @@ async def main():
         
         # Print system info
         logger.info(f"Environment: {settings.environment}")
-        logger.info(f"Alpaca Base URL: {settings.alpaca_base_url}")
-        logger.info(f"LLM Provider: {settings.llm_provider}")
-        if settings.llm_provider.lower() == "openai":
-            logger.info(f"OpenAI Model: {settings.openai_model}")
-        elif settings.llm_provider.lower() == "deepseek":
-            logger.info(f"DeepSeek Model: {settings.deepseek_model}")
+        logger.info(f"Data Dir: {settings.get_data_dir()}")
+        logger.info(f"Database: {settings.get_database_url().split('@')[-1] if '@' in settings.get_database_url() else settings.get_database_url()}")
+        logger.info(f"Timezone: {settings.trading_timezone}")
+        logger.info(f"Exchange: {settings.exchange}")
+        logger.info(f"Broker: {settings.broker_provider}")
+        logger.info(f"LLM: {settings.llm_model} @ {settings.llm_base_url}")
         
         # Display news provider information
         try:

@@ -1,471 +1,452 @@
 """
-Message formatting utilities for the trading system.
+消息格式化工具
 
-This module contains functions for formatting various types of trading system messages
-with consistent styling and emoji usage.
+用于格式化各种交易相关消息
 """
 
-from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Optional, Dict, Any, List
 from decimal import Decimal
-
-from .string_utils import format_currency, format_percentage
-from .telegram_utils import escape_markdown_symbols
+from datetime import datetime
 
 
-def format_alert_message(message: str, alert_type: str) -> str:
+def format_order_message(order, event_type: str) -> str:
     """
-    Format system alert message.
-    
+    格式化订单消息
+
     Args:
-        message: Alert message content
-        alert_type: Type of alert (info, warning, error, success)
-        
+        order: 订单对象
+        event_type: 事件类型（created, filled, cancelled, rejected）
+
     Returns:
-        Formatted alert message
+        格式化的消息字符串
+    """
+    emoji_map = {
+        'created': '📝',
+        'filled': '✅',
+        'cancelled': '❌',
+        'rejected': '⚠️',
+        'partial': '📊'
+    }
+    emoji = emoji_map.get(event_type, '📌')
+
+    # 基本信息
+    symbol = getattr(order, 'symbol', 'N/A')
+    side = getattr(order, 'side', 'N/A')
+    if hasattr(side, 'value'):
+        side = side.value
+    quantity = getattr(order, 'quantity', 0)
+    order_type = getattr(order, 'order_type', 'N/A')
+    if hasattr(order_type, 'value'):
+        order_type = order_type.value
+
+    message = f"{emoji} **订单{_get_event_text(event_type)}**\n\n"
+    message += f"• 股票: `{symbol}`\n"
+    message += f"• 方向: {side}\n"
+    message += f"• 数量: {quantity}\n"
+    message += f"• 类型: {order_type}\n"
+
+    # 价格信息
+    if hasattr(order, 'price') and order.price:
+        message += f"• 价格: ${order.price}\n"
+
+    if hasattr(order, 'filled_price') and order.filled_price:
+        message += f"• 成交价: ${order.filled_price}\n"
+
+    # 订单 ID
+    if hasattr(order, 'id') and order.id:
+        message += f"\n_订单 ID: {order.id[:8]}..._"
+
+    return message
+
+
+def format_portfolio_message(portfolio) -> str:
+    """
+    格式化投资组合消息
+
+    Args:
+        portfolio: 投资组合对象
+
+    Returns:
+        格式化的消息字符串
+    """
+    message = "📊 **投资组合概览**\n\n"
+
+    # 账户摘要
+    equity = getattr(portfolio, 'equity', Decimal('0'))
+    cash = getattr(portfolio, 'cash', Decimal('0'))
+    market_value = getattr(portfolio, 'market_value', Decimal('0'))
+    total_pnl = getattr(portfolio, 'total_pnl', Decimal('0'))
+
+    message += f"💰 **账户信息**\n"
+    message += f"• 总权益: ${equity:,.2f}\n"
+    message += f"• 现金: ${cash:,.2f}\n"
+    message += f"• 市值: ${market_value:,.2f}\n"
+
+    pnl_emoji = "📈" if total_pnl >= 0 else "📉"
+    message += f"• 总盈亏: {pnl_emoji} ${total_pnl:+,.2f}\n"
+
+    # 持仓列表
+    positions = getattr(portfolio, 'positions', [])
+    if positions:
+        message += f"\n📋 **持仓 ({len(positions)})**\n"
+        for pos in positions[:10]:  # 最多显示 10 个
+            symbol = getattr(pos, 'symbol', 'N/A')
+            qty = getattr(pos, 'quantity', 0)
+            pnl = getattr(pos, 'unrealized_pnl', Decimal('0'))
+            pnl_pct = getattr(pos, 'unrealized_pnl_percentage', Decimal('0'))
+
+            pnl_emoji = "🟢" if pnl >= 0 else "🔴"
+            message += f"• `{symbol}`: {qty} 股 {pnl_emoji} {pnl_pct:+.1f}%\n"
+
+        if len(positions) > 10:
+            message += f"_... 还有 {len(positions) - 10} 个持仓_\n"
+    else:
+        message += "\n_无持仓_\n"
+
+    return message
+
+
+def format_alert_message(message: str, alert_type: str = "info") -> str:
+    """
+    格式化系统警报消息
+
+    Args:
+        message: 警报内容
+        alert_type: 警报类型（info, warning, error, success）
+
+    Returns:
+        格式化的消息字符串
     """
     emoji_map = {
         'info': 'ℹ️',
         'warning': '⚠️',
         'error': '🚨',
-        'success': '✅'
+        'success': '✅',
+        'critical': '🔴'
     }
-    
     emoji = emoji_map.get(alert_type, 'ℹ️')
-    title = alert_type.upper()
-    
-    formatted_message = f"""
-{emoji} *{title}*
 
-{message}
+    return f"{emoji} **系统通知**\n\n{message}"
 
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+def format_status_message(status: Dict[str, Any]) -> str:
     """
-    
-    return formatted_message.strip()
+    格式化系统状态消息
 
-
-def format_portfolio_message(portfolio) -> str:
-    """
-    Format portfolio update message.
-    
     Args:
-        portfolio: Portfolio object with equity, pnl, positions, etc.
-        
+        status: 状态字典
+
     Returns:
-        Formatted portfolio message
+        格式化的消息字符串
     """
-    try:
-        day_pnl = float(portfolio.day_pnl)
-        equity = float(portfolio.equity)
-        day_pnl_pct = (day_pnl / equity) * 100 if equity != 0 else 0
-    except (ValueError, TypeError, AttributeError):
-        day_pnl_pct = 0
-    
-    pnl_emoji = "📈" if day_pnl > 0 else "📉" if day_pnl < 0 else "➡️"
-    
-    try:
-        message = f"""
-💼 *Portfolio Update*
+    message = "🤖 **系统状态**\n\n"
 
-💰 *Total Equity*: {format_currency(portfolio.equity)}
-{pnl_emoji} *Day P&L*: {format_currency(portfolio.day_pnl)} ({day_pnl_pct:.2f}%)
-📊 *Market Value*: {format_currency(portfolio.market_value)}
-💵 *Cash*: {format_currency(portfolio.cash)}
-📈 *Total P&L*: {format_currency(portfolio.total_pnl)}
+    # 系统状态
+    state = status.get('state', 'unknown')
+    is_running = status.get('is_running', False)
+    is_trading = status.get('is_trading_enabled', False)
+    is_market_open = status.get('is_market_open', False)
 
-📦 *Positions*: {len(portfolio.positions)}
-        """
-    except AttributeError as e:
-        # Fallback if portfolio object doesn't have expected attributes
-        message = f"""
-💼 *Portfolio Update*
+    state_emoji = "🟢" if is_running else "🔴"
+    trading_emoji = "✅" if is_trading else "⏸️"
+    market_emoji = "🔔" if is_market_open else "🔕"
 
-Portfolio information temporarily unavailable.
+    message += f"{state_emoji} 状态: {state}\n"
+    message += f"{trading_emoji} 交易: {'已启用' if is_trading else '已暂停'}\n"
+    message += f"{market_emoji} 市场: {'开盘中' if is_market_open else '已休市'}\n"
 
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        """
-    
-    return message.strip()
+    # 工作流信息
+    workflow_type = status.get('workflow_type', 'N/A')
+    message += f"\n📋 工作流: {workflow_type}\n"
+
+    # 事件队列
+    queue_size = status.get('event_queue_size', 0)
+    if queue_size > 0:
+        message += f"📬 待处理事件: {queue_size}\n"
+
+    # 最后执行时间
+    last_exec = status.get('last_workflow_execution')
+    if last_exec:
+        message += f"\n⏰ 上次执行: {last_exec}"
+
+    return message
 
 
-def format_order_message(order, event_type: str) -> str:
+def format_orders_message(orders: List[Any]) -> str:
     """
-    Format order notification message.
-    
+    格式化订单列表消息
+
     Args:
-        order: Order object
-        event_type: Type of order event (created, filled, canceled, etc.)
-        
+        orders: 订单列表
+
     Returns:
-        Formatted order message
+        格式化的消息字符串
+    """
+    if not orders:
+        return "📝 **活跃订单**\n\n_暂无活跃订单_"
+
+    message = f"📝 **活跃订单 ({len(orders)})**\n\n"
+
+    for order in orders[:10]:
+        symbol = getattr(order, 'symbol', 'N/A')
+        side = getattr(order, 'side', 'N/A')
+        if hasattr(side, 'value'):
+            side = side.value
+        qty = getattr(order, 'quantity', 0)
+        status = getattr(order, 'status', 'N/A')
+        if hasattr(status, 'value'):
+            status = status.value
+
+        side_emoji = "🟢" if 'buy' in str(side).lower() else "🔴"
+        message += f"{side_emoji} `{symbol}` {side} {qty} - {status}\n"
+
+    if len(orders) > 10:
+        message += f"\n_... 还有 {len(orders) - 10} 个订单_"
+
+    return message
+
+
+def format_trade_result(result: Dict[str, Any]) -> str:
+    """
+    格式化交易结果消息
+
+    Args:
+        result: 交易结果字典
+
+    Returns:
+        格式化的消息字符串
+    """
+    success = result.get('success', False)
+    emoji = "✅" if success else "❌"
+
+    message = f"{emoji} **交易结果**\n\n"
+
+    if 'trades' in result:
+        trades = result['trades']
+        success_count = sum(1 for t in trades if t.get('success'))
+        message += f"• 总交易: {len(trades)}\n"
+        message += f"• 成功: {success_count}\n"
+        message += f"• 失败: {len(trades) - success_count}\n"
+
+    if 'error' in result and result['error']:
+        message += f"\n⚠️ 错误: {result['error']}"
+
+    return message
+
+
+def format_workflow_result(result: Dict[str, Any]) -> str:
+    """
+    格式化工作流执行结果
+
+    Args:
+        result: 工作流结果字典
+
+    Returns:
+        格式化的消息字符串
+    """
+    success = result.get('success', False)
+    emoji = "🎯" if success else "❌"
+
+    message = f"{emoji} **工作流执行完成**\n\n"
+
+    workflow_type = result.get('workflow_type', 'N/A')
+    trigger = result.get('trigger', 'N/A')
+    execution_time = result.get('execution_time', 0)
+
+    message += f"• 类型: {workflow_type}\n"
+    message += f"• 触发: {trigger}\n"
+    message += f"• 耗时: {execution_time:.1f}s\n"
+
+    if 'llm_response' in result and result['llm_response']:
+        # 截断过长的 LLM 响应
+        response = result['llm_response']
+        if len(response) > 500:
+            response = response[:500] + "..."
+        message += f"\n💬 **AI 分析**\n{response}"
+
+    return message
+
+
+def format_workflow_message(
+    workflow_type: str,
+    message: str,
+    data: Dict[str, Any] = None
+) -> str:
+    """
+    格式化工作流通知消息
+
+    Args:
+        workflow_type: 工作流类型
+        message: 通知消息
+        data: 附加数据
     """
     emoji_map = {
-        'created': '📝',
-        'filled': '✅',
-        'partially_filled': '📊',
-        'canceled': '❌',
-        'rejected': '🚫'
-    }
-    
-    emoji = emoji_map.get(event_type, '📝')
-    title = f"Order {event_type.replace('_', ' ').title()}"
-    
-    try:
-        # Escape symbol to prevent markdown issues
-        safe_symbol = escape_markdown_symbols(str(order.symbol))
-        
-        message = f"""
-{emoji} *{title}*
-
-📊 *Symbol*: {safe_symbol}
-📈 *Side*: {order.side.value.upper()}
-📦 *Quantity*: {order.quantity}
-💰 *Type*: {order.order_type.value.upper()}
-"""
-        
-        if hasattr(order, 'price') and order.price:
-            message += f"💵 *Price*: {format_currency(order.price)}\n"
-        
-        if hasattr(order, 'filled_quantity') and order.filled_quantity and order.filled_quantity > 0:
-            message += f"✅ *Filled*: {order.filled_quantity}\n"
-        
-        if hasattr(order, 'filled_price') and order.filled_price:
-            message += f"💲 *Fill Price*: {format_currency(order.filled_price)}\n"
-        
-        if hasattr(order, 'id') and order.id:
-            message += f"🔢 *Order ID*: {order.id}\n"
-            
-    except AttributeError as e:
-        message = f"""
-{emoji} *{title}*
-
-Order information temporarily unavailable.
-
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        """
-    
-    return message.strip()
-
-
-def format_workflow_message(workflow_type: str, message: str, data: Optional[Dict[str, Any]] = None) -> str:
-    """
-    Format workflow notification message.
-    
-    Args:
-        workflow_type: Type of workflow (analysis, rebalance, etc.)
-        message: Workflow message
-        data: Additional data context
-        
-    Returns:
-        Formatted workflow message
-    """
-    emoji_map = {
-        'analysis': '📊',
+        'analysis': '🔍',
         'rebalance': '⚖️',
         'risk_check': '🛡️',
-        'eod_analysis': '🌅',
-        'news_analysis': '📰',
-        'manual_analysis': '🤖',
-        'daily_rebalance': '⚖️'
+        'portfolio_check': '📊',
+        'daily': '📅'
     }
-    
-    emoji = emoji_map.get(workflow_type, '🔄')
-    title = workflow_type.replace('_', ' ').title()
-    
-    formatted_message = f"""
-{emoji} *{title}*
+    emoji = emoji_map.get(workflow_type.lower(), '📋')
 
-{message}
-    """
-    
+    result = f"{emoji} **工作流: {workflow_type}**\n\n{message}"
+
     if data:
-        formatted_message += "\n\n📋 *Details:*\n"
+        result += "\n\n**详情:**\n"
         for key, value in data.items():
-            # Format key nicely
-            formatted_key = key.replace('_', ' ').title()
-            formatted_message += f"• {formatted_key}: {str(value)}\n"
-    
-    formatted_message += f"\n📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    
-    return formatted_message.strip()
+            result += f"• {key}: {value}\n"
+
+    return result
 
 
-def format_trade_execution_message(symbol: str, action: str, quantity: str, order_id: str) -> str:
+def format_trade_execution_message(
+    symbol: str,
+    action: str,
+    quantity: str,
+    order_id: str
+) -> str:
     """
-    Format trade execution notification.
-    
+    格式化交易执行消息
+
     Args:
-        symbol: Trading symbol
-        action: Trade action (BUY/SELL)
-        quantity: Quantity traded
-        order_id: Order identifier
-        
-    Returns:
-        Formatted trade execution message
+        symbol: 股票代码
+        action: 交易动作 (BUY/SELL)
+        quantity: 数量
+        order_id: 订单 ID
     """
-    # Escape symbol to prevent markdown issues
-    safe_symbol = escape_markdown_symbols(str(symbol))
-    
-    execution_message = f"""
-📈 *Trade Executed*
+    emoji = "🟢" if action.upper() == "BUY" else "🔴"
+    action_text = "买入" if action.upper() == "BUY" else "卖出"
 
-*Symbol*: {safe_symbol}
-*Action*: {action.upper()}
-*Quantity*: {quantity}
-*Order ID*: {order_id}
+    return f"""{emoji} **交易执行**
 
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+• 股票: `{symbol}`
+• 操作: {action_text}
+• 数量: {quantity}
+• 订单ID: `{order_id[:8]}...`
+"""
+
+
+def format_tool_result_message(
+    tool_name: str,
+    tool_args: dict,
+    tool_result: str,
+    success: bool = True
+) -> str:
     """
-    
-    return execution_message.strip()
+    格式化工具执行结果消息
 
-
-def format_tool_result_message(tool_name: str, tool_args: dict, tool_result: str, success: bool = True) -> str:
-    """
-    Format tool execution result message.
-    
     Args:
-        tool_name: Name of the executed tool
-        tool_args: Arguments passed to the tool
-        tool_result: Result returned by the tool
-        success: Whether the tool execution was successful
-        
-    Returns:
-        Formatted tool result message
+        tool_name: 工具名称
+        tool_args: 工具参数
+        tool_result: 执行结果
+        success: 是否成功
     """
-    status_emoji = "✅" if success else "❌"
-    status_text = "Success" if success else "Failed"
-    
-    # Simple formatting - no complex escaping
-    args_str = ""
-    if tool_args:
-        args_str = "\n*Arguments:*\n"
-        for key, value in tool_args.items():
-            # Limit argument value length and escape if needed
-            arg_value = str(value)[:100]
-            if len(str(value)) > 100:
-                arg_value += "..."
-            args_str += f"• {key}: {arg_value}\n"
-    
-    # Simple result preview
-    result_preview = str(tool_result)[:500]
-    if len(str(tool_result)) > 500:
-        result_preview += "..."
-    
-    tool_message = f"""
-🔧 *Tool Execution {status_text}*
+    emoji = "✅" if success else "❌"
+    status = "成功" if success else "失败"
 
-*Tool*: {tool_name}
-{args_str}
-*Result:*
-{result_preview}
+    # 截断过长的结果
+    result_display = tool_result
+    if len(result_display) > 300:
+        result_display = result_display[:300] + "..."
 
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    # 格式化参数
+    args_display = ", ".join(f"{k}={v}" for k, v in tool_args.items())
+    if len(args_display) > 100:
+        args_display = args_display[:100] + "..."
+
+    return f"""{emoji} **工具执行{status}**
+
+🔧 工具: `{tool_name}`
+📝 参数: `{args_display}`
+📤 结果: {result_display}
+"""
+
+
+def format_analysis_summary_message(analysis_text: str) -> str:
     """
-    
-    return tool_message.strip()
+    格式化分析摘要消息
 
-
-def format_analysis_summary_message(analysis_text: str, max_length: int = 1000) -> str:
-    """
-    Format analysis summary message.
-    
     Args:
-        analysis_text: Analysis summary text
-        max_length: Maximum length for the analysis text
-        
-    Returns:
-        Formatted analysis summary message
+        analysis_text: 分析文本
     """
-    # Truncate analysis text if too long
-    if len(analysis_text) > max_length:
-        safe_analysis = analysis_text[:max_length - 3] + "..."
-    else:
-        safe_analysis = analysis_text
-    
-    summary_message = f"""
-📊 *Analysis Summary*
+    # 截断过长的分析
+    if len(analysis_text) > 2000:
+        analysis_text = analysis_text[:2000] + "\n\n... (内容已截断)"
 
-{safe_analysis}
+    return f"""🔍 **AI 分析摘要**
 
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-    """
-    
-    return summary_message.strip()
+{analysis_text}
+"""
 
 
 def format_decision_summary_message(decision) -> str:
     """
-    Format trading decision summary message.
-    
+    格式化决策摘要消息
+
     Args:
-        decision: TradingDecision object or None
-        
-    Returns:
-        Formatted decision summary message
+        decision: TradingDecision 对象或 None
     """
     if decision is None:
-        decision_message = f"""
-🤔 *Trading Decision*
+        return "📊 **交易决策**\n\n_暂无交易决策_"
 
-*Action*: HOLD
-*Reasoning*: No trading decision made
+    action = getattr(decision, 'action', 'HOLD')
+    symbol = getattr(decision, 'symbol', 'N/A')
+    confidence = getattr(decision, 'confidence', 0)
+    reasoning = getattr(decision, 'reasoning', '')
 
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        """
-    else:
-        try:
-            # Safe access to decision attributes
-            action = getattr(decision, 'action', 'UNKNOWN')
-            if hasattr(action, 'value'):
-                action = action.value
-            
-            symbol = getattr(decision, 'symbol', 'N/A') or 'N/A'
-            quantity = getattr(decision, 'quantity', 'N/A') or 'N/A'
-            confidence = getattr(decision, 'confidence', 0.5)
-            reasoning = getattr(decision, 'reasoning', 'No reasoning provided')
-            
-            # Escape symbol to prevent markdown issues
-            safe_symbol = escape_markdown_symbols(str(symbol))
-            
-            # Truncate reasoning if too long
-            if len(reasoning) > 400:
-                safe_reasoning = reasoning[:397] + "..."
-            else:
-                safe_reasoning = reasoning
-            
-            decision_message = f"""
-🎯 *Trading Decision*
+    action_emoji = {
+        'BUY': '🟢',
+        'SELL': '🔴',
+        'HOLD': '⏸️'
+    }.get(str(action).upper(), '📊')
 
-*Action*: {str(action).upper()}
-*Symbol*: {safe_symbol}
-*Quantity*: {quantity}
-*Confidence*: {float(confidence)*100:.1f}%
+    message = f"""{action_emoji} **交易决策**
 
-*Reasoning*: {safe_reasoning}
+• 操作: {action}
+• 股票: `{symbol}`
+• 置信度: {confidence:.0%}
+"""
 
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """
-        except Exception as e:
-            decision_message = f"""
-🎯 *Trading Decision*
+    if reasoning:
+        if len(reasoning) > 500:
+            reasoning = reasoning[:500] + "..."
+        message += f"\n💭 **分析理由:**\n{reasoning}"
 
-Decision information temporarily unavailable.
-
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            """
-    
-    return decision_message.strip()
+    return message
 
 
-def format_reasoning_summary_message(reasoning_text: str, tool_calls_count: int = 0) -> str:
+def format_reasoning_summary_message(
+    reasoning_text: str,
+    tool_calls_count: int = 0
+) -> str:
     """
-    Format AI reasoning summary message.
-    
+    格式化 AI 推理摘要消息
+
     Args:
-        reasoning_text: The AI's reasoning and analysis
-        tool_calls_count: Number of tools used in the analysis
-        
-    Returns:
-        Formatted reasoning summary message
+        reasoning_text: AI 推理文本
+        tool_calls_count: 工具调用次数
     """
-    # Simple formatting with basic length limit
-    safe_reasoning = str(reasoning_text)[:1000]
-    if len(str(reasoning_text)) > 1000:
-        safe_reasoning += "..."
-    
-    reasoning_message = f"""
-🧠 *AI Reasoning & Analysis*
+    if len(reasoning_text) > 1500:
+        reasoning_text = reasoning_text[:1500] + "\n\n... (内容已截断)"
 
-{safe_reasoning}
+    message = f"""🧠 **AI 分析推理**
 
-📊 *Tool Usage*: {tool_calls_count} tools executed
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-    """
-    
-    return reasoning_message.strip()
+{reasoning_text}
+"""
+
+    if tool_calls_count > 0:
+        message += f"\n📊 工具调用次数: {tool_calls_count}"
+
+    return message
 
 
-def format_status_message(status_data: dict) -> str:
-    """
-    Format system status message.
-    
-    Args:
-        status_data: Dictionary containing status information
-        
-    Returns:
-        Formatted status message
-    """
-    try:
-        status_text = f"""
-📊 *Trading System Status*
-
-🏃 *Running*: {("✅ Yes" if status_data.get('is_running') else "❌ No")}
-💰 *Trading Enabled*: {("✅ Yes" if status_data.get('is_trading_enabled') else "❌ No")}
-🏪 *Market Open*: {("✅ Yes" if status_data.get('is_market_open') else "❌ No")}
-
-📈 *Portfolio Summary*:
-• Total Equity: {format_currency(status_data.get('portfolio', {}).get('equity', 0))}
-• Cash: {format_currency(status_data.get('portfolio', {}).get('cash', 0))}
-• Day P&L: {format_currency(status_data.get('portfolio', {}).get('day_pnl', 0))}
-• Positions: {len(status_data.get('portfolio', {}).get('positions', []))}
-
-🕒 *Last Update*: {status_data.get('last_portfolio_update', 'N/A')}
-        """
-    except Exception as e:
-        status_text = f"""
-📊 *Trading System Status*
-
-Status information temporarily unavailable.
-
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        """
-    
-    return status_text.strip()
-
-
-def format_portfolio_details_message(portfolio) -> str:
-    """
-    Format detailed portfolio message with positions.
-    
-    Args:
-        portfolio: Portfolio object
-        
-    Returns:
-        Formatted portfolio details message
-    """
-    try:
-        portfolio_text = f"""
-💼 *Portfolio Details*
-
-💰 *Total Equity*: {format_currency(portfolio.equity)}
-💵 *Cash*: {format_currency(portfolio.cash)}
-📊 *Market Value*: {format_currency(portfolio.market_value)}
-📈 *Day P&L*: {format_currency(portfolio.day_pnl)}
-📊 *Total P&L*: {format_currency(portfolio.total_pnl)}
-
-💪 *Buying Power*: {format_currency(portfolio.buying_power)}
-📦 *Positions*: {len(portfolio.positions)}
-        """
-        
-        if hasattr(portfolio, 'positions') and portfolio.positions:
-            portfolio_text += "\n\n📋 *Current Positions:*\n"
-            for position in portfolio.positions[:5]:  # Show first 5 positions
-                # Escape underscores in symbol names to prevent markdown parsing issues
-                safe_symbol = escape_markdown_symbols(str(position.symbol))
-                portfolio_text += f"• {safe_symbol}: {position.quantity} shares\n"
-            
-            if len(portfolio.positions) > 5:
-                portfolio_text += f"• ... and {len(portfolio.positions) - 5} more positions\n"
-                
-    except AttributeError as e:
-        portfolio_text = f"""
-💼 *Portfolio Details*
-
-Portfolio information temporarily unavailable.
-
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-        """
-    
-    return portfolio_text.strip() 
+def _get_event_text(event_type: str) -> str:
+    """获取事件文本"""
+    mapping = {
+        'created': '已创建',
+        'filled': '已成交',
+        'cancelled': '已取消',
+        'rejected': '已拒绝',
+        'partial': '部分成交'
+    }
+    return mapping.get(event_type, event_type)

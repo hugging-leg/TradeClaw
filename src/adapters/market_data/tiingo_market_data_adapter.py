@@ -6,16 +6,18 @@ This adapter wraps the Tiingo API to provide a unified interface for market data
 
 import asyncio
 import requests
-import logging
+from src.utils.logging_config import get_logger
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
 from src.interfaces.market_data_api import MarketDataAPI
+from src.interfaces.factory import register_market_data
 from config import settings
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
+@register_market_data("tiingo")
 class TiingoMarketDataAdapter(MarketDataAPI):
     """Tiingo market data adapter implementing MarketDataAPI interface"""
     

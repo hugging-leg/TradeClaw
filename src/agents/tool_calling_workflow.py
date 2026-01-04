@@ -10,20 +10,20 @@ This represents a more flexible and intelligent approach to trading workflows.
 
 import asyncio
 import json
-import logging
+from src.utils.logging_config import get_logger
 from typing import Dict, List, Any, Optional, Union, Callable
 from datetime import datetime, timedelta
 from decimal import Decimal
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
-from langchain_openai import ChatOpenAI
-from langchain_deepseek import ChatDeepSeek
 from langchain_core.tools import tool
 from langchain_core.runnables import RunnableLambda
 from pydantic import BaseModel, Field
 
 from config import settings
 from src.agents.workflow_base import WorkflowBase
+from src.agents.workflow_factory import register_workflow
+from src.utils.llm_utils import create_llm_client
 from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.news_api import NewsAPI
@@ -34,9 +34,15 @@ from src.models.trading_models import (
 )
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
+@register_workflow(
+    "tool_calling",
+    description="Dynamic tool-calling workflow",
+    features=["动态工具选择", "LLM 驱动决策", "灵活执行顺序"],
+    best_for="自适应智能交易分析"
+)
 class ToolCallingWorkflow(WorkflowBase):
     """
     Advanced AI trading workflow using tool-calling LLM capabilities.
@@ -79,26 +85,8 @@ class ToolCallingWorkflow(WorkflowBase):
         self.max_iterations = 64  # Prevent infinite loops
         
     def _create_llm_client(self):
-        """Create LLM client based on provider setting."""
-        if settings.llm_provider.lower() == "deepseek":
-            return ChatDeepSeek(
-                model=settings.deepseek_model,
-                api_key=settings.deepseek_api_key,
-                temperature=1.0
-            )
-        elif settings.llm_provider.lower() == "openai":
-            return ChatOpenAI(
-                model=settings.openai_model,
-                api_key=settings.openai_api_key,
-                temperature=0.1
-            )
-        else:
-            logger.warning(f"Unknown LLM provider: {settings.llm_provider}. Defaulting to OpenAI.")
-            return ChatOpenAI(
-                model=settings.openai_model,
-                api_key=settings.openai_api_key,
-                temperature=0.1
-            )
+        """Create LLM client."""
+        return create_llm_client()
     
     def _register_tools(self):
         """Register and return available tools for the LLM."""
@@ -148,20 +136,23 @@ Current Positions:
         async def get_market_data(symbol: str = "SPY") -> str:
             """Get current market data for a symbol or market overview"""
             try:
-                if symbol.upper() == "SPY" or symbol.upper() == "OVERVIEW":
+                if symbol.upper() == "OVERVIEW":
                     # Get market overview
                     market_data = await self.get_market_data()
                     return f"Market Overview:\n{json.dumps(market_data, indent=2)}"
                 else:
-                    # Get specific symbol data
-                    market_data = await self.broker_api.get_market_data(symbol)
+                    # Get specific symbol data using market_data_api
+                    quote = await self.market_data_api.get_latest_price(symbol)
+                    if not quote:
+                        return f"No market data available for {symbol}"
                     return f"""
 Market Data for {symbol}:
-- Current Price: ${market_data.price:.2f}
-- Bid: ${market_data.bid:.2f}
-- Ask: ${market_data.ask:.2f}
-- Volume: {market_data.volume:,}
-- Last Updated: {market_data.timestamp}
+- Close: ${quote.get('close', 0):.2f}
+- Open: ${quote.get('open', 0):.2f}
+- High: ${quote.get('high', 0):.2f}
+- Low: ${quote.get('low', 0):.2f}
+- Volume: {quote.get('volume', 0):,}
+- Date: {quote.get('date', 'N/A')}
 """
             except Exception as e:
                 return f"Error getting market data for {symbol}: {e}"
@@ -313,7 +304,9 @@ The trading analysis has been completed. The system will now process the final d
             
             # Initialize context
             context = initial_context or {}
-            await self.initialize_workflow(context)
+            context.setdefault("trigger", "manual")
+            context.setdefault("timestamp", datetime.now().isoformat())
+            context.setdefault("workflow_type", "tool_calling")
             
             # Execute the interactive workflow (this will send its own start notification)
             result = await self._execute_interactive_workflow(context)
@@ -580,31 +573,6 @@ Context: {json.dumps(context, indent=2)}
 Please start by gathering the information you need to make an informed decision.
 """
 
-    # Implementation of abstract methods
-    
-    async def initialize_workflow(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Initialize the workflow with given context."""
-        context.setdefault("trigger", "manual")
-        context.setdefault("timestamp", datetime.now().isoformat())
-        context.setdefault("workflow_type", "tool_calling")
-        
-        return self._update_context(context)
-    
-    async def gather_data(self) -> Dict[str, Any]:
-        """Gather necessary data for trading decisions."""
-        # In tool calling workflow, data gathering is handled by the LLM
-        # This method is part of the abstract interface
-        return {
-            "method": "tool_calling",
-            "note": "Data gathering is handled dynamically by LLM tool calls"
-        }
-    
-    async def make_decision(self, data: Dict[str, Any]) -> Optional[TradingDecision]:
-        """Make a trading decision based on gathered data."""
-        # In tool calling workflow, decision making is handled by the LLM
-        # This method is part of the abstract interface
-        return None
-    
     async def execute_decision(self, decision: Optional[TradingDecision]) -> Dict[str, Any]:
         """Execute the trading decision."""
         try:

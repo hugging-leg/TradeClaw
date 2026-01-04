@@ -1,5 +1,19 @@
+"""
+交易系统主协调器
+
+职责：
+- 系统生命周期管理（启动、停止）
+- 事件处理协调
+- 调度管理
+
+已拆分的服务：
+- RiskManager: 风险管理（止损/止盈/日内限制）
+- QueryHandler: 查询处理（状态/组合/订单）
+- RealtimeMarketMonitor: 实时监控
+"""
+
 import asyncio
-import logging
+from src.utils.logging_config import get_logger
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -11,10 +25,13 @@ from src.interfaces.news_api import NewsAPI
 from src.messaging.message_manager import MessageManager
 from src.interfaces.factory import get_broker_api, get_market_data_api, get_news_api, MessageTransportFactory
 from src.events.event_system import EventSystem, event_system
-from src.agents.workflow_factory import WorkflowFactory, validate_workflow_config
+# 导入 agents 模块（触发所有 workflow 的自动注册）
+from src.agents import WorkflowFactory
 from src.services.realtime_monitor import RealtimeMarketMonitor
+from src.services.risk_manager import RiskManager
+from src.services.query_handler import QueryHandler
 from src.models.trading_models import (
-    Order, Portfolio, TradingEvent, OrderSide, OrderType, 
+    Order, Portfolio, TradingEvent, OrderSide, OrderType,
     TimeInForce, OrderStatus
 )
 from src.utils.time_utils import (
@@ -25,7 +42,7 @@ from src.utils.time_utils import (
 from config import settings
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TradingSystem:
@@ -39,10 +56,10 @@ class TradingSystem:
         
         # Initialize event system first (needed by message transport)
         self.event_system = event_system
-        
-        # Initialize message manager with transport (pass event_system to transport)
+
+        # Initialize message manager with transport
+        # Transport 会在 MessageManager.start_processing() 中自动初始化
         transport = MessageTransportFactory.create_message_transport(event_system=self.event_system)
-        transport._needs_async_init = True
         self.message_manager = MessageManager(transport=transport)
         
         # Log provider information
@@ -52,15 +69,29 @@ class TradingSystem:
         logger.info(f"Message Transport: {self.message_manager.transport.get_transport_name()}")
         
         # Validate workflow configuration
-        if not validate_workflow_config():
-            logger.warning("Workflow configuration validation failed, using default settings")
+        if not WorkflowFactory.is_supported(settings.workflow_type or 'llm_portfolio'):
+            logger.warning(f"Unknown workflow type: {settings.workflow_type}, using default")
         
         # Initialize core components
         self.trading_workflow = WorkflowFactory.create_workflow(
             message_manager=self.message_manager
         )
         self.realtime_monitor = RealtimeMarketMonitor(trading_system=self)
-        self.timezone = pytz.timezone('US/Eastern')  # Market timezone
+
+        # 使用配置中的交易时区
+        self.timezone = pytz.timezone(settings.trading_timezone)
+        self.exchange = settings.exchange
+
+        # 初始化服务（拆分的功能模块）
+        self.risk_enabled = settings.risk_management_enabled
+        self.risk_manager = RiskManager(
+            broker_api=self.broker_api,
+            message_manager=self.message_manager
+        ) if self.risk_enabled else None
+        self.query_handler = QueryHandler(
+            broker_api=self.broker_api,
+            message_manager=self.message_manager
+        )
         
         # Log workflow type being used
         logger.info(f"Initialized with {self.trading_workflow.get_workflow_type()} workflow")
@@ -144,24 +175,9 @@ class TradingSystem:
                 return False
             
             logger.info("Starting trading system...")
-            
+
             # Start event system
             await self.event_system.start()
-            
-            # Initialize message transport if needed
-            if hasattr(self.message_manager.transport, '_needs_async_init'):
-                logger.info("Initializing message transport...")
-                try:
-                    if await self.message_manager.transport.initialize():
-                        logger.info("Message transport initialized successfully")
-                        if await self.message_manager.transport.start():
-                            logger.info("Message transport started successfully")
-                        else:
-                            logger.warning("Message transport failed to start")
-                    else:
-                        logger.warning("Message transport failed to initialize")
-                except Exception as e:
-                    logger.warning(f"Message transport initialization failed: {e}")
             
             # Start message manager processing
             await self.message_manager.start_processing()
@@ -519,22 +535,22 @@ Ready to trade! 📊"""
             raise
     
     async def _run_risk_checks(self):
-        """Run risk management checks (internal method)"""
+        """Run risk management checks (委托给 RiskManager)"""
+        if not self.risk_enabled or not self.risk_manager:
+            logger.debug("风控模块未启用，跳过检查")
+            return
+
         try:
             portfolio = await self.get_portfolio()
-            
-            # Check for positions with large losses
-            for position in portfolio.positions:
-                if position.unrealized_pnl_percentage <= -settings.stop_loss_percentage:
-                    await self._handle_stop_loss(position)
-                
-                elif position.unrealized_pnl_percentage >= settings.take_profit_percentage:
-                    await self._handle_take_profit(position)
-            
-            # Check overall portfolio risk
-            if portfolio.day_pnl <= -(portfolio.equity * Decimal('0.1')):  # 10% daily loss limit
-                await self._handle_portfolio_risk(portfolio)
-            
+            results = await self.risk_manager.run_risk_checks(portfolio)
+
+            # 如果触发日内限制，禁用交易
+            if results.get("daily_limit_breached"):
+                await self.event_system.publish(
+                    "disable_trading",
+                    {"reason": "Daily loss limit breached"}
+                )
+
         except Exception as e:
             logger.error(f"Error in risk checks: {e}")
     
@@ -965,75 +981,5 @@ End of Day Summary:
             logger.error(f"Error cancelling order {order_id}: {e}")
             raise
     
-    # Handlers that currently may not be used
-    async def _handle_stop_loss(self, position):
-        """Handle stop loss for a position"""
-        try:
-            if position.unrealized_pnl < 0:
-                loss_percentage = abs(position.unrealized_pnl / position.market_value)
-                
-                if loss_percentage >= settings.stop_loss_percentage:
-                    logger.warning(f"Triggering stop loss for {position.symbol}")
-                    
-                    # Place sell order
-                    await self._place_market_order(
-                        position.symbol,
-                        "sell",
-                        Decimal(str(position.qty))
-                    )
-                    
-                    await self.message_manager.send_system_alert(
-                        "warning",
-                        f"Stop loss triggered for {position.symbol}. Loss: {loss_percentage:.2%}",
-                        "risk_management"
-                    )
-                    
-        except Exception as e:
-            logger.error(f"Error handling stop loss: {e}")
-    
-    async def _handle_take_profit(self, position):
-        """Handle take profit for a position"""
-        try:
-            if position.unrealized_pnl > 0:
-                profit_percentage = position.unrealized_pnl / position.market_value
-                
-                if profit_percentage >= settings.take_profit_percentage:
-                    logger.info(f"Triggering take profit for {position.symbol}")
-                    
-                    # Place sell order
-                    await self._place_market_order(
-                        position.symbol,
-                        "sell",
-                        Decimal(str(position.qty))
-                    )
-                    
-                    await self.message_manager.send_system_alert(
-                        "success",
-                        f"Take profit triggered for {position.symbol}. Profit: {profit_percentage:.2%}",
-                        "profit_taking"
-                    )
-                    
-        except Exception as e:
-            logger.error(f"Error handling take profit: {e}")
-    
-    async def _handle_portfolio_risk(self, portfolio: Portfolio):
-        """Handle portfolio-level risk management"""
-        try:
-            # Check overall portfolio risk
-            day_pnl_percentage = portfolio.day_pnl / portfolio.portfolio_value if portfolio.portfolio_value > 0 else 0
-            
-            if day_pnl_percentage < -0.05:  # 5% daily loss threshold
-                logger.warning(f"Portfolio daily loss exceeds 5%: {day_pnl_percentage:.2%}")
-                
-                await self.message_manager.send_system_alert(
-                    "warning",
-                    f"Portfolio daily loss: {day_pnl_percentage:.2%}",
-                    "portfolio_risk"
-                )
-                
-                # Disable trading if daily loss exceeds 10%
-                if day_pnl_percentage < -0.10:  # 10% daily loss
-                    await self.event_system.publish("disable_trading", {"reason": "Daily loss exceeds 10%"})
-                    
-        except Exception as e:
-            logger.error(f"Error handling portfolio risk: {e}") 
+    # 注意: 止损/止盈/组合风险处理已移至 RiskManager
+    # 参见: src/services/risk_manager.py 

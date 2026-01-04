@@ -1,11 +1,11 @@
 import asyncio
-import logging
+from src.utils.logging_config import get_logger
 from typing import Dict, List, Callable, Any, Optional
 from datetime import datetime, timedelta
 import pytz
 from src.models.trading_models import TradingEvent
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class EventSystem:

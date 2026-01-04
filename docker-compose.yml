@@ -1,19 +1,23 @@
+version: '3.8'
+
 services:
-  # Main Trading Application
   trading-agent:
-    image: brerudike/trading-agent:latest
-    container_name: trading-agent
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: llm-trading-agent
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      - DATA_DIR=/app/user_data
+      - ENVIRONMENT=production
+      - TZ=America/New_York
     volumes:
-      - ./logs:/app/logs
-      - ./data:/app/data
-    ports:
-      - "8000:8000"
+      - ./user_data:/app/user_data
     healthcheck:
       test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 10s

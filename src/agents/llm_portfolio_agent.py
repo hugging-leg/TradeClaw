@@ -1,47 +1,33 @@
 import asyncio
 import json
-import logging
+from src.utils.logging_config import get_logger
 from typing import Dict, List, Any, Optional, Annotated
 from datetime import datetime, timedelta
 from decimal import Decimal
 import pytz
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from langchain_openai import ChatOpenAI
-from langchain_deepseek import ChatDeepSeek
 from langchain.tools import tool
 from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel, Field
 
 from config import settings
 from src.agents.workflow_base import WorkflowBase
+from src.agents.workflow_factory import register_workflow
 from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.news_api import NewsAPI
 from src.messaging.message_manager import MessageManager
 from src.events.event_system import event_system
 from src.models.trading_models import (
-    Order, Portfolio, TradingDecision, OrderSide, OrderType, 
+    Order, Portfolio, TradingDecision, OrderSide, OrderType,
     TimeInForce, Position
 )
+from src.utils.llm_utils import create_llm_client
+from src.utils.db_utils import check_db_available, DB_AVAILABLE, get_trading_repository
 
-logger = logging.getLogger(__name__)
-
-
-def create_llm_client():
-    """创建LLM客户端"""
-    if settings.llm_provider.lower() == "deepseek":
-        return ChatDeepSeek(
-            model=settings.deepseek_model,
-            api_key=settings.deepseek_api_key,
-            temperature=0.1
-        )
-    else:
-        return ChatOpenAI(
-            model=settings.openai_model,
-            api_key=settings.openai_api_key,
-            temperature=0.1
-        )
+logger = get_logger(__name__)
 
 
 class RebalanceRequest(BaseModel):
@@ -52,6 +38,12 @@ class RebalanceRequest(BaseModel):
     reason: str = Field(description="重新平衡的原因")
 
 
+@register_workflow(
+    "llm_portfolio",
+    description="完全由 LLM 驱动的投资组合管理",
+    features=["🆕 无硬编码规则", "ReAct Agent", "多工具协作", "可解释决策"],
+    best_for="🌟 智能自适应组合管理（推荐）"
+)
 class LLMPortfolioAgent(WorkflowBase):
     """
     LLM驱动的投资组合管理Agent
@@ -67,21 +59,30 @@ class LLMPortfolioAgent(WorkflowBase):
                  broker_api: BrokerAPI = None,
                  market_data_api: MarketDataAPI = None,
                  news_api: NewsAPI = None,
-                 message_manager: MessageManager = None):
+                 message_manager: MessageManager = None,
+                 session_id: str = "trading_agent"):
         """初始化LLM Portfolio Agent"""
         super().__init__(broker_api, market_data_api, news_api, message_manager)
         
         self.llm = create_llm_client()
         self.event_system = event_system  # 用于LLM自主调度
+        self.session_id = session_id
         
         # 创建tools
         self.tools = self._create_tools()
         
-        # 创建ReAct agent（不需要state_modifier参数）
+        # 创建 Memory（用于保存对话状态）
+        self.memory = MemorySaver()
+        
+        # 创建ReAct agent with memory
         self.agent = create_react_agent(
             self.llm,
-            self.tools
+            self.tools,
+            checkpointer=self.memory
         )
+        
+        # Agent 配置
+        self.agent_config = {"recursion_limit": 64}
         
         # 保存system prompt以便后续使用
         self.system_prompt = self._get_system_prompt()
@@ -90,7 +91,10 @@ class LLMPortfolioAgent(WorkflowBase):
         self.analysis_history = []
         self.last_analysis_time = None
         
-        logger.info("LLM Portfolio Agent 已初始化（完全由LLM驱动，支持自主调度）")
+        # 数据持久化
+        self._db_available = DB_AVAILABLE
+        
+        logger.info("LLM Portfolio Agent 已初始化（支持 Memory 和数据持久化）")
     
     def _get_system_prompt(self) -> str:
         """获取系统提示"""
@@ -350,32 +354,50 @@ class LLMPortfolioAgent(WorkflowBase):
             
             Args:
                 symbol: 股票代码，如 AAPL, MSFT, SPY, QQQ
-                timeframe: 时间框架，可选值："1Day", "1Hour", "30Min", "15Min", "5Min", "1Min", "1Week", "1Month"
+                timeframe: 时间框架，可选值："1Day", "1Hour", "30Min", "15Min", "5Min", "1Min"
                 limit: 返回的K线数量，默认100条
             
             Returns:
                 历史价格数据的JSON字符串，包含时间戳、ohlcv
             """
             try:
+                from datetime import datetime, timedelta
+                
                 # 参数验证
                 if limit < 1 or limit > 1000:
                     return "错误: limit必须在1-1000之间"
-                
-                valid_timeframes = ["1Min", "5Min", "15Min", "30Min", "1Hour", "1Day", "1Week", "1Month"]
-                if timeframe not in valid_timeframes:
-                    return f"错误: timeframe必须是以下之一: {', '.join(valid_timeframes)}"
                 
                 await self.message_manager.send_message(
                     f"📈 正在获取 {symbol} 历史数据 ({limit}条, {timeframe})...",
                     "info"
                 )
                 
-                # 使用broker API获取市场数据
-                prices = await self.broker_api.get_market_data(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    limit=limit
-                )
+                # 根据 timeframe 计算日期范围
+                end_date = datetime.now()
+                if timeframe in ["1Day", "1Week", "1Month"]:
+                    # 日线/周线/月线用 EOD 接口
+                    days_multiplier = {"1Day": 1, "1Week": 7, "1Month": 30}
+                    days_needed = limit * days_multiplier.get(timeframe, 1) + 30
+                    start_date = end_date - timedelta(days=days_needed)
+                    
+                    prices = await self.market_data_api.get_eod_prices(
+                        symbol=symbol,
+                        start_date=start_date,
+                        end_date=end_date
+                    )
+                else:
+                    # 分钟/小时线用 Intraday 接口
+                    # 分钟数据最多回溯几天
+                    start_date = end_date - timedelta(days=min(limit // 100 + 5, 30))
+                    resample_map = {"1Min": "1min", "5Min": "5min", "15Min": "15min", "30Min": "30min", "1Hour": "1hour"}
+                    resample_freq = resample_map.get(timeframe, "1min")
+                    
+                    prices = await self.market_data_api.get_intraday_prices(
+                        symbol=symbol,
+                        start_date=start_date,
+                        end_date=end_date,
+                        resample_freq=resample_freq
+                    )
                 
                 if not prices:
                     await self.message_manager.send_message(
@@ -389,8 +411,10 @@ class LLMPortfolioAgent(WorkflowBase):
                         "timeframe": timeframe,
                         "limit": limit
                     }, indent=2, ensure_ascii=False)
-                return json.dumps(prices, indent=2, ensure_ascii=False)
                 
+                # 只返回最近 limit 条
+                prices = prices[-limit:] if len(prices) > limit else prices
+                return json.dumps(prices, indent=2, ensure_ascii=False)
                 
             except Exception as e:
                 logger.error(f"获取历史价格失败 {symbol}: {e}")
@@ -950,51 +974,70 @@ class LLMPortfolioAgent(WorkflowBase):
             # 构建初始提示
             user_message = self._build_analysis_prompt(context)
             
-            result = await self.agent.ainvoke({
-                "messages": [
-                    SystemMessage(content=self.system_prompt),
-                    HumanMessage(content=user_message)
-                ]
-            })
+            # 使用 thread_id 保持对话状态，设置 recursion_limit
+            config = {
+                "configurable": {"thread_id": self.session_id},
+                "recursion_limit": 64
+            }
+            
+            result = await self.agent.ainvoke(
+                {
+                    "messages": [
+                        SystemMessage(content=self.system_prompt),
+                        HumanMessage(content=user_message)
+                    ]
+                },
+                config=config
+            )
             
             # 提取LLM的分析和决策
             messages = result.get("messages", [])
             final_response = ""
             tool_calls_summary = []
+            trades_executed = []
             
             # 分析消息历史，提取工具调用信息
             for msg in messages:
                 if hasattr(msg, 'tool_calls') and msg.tool_calls:
                     for tool_call in msg.tool_calls:
                         tool_name = tool_call.get('name', 'unknown')
-                        tool_calls_summary.append(f"🔧 {tool_name}")
+                        tool_calls_summary.append(tool_name)
                 elif hasattr(msg, 'content') and msg.content:
                     if isinstance(msg, AIMessage):
                         final_response = msg.content
             
             # 发送工具调用摘要
             if tool_calls_summary:
-                tools_msg = "**LLM调用的工具:**\n" + "\n".join(tool_calls_summary)
+                tools_msg = "**LLM调用的工具:**\n" + "\n".join([f"🔧 {t}" for t in tool_calls_summary])
                 await self.message_manager.send_message(tools_msg, "info")
             
-            # 发送LLM的最终分析（不转义，直接发送原始文本）
+            # 发送LLM的最终分析
             if final_response:
                 await self.message_manager.send_message(
                     f"💭 LLM分析结果:\n\n{final_response}",
                     "info"
                 )
             
-            # 记录分析历史
+            # 计算执行时间
+            self.end_time = datetime.now()
+            execution_time = (self.end_time - self.start_time).total_seconds()
+            
+            # 保存到数据库
+            await self._save_analysis_to_db(
+                trigger=trigger,
+                context=context,
+                response=final_response,
+                tool_calls=tool_calls_summary,
+                execution_time=execution_time
+            )
+            
+            # 记录到内存历史
             self.last_analysis_time = datetime.now()
             self.analysis_history.append({
                 "timestamp": self.last_analysis_time.isoformat(),
                 "trigger": trigger,
                 "response": final_response
             })
-            
-            # 计算执行时间
-            self.end_time = datetime.now()
-            execution_time = (self.end_time - self.start_time).total_seconds()
             
             await self.send_workflow_complete_notification("LLM组合分析", execution_time)
             
@@ -1004,12 +1047,54 @@ class LLMPortfolioAgent(WorkflowBase):
                 "workflow_id": self.workflow_id,
                 "trigger": trigger,
                 "llm_response": final_response,
+                "tool_calls": tool_calls_summary,
                 "execution_time": execution_time
             }
             
         except Exception as e:
             logger.error(f"LLM Portfolio Agent错误: {e}")
+            # 保存错误到数据库
+            await self._save_analysis_to_db(
+                trigger=context.get("trigger", "unknown") if context else "unknown",
+                context=context,
+                response=None,
+                tool_calls=[],
+                execution_time=0,
+                success=False,
+                error_message=str(e)
+            )
             return await self._handle_workflow_error(e, "LLM组合分析")
+    
+    async def _save_analysis_to_db(
+        self,
+        trigger: str,
+        context: Optional[Dict],
+        response: Optional[str],
+        tool_calls: List[str],
+        execution_time: float,
+        success: bool = True,
+        error_message: Optional[str] = None
+    ):
+        """保存分析结果到数据库"""
+        if not self._db_available:
+            return
+        
+        try:
+            TradingRepository = get_trading_repository()
+            if TradingRepository:
+                await TradingRepository.save_analysis(
+                    trigger=trigger,
+                    workflow_id=self.workflow_id,
+                    analysis_type="portfolio",
+                    input_context=context,
+                    output_response=response,
+                    tool_calls=tool_calls,
+                    execution_time_seconds=execution_time,
+                    success=success,
+                    error_message=error_message
+                )
+        except Exception as e:
+            logger.warning(f"保存分析历史失败: {e}")
     
     def _build_analysis_prompt(self, context: Dict[str, Any]) -> str:
         
@@ -1019,27 +1104,3 @@ class LLMPortfolioAgent(WorkflowBase):
         logger.info(f"Analysis prompt: {prompt}")
         
         return prompt
-    
-    async def initialize_workflow(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """初始化workflow"""
-        context.setdefault("trigger", "manual")
-        context.setdefault("timestamp", datetime.now().isoformat())
-        context.setdefault("workflow_type", "llm_portfolio_agent")
-        return self._update_context(context)
-    
-    async def gather_data(self) -> Dict[str, Any]:
-        """收集数据（LLM会通过tools自己获取）"""
-        # TODO: Deprecate this method, current align with abstract class
-        return {}
-    
-    async def make_decision(self, data: Dict[str, Any]) -> Optional[TradingDecision]:
-        """LLM自己做决策"""
-        return None
-    
-    async def execute_decision(self, decision: Optional[TradingDecision]) -> Dict[str, Any]:
-        """LLM通过tools执行"""
-        return {"success": False, "message": "Use run_workflow instead"}
-    
-    def get_workflow_type(self) -> str:
-        """获取workflow类型"""
-        return "llm_portfolio_agent"

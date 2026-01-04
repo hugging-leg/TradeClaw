@@ -1,0 +1,245 @@
+"""
+查询处理服务
+
+职责：
+- 处理系统状态查询
+- 处理组合查询
+- 处理订单查询
+- 格式化响应
+
+设计：
+- 独立于 TradingSystem
+- 处理来自 Telegram 等渠道的查询请求
+"""
+
+from src.utils.logging_config import get_logger
+from typing import Dict, Any, List, Optional
+from datetime import datetime
+from decimal import Decimal
+
+from src.interfaces.broker_api import BrokerAPI
+from src.messaging.message_manager import MessageManager
+from src.models.trading_models import Portfolio, Order
+
+logger = get_logger(__name__)
+
+
+class QueryHandler:
+    """
+    查询处理服务
+
+    功能：
+    - 系统状态查询
+    - 组合信息查询
+    - 订单状态查询
+    - 格式化并发送响应
+    """
+
+    def __init__(
+        self,
+        broker_api: BrokerAPI,
+        message_manager: MessageManager
+    ):
+        self.broker_api = broker_api
+        self.message_manager = message_manager
+
+    async def handle_status_query(
+        self,
+        system_state: Dict[str, Any]
+    ) -> str:
+        """
+        处理系统状态查询
+
+        Args:
+            system_state: 系统状态字典，包含:
+                - is_running: bool
+                - is_trading_enabled: bool
+                - workflow_type: str
+                - timezone: str
+                - etc.
+
+        Returns:
+            格式化的状态消息
+        """
+        try:
+            # 获取市场状态
+            try:
+                market_open = await self.broker_api.is_market_open()
+            except Exception:
+                market_open = None
+
+            # 获取组合信息
+            try:
+                portfolio = await self.broker_api.get_portfolio()
+            except Exception:
+                portfolio = None
+
+            # 构建状态消息
+            status_lines = [
+                "📊 **系统状态**\n",
+                f"运行状态: {'🟢 运行中' if system_state.get('is_running') else '🔴 已停止'}",
+                f"交易状态: {'🟢 已启用' if system_state.get('is_trading_enabled') else '🔴 已禁用'}",
+                f"工作流: {system_state.get('workflow_type', 'unknown')}",
+            ]
+
+            if market_open is not None:
+                status_lines.append(f"市场: {'🟢 开盘' if market_open else '🔴 休市'}")
+
+            if portfolio:
+                status_lines.extend([
+                    "",
+                    "💰 **账户概览**",
+                    f"总权益: ${portfolio.equity:,.2f}",
+                    f"现金: ${portfolio.cash:,.2f}",
+                    f"当日盈亏: ${portfolio.day_pnl:,.2f}",
+                    f"持仓数: {len([p for p in portfolio.positions if p.quantity != 0])}"
+                ])
+
+            status_msg = "\n".join(status_lines)
+            await self.message_manager.send_message(status_msg, message_type="info")
+            return status_msg
+
+        except Exception as e:
+            logger.error(f"状态查询失败: {e}")
+            error_msg = f"❌ 状态查询失败: {e}"
+            await self.message_manager.send_error(error_msg)
+            return error_msg
+
+    async def handle_portfolio_query(self) -> str:
+        """
+        处理组合查询
+
+        Returns:
+            格式化的组合消息
+        """
+        try:
+            portfolio = await self.broker_api.get_portfolio()
+
+            if not portfolio:
+                msg = "⚠️ 无法获取组合信息"
+                await self.message_manager.send_message(msg, message_type="warning")
+                return msg
+
+            # 构建组合消息
+            lines = [
+                "📈 **投资组合**\n",
+                f"总权益: ${portfolio.equity:,.2f}",
+                f"现金: ${portfolio.cash:,.2f}",
+                f"持仓价值: ${portfolio.equity - portfolio.cash:,.2f}",
+                f"当日盈亏: ${portfolio.day_pnl:,.2f}",
+                ""
+            ]
+
+            # 添加持仓详情
+            active_positions = [p for p in portfolio.positions if p.quantity != 0]
+            if active_positions:
+                lines.append("📋 **持仓明细**")
+                for pos in active_positions:
+                    pnl_emoji = "🟢" if pos.unrealized_pnl >= 0 else "🔴"
+                    lines.append(
+                        f"{pnl_emoji} {pos.symbol}: {pos.quantity} 股 "
+                        f"@ ${pos.current_price:,.2f} "
+                        f"({pos.unrealized_pnl_percentage:+.2%})"
+                    )
+            else:
+                lines.append("📋 暂无持仓")
+
+            portfolio_msg = "\n".join(lines)
+            await self.message_manager.send_message(portfolio_msg, message_type="info")
+            return portfolio_msg
+
+        except Exception as e:
+            logger.error(f"组合查询失败: {e}")
+            error_msg = f"❌ 组合查询失败: {e}"
+            await self.message_manager.send_error(error_msg)
+            return error_msg
+
+    async def handle_orders_query(self, status: str = "open") -> str:
+        """
+        处理订单查询
+
+        Args:
+            status: 订单状态过滤（open, closed, all）
+
+        Returns:
+            格式化的订单消息
+        """
+        try:
+            orders = await self.broker_api.get_orders(status=status)
+
+            if not orders:
+                msg = f"📋 暂无{status}订单"
+                await self.message_manager.send_message(msg, message_type="info")
+                return msg
+
+            # 构建订单消息
+            lines = [f"📋 **{status.upper()} 订单**\n"]
+
+            for order in orders[:10]:  # 限制显示数量
+                status_emoji = {
+                    "filled": "✅",
+                    "partially_filled": "🟡",
+                    "pending": "⏳",
+                    "cancelled": "❌",
+                    "rejected": "🚫"
+                }.get(order.status.value if hasattr(order.status, 'value') else str(order.status), "❓")
+
+                lines.append(
+                    f"{status_emoji} {order.symbol} {order.side.value if hasattr(order.side, 'value') else order.side} "
+                    f"{order.quantity} @ {order.order_type.value if hasattr(order.order_type, 'value') else order.order_type}"
+                )
+
+            if len(orders) > 10:
+                lines.append(f"\n... 还有 {len(orders) - 10} 个订单")
+
+            orders_msg = "\n".join(lines)
+            await self.message_manager.send_message(orders_msg, message_type="info")
+            return orders_msg
+
+        except Exception as e:
+            logger.error(f"订单查询失败: {e}")
+            error_msg = f"❌ 订单查询失败: {e}"
+            await self.message_manager.send_error(error_msg)
+            return error_msg
+
+    async def handle_performance_query(
+        self,
+        daily_stats: Dict[str, Any]
+    ) -> str:
+        """
+        处理绩效查询
+
+        Args:
+            daily_stats: 每日统计数据
+
+        Returns:
+            格式化的绩效消息
+        """
+        try:
+            portfolio = await self.broker_api.get_portfolio()
+
+            lines = ["📊 **今日绩效**\n"]
+
+            if portfolio:
+                start_equity = daily_stats.get('start_equity') or portfolio.equity
+                day_pnl = portfolio.equity - start_equity
+                day_return = day_pnl / start_equity if start_equity else Decimal('0')
+
+                lines.extend([
+                    f"当前权益: ${portfolio.equity:,.2f}",
+                    f"起始权益: ${start_equity:,.2f}",
+                    f"当日盈亏: ${day_pnl:,.2f}",
+                    f"当日收益率: {day_return:.2%}",
+                    f"交易次数: {daily_stats.get('trades_executed', 0)}"
+                ])
+
+            perf_msg = "\n".join(lines)
+            await self.message_manager.send_message(perf_msg, message_type="info")
+            return perf_msg
+
+        except Exception as e:
+            logger.error(f"绩效查询失败: {e}")
+            error_msg = f"❌ 绩效查询失败: {e}"
+            await self.message_manager.send_error(error_msg)
+            return error_msg
+

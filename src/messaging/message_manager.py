@@ -3,13 +3,23 @@ Message Manager for handling trading system notifications and message routing.
 
 This manager handles business-level message operations including formatting,
 templating, queuing, and routing messages to appropriate transports.
+
+使用 tenacity 进行重试，使用 aiolimiter 进行速率限制。
 """
 
 import asyncio
-import logging
+from src.utils.logging_config import get_logger
 from typing import Dict, List, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import Decimal
+
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type
+)
+from aiolimiter import AsyncLimiter
 
 from src.interfaces.message_transport import MessageTransport, MessageFormat
 from src.models.trading_models import Order, Portfolio, Position, TradingEvent
@@ -26,7 +36,10 @@ from src.utils.message_formatters import (
     format_reasoning_summary_message
 )
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Telegram 速率限制：每秒 1 条消息
+MESSAGE_RATE_LIMITER = AsyncLimiter(1, 1.0)
 
 
 class MessageManager:
@@ -53,15 +66,14 @@ class MessageManager:
         
         self.transport = transport
         self.is_processing = False
-        self.processing_task = None  # Store the processing task reference
+        self.processing_task = None
         self.message_queue = asyncio.Queue()
         self.failed_messages = []
-        self.max_retries = 3
-        self.retry_delay = 2.0  # seconds (much shorter retry delay)
-        self.rate_limit_delay = 0.5  # seconds between messages (faster)
-        self.last_message_time = 0
         self.transport_initialized = False
-        
+
+        # 使用 aiolimiter 进行速率限制
+        self._rate_limiter = MESSAGE_RATE_LIMITER
+
         # Message statistics
         self.stats = {
             'total_sent': 0,
@@ -102,144 +114,130 @@ class MessageManager:
         
         logger.info("Message Manager stopped processing")
     
-    async def _ensure_transport_initialized(self):
-        """Ensure transport is properly initialized."""
+    async def _ensure_transport_initialized(self) -> bool:
+        """
+        确保 transport 已初始化并启动
+
+        简化的初始化逻辑：
+        - 检查 transport.is_initialized 和 transport.is_started
+        - 如果未初始化/启动，则调用对应方法
+        """
         if self.transport_initialized:
             return True
-        
+
         try:
-            # Check if transport needs async initialization
-            if hasattr(self.transport, '_needs_async_init') and self.transport._needs_async_init:
-                logger.info("Initializing message transport...")
-                self.stats['initialization_attempts'] += 1
-                
-                # Initialize the transport
-                if await self.transport.initialize():
-                    logger.info("Message transport initialized successfully")
-                    
-                    # Start the transport
-                    if await self.transport.start():
-                        logger.info("Message transport started successfully")
-                        self.transport_initialized = True
-                        return True
-                    else:
-                        logger.warning("Message transport failed to start")
-                        return False
-                else:
-                    logger.warning("Message transport failed to initialize")
+            self.stats['initialization_attempts'] += 1
+
+            # 检查是否已初始化
+            if not self.transport.is_initialized:
+                logger.info("初始化 message transport...")
+                if not await self.transport.initialize():
+                    logger.warning("Message transport 初始化失败")
                     return False
-            else:
-                # Transport doesn't need async init or already initialized
-                self.transport_initialized = self.transport.is_available() if hasattr(self.transport, 'is_available') else True
-                return self.transport_initialized
-                
+                logger.info("Message transport 初始化成功")
+
+            # 检查是否已启动
+            if not self.transport.is_started:
+                logger.info("启动 message transport...")
+                if not await self.transport.start():
+                    logger.warning("Message transport 启动失败")
+                    return False
+                logger.info("Message transport 启动成功")
+
+            self.transport_initialized = True
+            return True
+
         except Exception as e:
-            logger.error(f"Error initializing transport: {e}")
+            logger.error(f"Transport 初始化错误: {e}")
             return False
     
     async def _process_messages(self):
-        """Background task to process messages from the queue."""
-        logger.info("Message processing loop started")
-        
+        """后台任务：从队列处理消息"""
+        logger.info("消息处理循环已启动")
+
         while self.is_processing:
             try:
-                # Get message from queue with timeout
+                # 从队列获取消息（带超时）
                 try:
                     message_data = await asyncio.wait_for(
-                        self.message_queue.get(), 
+                        self.message_queue.get(),
                         timeout=1.0
                     )
-                    logger.debug(f"Processing message: {message_data.get('type', 'unknown')}")
+                    logger.debug(f"处理消息: {message_data.get('type', 'unknown')}")
                 except asyncio.TimeoutError:
                     continue
-                
-                # Process the message
+
+                # 使用速率限制器
+                await self._rate_limiter.acquire()
+
+                # 发送消息（带重试）
                 await self._send_message_with_retry(message_data)
-                
-                # Update stats
+
+                # 更新统计
                 self.stats['queue_size'] = self.message_queue.qsize()
-                
-                # Rate limiting
-                await self._rate_limit()
-                
+
             except asyncio.CancelledError:
-                logger.info("Message processing cancelled")
+                logger.info("消息处理已取消")
                 break
             except Exception as e:
-                logger.error(f"Error processing message: {e}")
+                logger.error(f"处理消息时出错: {e}")
                 self.stats['processing_errors'] += 1
                 await asyncio.sleep(1)
-        
-        logger.info("Message processing loop ended")
-    
+
+        logger.info("消息处理循环已结束")
+
     async def _send_message_with_retry(self, message_data: Dict[str, Any]):
-        """Send message with retry logic."""
+        """
+        发送消息（使用 tenacity 重试）
+
+        重试策略：指数退避，最多 3 次
+        """
         message_text = message_data.get('text', '')
         message_type = message_data.get('type', 'info')
-        retries = message_data.get('retries', 0)
-        
-        try:
-            # Check if transport is available
+
+        @retry(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=1, min=1, max=10),
+            retry=retry_if_exception_type(Exception),
+            reraise=True
+        )
+        async def _send():
+            # 检查 transport 是否可用
             if not self.transport_initialized:
-                # Try to initialize transport
                 if not await self._ensure_transport_initialized():
-                    # Transport not available, log and continue
-                    logger.debug(f"Transport not available, skipping message: {message_type}")
-                    self.stats['total_failed'] += 1
-                    return
-            
-            # Check transport availability
+                    raise RuntimeError("Transport 不可用")
+
             transport_available = True
             if hasattr(self.transport, 'is_available'):
                 transport_available = self.transport.is_available()
-            
+
             if not transport_available:
-                logger.debug(f"Transport reports not available, skipping message: {message_type}")
-                self.stats['total_failed'] += 1
-                return
-            
-            # Send message via transport using appropriate format
+                raise RuntimeError("Transport 报告不可用")
+
             success = await self.transport.send_raw_message(
                 content=message_text,
                 format_type=MessageFormat.MARKDOWN
             )
-            
-            if success:
-                self.stats['total_sent'] += 1
-                self.stats['last_sent'] = datetime.now()
-                logger.debug(f"Message sent successfully: {message_type}")
-            else:
-                raise Exception("Transport failed to send message")
-                
+
+            if not success:
+                raise RuntimeError("Transport 发送失败")
+
+            return True
+
+        try:
+            await _send()
+            self.stats['total_sent'] += 1
+            self.stats['last_sent'] = datetime.now()
+            logger.debug(f"消息发送成功: {message_type}")
+
         except Exception as e:
-            logger.debug(f"Failed to send message ({message_type}): {e}")
-            
-            if retries < self.max_retries:
-                # Retry later
-                message_data['retries'] = retries + 1
-                await asyncio.sleep(self.retry_delay)
-                await self.message_queue.put(message_data)
-                logger.debug(f"Message queued for retry ({retries + 1}/{self.max_retries}): {message_type}")
-            else:
-                # Max retries reached
-                self.stats['total_failed'] += 1
-                self.failed_messages.append({
-                    'message': message_data,
-                    'failed_at': datetime.now(),
-                    'error': str(e)
-                })
-                logger.debug(f"Message failed after {self.max_retries} retries: {message_type}")
-    
-    async def _rate_limit(self):
-        """Apply rate limiting between messages."""
-        import time
-        current_time = time.time()
-        time_since_last = current_time - self.last_message_time
-        
-        if time_since_last < self.rate_limit_delay:
-            await asyncio.sleep(self.rate_limit_delay - time_since_last)
-        
-        self.last_message_time = time.time()
+            logger.debug(f"消息发送失败 ({message_type}): {e}")
+            self.stats['total_failed'] += 1
+            self.failed_messages.append({
+                'message': message_data,
+                'failed_at': datetime.now(),
+                'error': str(e)
+            })
     
 
     
