@@ -87,7 +87,7 @@ if __name__ == "__main__":
     ║                                                                ║
     ║                    🤖 LLM Trading Agent                        ║
     ║                                                                ║
-    ║   Powered by OpenAI/DeepSeek • Alpaca API • Tiingo           ║
+    ║   Powered by OpenAI/DeepSeek • Alpaca API • Tiingo             ║
     ║                                                                ║
     ║                     Built with LangGraph                       ║
     ║                                                                ║

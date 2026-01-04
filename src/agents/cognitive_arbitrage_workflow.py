@@ -20,18 +20,18 @@
 import asyncio
 import json
 import re
-from pathlib import Path
 from src.utils.logging_config import get_logger
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from decimal import Decimal
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 
 from langchain_core.messages import HumanMessage, SystemMessage
-
-from config import settings
+from sqlalchemy import select, update
 from src.agents.workflow_base import WorkflowBase
 from src.agents.workflow_factory import register_workflow
+from src.db.session import get_db
+from src.db.models import CAPosition
 from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.news_api import NewsAPI
@@ -87,20 +87,6 @@ class TickerScore:
     ticker: str
     total_score: float = 0
     records: List[ScoreRecord] = field(default_factory=list)
-
-
-@dataclass
-class TrackedPosition:
-    """跟踪的持仓"""
-    ticker: str
-    quantity: int
-    buy_price: float
-    buy_date: str
-    target_sell_date: str
-    holding_days: int
-    reason: str
-    chain: str
-    score: float
 
 
 # ============================================================
@@ -190,65 +176,89 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         # 已分析过的新闻 ID
         self.analyzed_news_ids: set = set()
 
-        # 持仓跟踪文件
-        self.positions_file = Path(settings.get_data_dir()) / "ca_positions.json"
-        self.tracked_positions: List[TrackedPosition] = []
-        self._load_positions()
-
         logger.info("认知套利 Workflow 已初始化")
 
-    # ==================== 持仓管理 ====================
+    # ==================== 持仓管理（数据库） ====================
 
-    def _load_positions(self):
-        """加载持仓记录"""
-        if self.positions_file.exists():
-            try:
-                with open(self.positions_file, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                self.tracked_positions = [
-                    TrackedPosition(**p) for p in data.get("positions", [])
-                ]
-                logger.info(f"已加载 {len(self.tracked_positions)} 条持仓记录")
-            except Exception as e:
-                logger.warning(f"加载持仓记录失败: {e}")
-                self.tracked_positions = []
+    async def _get_open_positions(self) -> List[CAPosition]:
+        """获取所有未平仓持仓"""
+        async with get_db() as db:
+            result = await db.execute(
+                select(CAPosition).where(CAPosition.status == 'open')
+            )
+            return list(result.scalars().all())
 
-    def _save_positions(self):
-        """保存持仓记录"""
-        try:
-            self.positions_file.parent.mkdir(parents=True, exist_ok=True)
-            data = {
-                "updated_at": datetime.now().isoformat(),
-                "positions": [asdict(p) for p in self.tracked_positions]
-            }
-            with open(self.positions_file, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-        except Exception as e:
-            logger.error(f"保存持仓记录失败: {e}")
+    async def _get_position(self, ticker: str) -> Optional[CAPosition]:
+        """获取指定股票的持仓"""
+        async with get_db() as db:
+            result = await db.execute(
+                select(CAPosition).where(
+                    CAPosition.ticker == ticker,
+                    CAPosition.status == 'open'
+                )
+            )
+            return result.scalar_one_or_none()
 
-    def _add_position(self, pos: TrackedPosition):
-        """添加持仓记录"""
-        self.tracked_positions.append(pos)
-        self._save_positions()
+    async def _add_position(
+        self,
+        ticker: str,
+        quantity: int,
+        buy_price: float,
+        target_sell_date: datetime,
+        holding_days: int,
+        reason: str,
+        chain: str,
+        score: float
+    ):
+        """添加持仓记录到数据库"""
+        async with get_db() as db:
+            position = CAPosition(
+                ticker=ticker,
+                quantity=quantity,
+                buy_price=Decimal(str(buy_price)),
+                buy_date=datetime.now(),
+                target_sell_date=target_sell_date,
+                holding_days=holding_days,
+                reason=reason,
+                chain=chain,
+                score=score,
+                status='open'
+            )
+            db.add(position)
+            logger.info(f"已记录持仓: {ticker} x{quantity}")
 
-    def _remove_position(self, ticker: str):
-        """移除持仓记录"""
-        self.tracked_positions = [
-            p for p in self.tracked_positions if p.ticker != ticker
-        ]
-        self._save_positions()
+    async def _close_position(
+        self,
+        ticker: str,
+        sold_price: float,
+        pnl: float
+    ):
+        """平仓（更新状态为已卖出）"""
+        async with get_db() as db:
+            await db.execute(
+                update(CAPosition)
+                .where(CAPosition.ticker == ticker, CAPosition.status == 'open')
+                .values(
+                    status='sold',
+                    sold_price=Decimal(str(sold_price)),
+                    sold_at=datetime.now(),
+                    pnl=Decimal(str(pnl))
+                )
+            )
+            logger.info(f"已平仓: {ticker}, PnL: {pnl:.2f}")
 
     # ==================== 卖出检查 ====================
 
     async def _check_and_sell_expired(self) -> List[str]:
         """检查并卖出到期持仓"""
-        today = datetime.now().date()
+        today = datetime.now()
         sold_tickers = []
 
-        for pos in list(self.tracked_positions):
-            sell_date = datetime.fromisoformat(pos.target_sell_date).date()
+        # 从数据库获取所有未平仓持仓
+        positions = await self._get_open_positions()
 
-            if today >= sell_date:
+        for pos in positions:
+            if today >= pos.target_sell_date:
                 logger.info(f"持仓到期，准备卖出: {pos.ticker}")
 
                 try:
@@ -261,17 +271,18 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                             break
 
                     if actual_qty <= 0:
-                        logger.warning(f"{pos.ticker} 实际持仓为 0，移除记录")
-                        self._remove_position(pos.ticker)
+                        logger.warning(f"{pos.ticker} 实际持仓为 0，标记为已取消")
+                        await self._cancel_position(pos.ticker)
                         continue
 
                     # 获取当前价格
                     quote = await self.market_data_api.get_latest_price(pos.ticker)
                     current_price = float(quote.get('close', 0)) if quote else 0
+                    buy_price = float(pos.buy_price)
 
                     # 计算盈亏
-                    pnl = (current_price - pos.buy_price) * actual_qty
-                    pnl_pct = (current_price - pos.buy_price) / pos.buy_price * 100
+                    pnl = (current_price - buy_price) * actual_qty
+                    pnl_pct = (current_price - buy_price) / buy_price * 100
 
                     # 提交卖出订单
                     order = Order(
@@ -285,13 +296,13 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
 
                     if order_id:
                         sold_tickers.append(pos.ticker)
-                        self._remove_position(pos.ticker)
+                        await self._close_position(pos.ticker, current_price, pnl)
 
                         pnl_emoji = "📈" if pnl >= 0 else "📉"
                         await self.message_manager.send_message(
                             f"{pnl_emoji} 卖出 {pos.ticker}\n"
                             f"📊 数量: {actual_qty} 股\n"
-                            f"💰 买入: ${pos.buy_price:.2f} → 卖出: ${current_price:.2f}\n"
+                            f"💰 买入: ${buy_price:.2f} → 卖出: ${current_price:.2f}\n"
                             f"📈 盈亏: ${pnl:+,.2f} ({pnl_pct:+.2f}%)\n"
                             f"⏱️ 持仓: {pos.holding_days} 天",
                             "success" if pnl >= 0 else "warning"
@@ -304,6 +315,16 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                     logger.error(f"卖出 {pos.ticker} 失败: {e}")
 
         return sold_tickers
+
+    async def _cancel_position(self, ticker: str):
+        """取消持仓（实际未持有）"""
+        async with get_db() as db:
+            await db.execute(
+                update(CAPosition)
+                .where(CAPosition.ticker == ticker, CAPosition.status == 'open')
+                .values(status='cancelled')
+            )
+            logger.info(f"持仓已取消: {ticker}")
 
     # ==================== 新闻分析 ====================
 
@@ -529,7 +550,8 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
 
         # 7. 筛选要买入的
         held_symbols = [p.symbol for p in portfolio.positions if p.quantity > 0]
-        tracked_symbols = [p.ticker for p in self.tracked_positions]
+        tracked_positions = await self._get_open_positions()
+        tracked_symbols = [p.ticker for p in tracked_positions]
         current_count = len(tracked_symbols)
 
         to_buy = []
@@ -581,18 +603,19 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                 order_id = await self.broker_api.submit_order(order)
 
                 if order_id:
-                    # 记录持仓
-                    buy_date = datetime.now()
-                    target_sell_date = buy_date + timedelta(days=holding_days)
+                    # 记录持仓到数据库
+                    target_sell_date = datetime.now() + timedelta(days=holding_days)
 
-                    tracked_pos = TrackedPosition(
-                        ticker=ticker, quantity=quantity, buy_price=price,
-                        buy_date=buy_date.isoformat(),
-                        target_sell_date=target_sell_date.isoformat(),
-                        holding_days=holding_days, reason=reason,
-                        chain=chain, score=score
+                    await self._add_position(
+                        ticker=ticker,
+                        quantity=quantity,
+                        buy_price=price,
+                        target_sell_date=target_sell_date,
+                        holding_days=holding_days,
+                        reason=reason,
+                        chain=chain,
+                        score=score
                     )
-                    self._add_position(tracked_pos)
 
                     orders_placed.append((ticker, quantity, price, score, holding_days))
 

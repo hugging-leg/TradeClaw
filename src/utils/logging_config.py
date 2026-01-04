@@ -90,8 +90,30 @@ def setup_logging(
     log_level = log_level or settings.log_level.upper()
     is_production = settings.environment == "production"
     json_logs = json_logs if json_logs is not None else is_production
+    level = getattr(logging, log_level)
 
-    # 共享处理器
+    # 配置标准 logging handlers
+    root_logger = logging.getLogger()
+    root_logger.setLevel(level)
+
+    # 清除现有 handlers
+    root_logger.handlers.clear()
+
+    # 控制台 handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(level)
+
+    # 文件 handler
+    file_handler = None
+    if settings.log_to_file:
+        log_dir = settings.get_log_dir()
+        log_file_path = log_file or (
+            log_dir / f"trading_agent_{datetime.now().strftime('%Y%m%d')}.log"
+        )
+        file_handler = logging.FileHandler(log_file_path, encoding='utf-8')
+        file_handler.setLevel(level)
+
+    # 共享处理器（structlog 处理链）
     shared_processors: list[Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
@@ -99,52 +121,41 @@ def setup_logging(
         add_correlation_id,
         add_service_info,
         structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
+        # 将 structlog 事件转换为标准 logging
+        structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
     ]
 
+    # 控制台格式化器
     if json_logs:
-        # 生产环境：JSON 格式
-        processors = shared_processors + [
-            structlog.processors.JSONRenderer()
-        ]
-        console_renderer = structlog.processors.JSONRenderer()
+        console_formatter = structlog.stdlib.ProcessorFormatter(
+            processor=structlog.processors.JSONRenderer(),
+            foreign_pre_chain=shared_processors[:-1],
+        )
     else:
-        # 开发环境：彩色输出
-        processors = shared_processors + [
-            structlog.dev.ConsoleRenderer(colors=True)
-        ]
-        console_renderer = structlog.dev.ConsoleRenderer(colors=True)
+        console_formatter = structlog.stdlib.ProcessorFormatter(
+            processor=structlog.dev.ConsoleRenderer(colors=True),
+            foreign_pre_chain=shared_processors[:-1],
+        )
+    console_handler.setFormatter(console_formatter)
+    root_logger.addHandler(console_handler)
 
-    # 配置 structlog
+    # 文件格式化器（可读格式，无颜色）
+    if file_handler:
+        file_formatter = structlog.stdlib.ProcessorFormatter(
+            processor=structlog.dev.ConsoleRenderer(colors=False),
+            foreign_pre_chain=shared_processors[:-1],
+        )
+        file_handler.setFormatter(file_formatter)
+        root_logger.addHandler(file_handler)
+
+    # 配置 structlog 使用标准库
     structlog.configure(
-        processors=processors,
-        wrapper_class=structlog.make_filtering_bound_logger(
-            getattr(logging, log_level)
-        ),
+        processors=shared_processors,
+        wrapper_class=structlog.stdlib.BoundLogger,
         context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
+        logger_factory=structlog.stdlib.LoggerFactory(),
         cache_logger_on_first_use=True,
     )
-
-    # 配置标准 logging（用于第三方库）
-    logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        level=getattr(logging, log_level),
-        stream=sys.stdout,
-        force=True
-    )
-
-    # 设置文件处理器
-    if settings.log_to_file:
-        log_dir = settings.get_log_dir()
-        log_file = log_file or (log_dir / f"trading_agent_{datetime.now().strftime('%Y%m%d')}.log")
-
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
-        file_handler.setLevel(getattr(logging, log_level))
-        file_handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
-        logging.getLogger().addHandler(file_handler)
 
     # 降低第三方库日志级别
     for lib in ["httpx", "urllib3", "telegram", "aiohttp", "asyncio"]:

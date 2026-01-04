@@ -205,3 +205,47 @@ class AgentMessage(Base):
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
 
+
+class CAPosition(Base):
+    """
+    认知套利 Workflow 持仓跟踪
+    
+    记录 CA workflow 的买入持仓，用于到期卖出
+    """
+    __tablename__ = 'ca_positions'
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    ticker = Column(String(20), nullable=False, index=True, unique=True)
+    quantity = Column(Integer, nullable=False)
+    buy_price = Column(Numeric(20, 8), nullable=False)
+    buy_date = Column(DateTime(timezone=True), nullable=False)
+    target_sell_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    holding_days = Column(Integer, nullable=False)
+    reason = Column(Text, nullable=True)
+    chain = Column(Text, nullable=True)  # 传导链
+    score = Column(Float, nullable=True)
+    status = Column(String(20), default='open', index=True)  # open, sold, cancelled
+    sold_price = Column(Numeric(20, 8), nullable=True)
+    sold_at = Column(DateTime(timezone=True), nullable=True)
+    pnl = Column(Numeric(20, 8), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': str(self.id),
+            'ticker': self.ticker,
+            'quantity': self.quantity,
+            'buy_price': float(self.buy_price),
+            'buy_date': self.buy_date.isoformat() if self.buy_date else None,
+            'target_sell_date': self.target_sell_date.isoformat() if self.target_sell_date else None,
+            'holding_days': self.holding_days,
+            'reason': self.reason,
+            'chain': self.chain,
+            'score': self.score,
+            'status': self.status,
+            'sold_price': float(self.sold_price) if self.sold_price else None,
+            'sold_at': self.sold_at.isoformat() if self.sold_at else None,
+            'pnl': float(self.pnl) if self.pnl else None
+        }
+
