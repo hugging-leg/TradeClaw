@@ -153,6 +153,9 @@ class BlackLittermanWorkflow(WorkflowBase):
         self._cached_prices: Optional[pd.DataFrame] = None
         self._cached_cov: Optional[pd.DataFrame] = None
         self._last_optimization: Optional[Dict] = None
+        
+        # 历史摘要
+        self.history_summary = ""
 
         logger.info(
             f"Black-Litterman Workflow 已初始化 "
@@ -603,6 +606,41 @@ class BlackLittermanWorkflow(WorkflowBase):
 
         return results
 
+    async def _update_history_summary(
+        self, 
+        views: Dict[str, float], 
+        weights: Dict[str, float],
+        reasoning: str
+    ):
+        """更新历史摘要"""
+        try:
+            summary_prompt = f"""请将以下内容整合为简洁的投资历史摘要（限制500字）：
+
+**之前的历史摘要：**
+{self.history_summary if self.history_summary else "无（首次分析）"}
+
+**本次 Black-Litterman 分析：**
+- 时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+- 投资观点: {json.dumps(views, ensure_ascii=False) if views else '无'}
+- 优化后权重: {json.dumps(weights, ensure_ascii=False) if weights else '无'}
+- 分析推理: {reasoning[:500] if reasoning else '无'}
+
+请生成更新后的摘要，重点保留：
+1. 最近形成的投资观点及依据
+2. 优化后的资产配置
+3. 市场判断和风险评估
+4. 值得关注的变化
+
+只输出摘要内容。"""
+
+            response = await asyncio.to_thread(
+                lambda: self.llm.invoke(summary_prompt).content
+            )
+            self.history_summary = response.strip()[:2000]
+            logger.debug(f"历史摘要已更新: {len(self.history_summary)} 字符")
+        except Exception as e:
+            logger.warning(f"更新历史摘要失败: {e}")
+
     async def run_workflow(
         self,
         initial_context: Optional[Dict[str, Any]] = None
@@ -634,16 +672,27 @@ class BlackLittermanWorkflow(WorkflowBase):
                 "🤖 LLM 分析市场并生成投资观点...", "info"
             )
 
+            # 每次分析使用独立的 thread_id，避免历史消息累积
+            unique_thread_id = f"{self.session_id}_{self.workflow_id}"
             config = {
-                "configurable": {"thread_id": self.session_id},
+                "configurable": {"thread_id": unique_thread_id},
                 "recursion_limit": 64
             }
+
+            # 构建包含历史摘要的 prompt
+            user_prompt = "请分析当前市场状况，生成投资观点。"
+            if self.history_summary:
+                user_prompt = f"""**历史上下文摘要（你之前的分析）：**
+{self.history_summary}
+
+---
+{user_prompt}"""
 
             result = await self.agent.ainvoke(
                 {
                     "messages": [
                         SystemMessage(content=self.system_prompt),
-                        HumanMessage(content="请分析当前市场状况，生成投资观点。")
+                        HumanMessage(content=user_prompt)
                     ]
                 },
                 config=config
@@ -710,6 +759,13 @@ class BlackLittermanWorkflow(WorkflowBase):
                         )
                 except Exception as e:
                     logger.warning(f"保存分析历史失败: {e}")
+
+            # 更新历史摘要
+            await self._update_history_summary(
+                self._current_views or {},
+                optimal_weights or {},
+                self._current_reasoning
+            )
 
             await self.send_workflow_complete_notification(
                 "Black-Litterman", execution_time

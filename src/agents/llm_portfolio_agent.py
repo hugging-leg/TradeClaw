@@ -91,10 +91,14 @@ class LLMPortfolioAgent(WorkflowBase):
         self.analysis_history = []
         self.last_analysis_time = None
         
+        # 历史摘要
+        self.history_summary = ""
+        self.max_summary_tokens = 1500  # 限制摘要长度
+        
         # 数据持久化
         self._db_available = DB_AVAILABLE
         
-        logger.info("LLM Portfolio Agent 已初始化（支持 Memory 和数据持久化）")
+        logger.info("LLM Portfolio Agent 已初始化（支持历史摘要和数据持久化）")
     
     def _get_system_prompt(self) -> str:
         """获取系统提示"""
@@ -974,9 +978,10 @@ class LLMPortfolioAgent(WorkflowBase):
             # 构建初始提示
             user_message = self._build_analysis_prompt(context)
             
-            # 使用 thread_id 保持对话状态，设置 recursion_limit
+            # 每次分析使用独立的 thread_id，避免历史消息累积
+            unique_thread_id = f"{self.session_id}_{self.workflow_id}"
             config = {
-                "configurable": {"thread_id": self.session_id},
+                "configurable": {"thread_id": unique_thread_id},
                 "recursion_limit": 64
             }
             
@@ -1039,6 +1044,10 @@ class LLMPortfolioAgent(WorkflowBase):
                 "response": final_response
             })
             
+            # 更新历史摘要（类似 Cursor summarize）
+            if final_response:
+                await self._update_history_summary(final_response, tool_calls_summary)
+            
             await self.send_workflow_complete_notification("LLM组合分析", execution_time)
             
             return {
@@ -1096,11 +1105,64 @@ class LLMPortfolioAgent(WorkflowBase):
         except Exception as e:
             logger.warning(f"保存分析历史失败: {e}")
     
-    def _build_analysis_prompt(self, context: Dict[str, Any]) -> str:
+    async def _update_history_summary(self, current_analysis: str, tool_calls: List[str]):
+        """
+        更新历史摘要
         
-        # Stringify context (use default=str to handle any non-serializable objects)
+        将当前分析结果整合到历史摘要中，保留关键信息，控制长度
+        """
+        try:
+            # 构建摘要更新 prompt
+            summary_prompt = f"""请将以下内容整合为简洁的投资历史摘要（限制500字以内）：
+
+**之前的历史摘要：**
+{self.history_summary if self.history_summary else "无（首次分析）"}
+
+**本次分析：**
+- 时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+- 使用工具: {', '.join(tool_calls) if tool_calls else '无'}
+- 分析结论: {current_analysis[:1000] if current_analysis else '无'}
+
+请生成更新后的摘要，重点保留：
+1. 最近的交易决策及原因
+2. 当前持仓策略和配置
+3. 重要的市场观点和判断
+4. 需要持续关注的风险/机会
+5. 已安排的后续分析计划
+
+只输出摘要内容，不要其他说明。"""
+
+            response = await asyncio.to_thread(
+                lambda: self.llm.invoke(summary_prompt).content
+            )
+            
+            # 更新摘要
+            self.history_summary = response.strip()[:2000]  # 限制长度
+            logger.debug(f"历史摘要已更新: {len(self.history_summary)} 字符")
+            
+        except Exception as e:
+            logger.warning(f"更新历史摘要失败: {e}")
+    
+    def _build_analysis_prompt(self, context: Dict[str, Any]) -> str:
+        """构建分析提示，包含历史摘要"""
+        
+        # 历史上下文
+        history_context = ""
+        if self.history_summary:
+            history_context = f"""
+**历史上下文摘要（你之前的分析和决策）：**
+{self.history_summary}
+
+---
+"""
+        
+        # 当前 context
         context_str = json.dumps(context, indent=2, ensure_ascii=False, default=str)
-        prompt = f"请分析当前市场和组合状况。如有必要，可以调仓。Context: {context_str}"
-        logger.info(f"Analysis prompt: {prompt}")
+        
+        prompt = f"""{history_context}请分析当前市场和组合状况。如有必要，可以调仓。
+
+当前触发上下文: {context_str}"""
+        
+        logger.info(f"Analysis prompt length: {len(prompt)} chars")
         
         return prompt
