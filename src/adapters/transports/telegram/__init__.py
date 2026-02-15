@@ -9,7 +9,7 @@ Telegram 模块
 使用示例:
     from src.adapters.transports.telegram import TelegramService
 
-    service = TelegramService(event_system=event_system)
+    service = TelegramService(trading_system=trading_system)
     await service.start()
     await service.send_message("Hello!")
 """

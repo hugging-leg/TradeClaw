@@ -3,888 +3,838 @@
 
 职责：
 - 系统生命周期管理（启动、停止）
-- 事件处理协调
-- 调度管理（委托给 TradingScheduler）
+- 统一的 public API（供 Telegram / FastAPI / Monitor 直接调用）
+- 定时任务注册（具体调度能力由 SchedulerMixin 提供）
+- Workflow 执行互斥
 
 已拆分的服务：
+- SchedulerMixin: APScheduler 管理（增删改查、guard、序列化、持久化）
 - RiskManager: 风险管理（止损/止盈/日内限制）
 - QueryHandler: 查询处理（状态/组合/订单）
 - RealtimeMarketMonitor: 实时监控
-- TradingScheduler: 定时任务调度 (APScheduler)
+
+架构说明：
+- 不使用 EventSystem / pub-sub — 所有调用方直接调用 TradingSystem 的 public 方法
+- APScheduler 通过 SchedulerMixin 注入，定时任务回调直接调用 self 的方法
+- Workflow 执行通过 asyncio.Lock 保证互斥，通过 _pending_triggers 队列合并短时间内的多次触发
+- 节流/去重由 APScheduler 内置机制处理（coalesce + max_instances + replace_existing）
+- 任务持久化使用 SQLAlchemyJobStore，重启后恢复用户动态添加的任务
 """
 
-from src.utils.logging_config import get_logger
-from typing import Dict, List, Any
+from __future__ import annotations
+
+import asyncio
 from datetime import datetime
 from decimal import Decimal
+from typing import Any, Dict, List, Optional
 
-from src.messaging.message_manager import MessageManager
-from src.interfaces.factory import get_broker_api, get_market_data_api, get_news_api, MessageTransportFactory
-from src.events.event_system import event_system
-# 导入 agents 模块（触发所有 workflow 的自动注册）
+from config import settings
 from src.agents import WorkflowFactory
+from src.interfaces.factory import (
+    MessageTransportFactory,
+    get_broker_api,
+    get_market_data_api,
+    get_news_api,
+)
+from src.messaging.message_manager import MessageManager
+from src.models.trading_models import Order, OrderSide, OrderType, Portfolio, TimeInForce
+from src.services.query_handler import QueryHandler
 from src.services.realtime_monitor import RealtimeMarketMonitor
 from src.services.risk_manager import RiskManager
-from src.services.query_handler import QueryHandler
-from src.services.scheduler import TradingScheduler
-from src.models.trading_models import (
-    Order, Portfolio, TradingEvent, OrderSide, OrderType,
-    TimeInForce
-)
+from src.services.scheduler_mixin import SchedulerMixin
+from src.utils.logging_config import get_logger
 from src.utils.time_utils import parse_time_config
 from src.utils.timezone import utc_now
-from config import settings
-
 
 logger = get_logger(__name__)
 
 
-class TradingSystem:
-    """Main trading system orchestrator"""
+class TradingSystem(SchedulerMixin):
 
-    def __init__(self):
-        # Initialize API clients using factories
+    def __init__(self) -> None:
+        # ---- APScheduler (Managed by SchedulerMixin) ----
+        self._init_scheduler()
+
+        # ---- API Clients ----
         self.broker_api = get_broker_api()
         self.market_data_api = get_market_data_api()
         self.news_api = get_news_api()
 
-        # Initialize event system first (needed by message transport)
-        self.event_system = event_system
-
-        # Initialize message manager with transport
-        # Transport 会在 MessageManager.start_processing() 中自动初始化
-        transport = MessageTransportFactory.create_message_transport(event_system=self.event_system)
+        # ---- Message Manager ----
+        transport = MessageTransportFactory.create_message_transport(trading_system=self)
         self.message_manager = MessageManager(transport=transport)
 
-        # Log provider information
-        logger.info(f"Broker Provider: {self.broker_api.get_provider_name()}")
-        logger.info(f"Market Data Provider: {self.market_data_api.get_provider_name()}")
-        logger.info(f"News Provider: {self.news_api.get_provider_name()}")
-        logger.info(f"Message Transport: {self.message_manager.transport.get_transport_name()}")
+        logger.info("Broker Provider: %s", self.broker_api.get_provider_name())
+        logger.info("Market Data Provider: %s", self.market_data_api.get_provider_name())
+        logger.info("News Provider: %s", self.news_api.get_provider_name())
+        logger.info("Message Transport: %s", self.message_manager.transport.get_transport_name())
 
-        # Validate workflow configuration
-        if not WorkflowFactory.is_supported(settings.workflow_type or 'llm_portfolio'):
-            logger.warning(f"Unknown workflow type: {settings.workflow_type}, using default")
+        # ---- Workflow ----
+        if not WorkflowFactory.is_supported(settings.workflow_type or "llm_portfolio"):
+            logger.warning("Unknown workflow type: %s, using default", settings.workflow_type)
 
-        # Initialize core components
         self.trading_workflow = WorkflowFactory.create_workflow(
-            message_manager=self.message_manager
+            message_manager=self.message_manager,
         )
+        logger.info("Initialized with %s workflow", self.trading_workflow.get_workflow_type())
+
+        # Inject TradingSystem reference into workflow (for LLM self-scheduling)
+        self.trading_workflow._trading_system = self
+
+        # ---- Realtime Monitor ----
         self.realtime_monitor = RealtimeMarketMonitor(trading_system=self)
-
-        # 初始化 APScheduler 调度器
-        self.scheduler = TradingScheduler(
-            timezone=settings.trading_timezone,
-            exchange=settings.exchange
+        self.enable_realtime_monitoring = (
+            self.trading_workflow.get_workflow_type()
+            in ("llm_portfolio", "black_litterman", "cognitive_arbitrage")
         )
 
-        # 初始化服务（拆分的功能模块）
+        # ---- Risk Manager ----
         self.risk_enabled = settings.risk_management_enabled
-        self.risk_manager = RiskManager(
-            broker_api=self.broker_api,
-            message_manager=self.message_manager
-        ) if self.risk_enabled else None
+        self.risk_manager = (
+            RiskManager(broker_api=self.broker_api, message_manager=self.message_manager)
+            if self.risk_enabled
+            else None
+        )
+
+        # ---- Query Handler ----
         self.query_handler = QueryHandler(
             broker_api=self.broker_api,
-            message_manager=self.message_manager
+            message_manager=self.message_manager,
         )
 
-        # Log workflow type being used
-        logger.info(f"Initialized with {self.trading_workflow.get_workflow_type()} workflow")
+        # ---- System State ----
+        self.is_running: bool = False
+        self.is_trading_enabled: bool = False
+        self.is_shutting_down: bool = False
+        self.last_portfolio_update: Optional[datetime] = None
+        self.active_orders: List[Order] = []
+        self._started_at: Optional[datetime] = None
 
-        # Enable realtime monitoring for portfolio management workflows
-        self.enable_realtime_monitoring = (
-            self.trading_workflow.get_workflow_type() in ["balanced_portfolio", "llm_portfolio"]
-        )
+        # ---- Workflow 互斥 + 排队 ----
+        self._workflow_lock = asyncio.Lock()
+        self._pending_triggers: List[Dict[str, Any]] = []  # 排队中的触发
 
-        # System state
-        self.is_running = False
-        self.is_trading_enabled = False
-        self.is_shutting_down = False
-        self.last_portfolio_update = None
-        self.active_orders = []
-
-        # Workflow execution tracking (for event throttling)
-        self.last_workflow_execution: Dict[str, datetime] = {}  # trigger -> last execution time
-        self.min_workflow_interval_minutes = settings.min_workflow_interval_minutes
-        self.throttle_priority_threshold = -7
-        self.throttled_events: Dict[str, List[TradingEvent]] = {}  # trigger -> list of throttled events
-
-        # Triggers that require throttling (only LLM self-scheduled for now)
-        self.throttled_triggers = {"llm_scheduled"}  # Set of triggers to throttle
-
-        # Track pending throttle check events to avoid duplicates
-        self.pending_throttle_checks: Dict[str, bool] = {}  # trigger -> has_pending_check
-
-        # Performance tracking
-        self.daily_stats = {
-            'trades_executed': 0,
-            'total_pnl': Decimal('0'),
-            'start_equity': None,
-            'last_update': None
+        # ---- 每日统计 ----
+        self.daily_stats: Dict[str, Any] = {
+            "trades_executed": 0,
+            "total_pnl": Decimal("0"),
+            "start_equity": None,
+            "last_update": None,
         }
 
-        # Scheduling intervals (in minutes) - configurable via settings
-        self.portfolio_check_interval = settings.portfolio_check_interval
-        self.risk_check_interval = settings.risk_check_interval
+    # ------------------------------------------------------------------
+    # 生命周期
+    # ------------------------------------------------------------------
 
-        # Setup event handlers
-        self._setup_event_handlers()
+    async def start(self, enable_trading: bool = True) -> bool:
+        """启动交易系统"""
+        if self.is_running:
+            logger.warning("Trading system is already running")
+            return False
 
-    def _setup_event_handlers(self):
-        """Setup event handlers for workflow triggers"""
-
-        # Unified workflow trigger handler
-        self.event_system.register_handler("trigger_workflow", self._handle_workflow_trigger)
-
-        # Trading control handlers
-        self.event_system.register_handler("enable_trading", self._handle_enable_trading)
-        self.event_system.register_handler("disable_trading", self._handle_disable_trading)
-
-        # System control handlers (from Telegram commands)
-        self.event_system.register_handler("emergency_stop", self._handle_emergency_stop)
-
-        # Query handlers (from Telegram commands)
-        self.event_system.register_handler("query_status", self._handle_query_status)
-        self.event_system.register_handler("query_portfolio", self._handle_query_portfolio)
-        self.event_system.register_handler("query_orders", self._handle_query_orders)
-
-    async def start(self, enable_trading: bool = True):
-        """
-        Start the trading system
-
-        Args:
-            enable_trading: Whether to enable trading immediately (default: True)
-
-        Returns:
-            True if started successfully, False if already running
-        """
         try:
-            if self.is_running:
-                logger.warning("Trading system is already running")
-                return False
-
             logger.info("Starting trading system...")
 
-            # Start event system
-            await self.event_system.start()
-
-            # Start message manager processing
+            # Message Manager
             await self.message_manager.start_processing()
 
-            # Initialize daily stats
+            # Daily stats
             await self._initialize_daily_stats()
 
-            # Start APScheduler and register scheduled jobs
-            await self.scheduler.start()
+            # APScheduler
+            self._start_scheduler()
             self._register_scheduled_jobs()
 
-            # Start realtime monitoring if enabled
+            # Realtime Monitor
             if self.enable_realtime_monitoring:
                 logger.info("Starting realtime market monitoring...")
                 portfolio = await self.get_portfolio()
                 await self.realtime_monitor.start(portfolio)
 
-            # Set system state
+            # System state
             self.is_running = True
             self.is_trading_enabled = enable_trading
+            self._started_at = utc_now()
 
-            logger.info(f"Trading system started (trading {'enabled' if enable_trading else 'disabled'})")
+            logger.info("Trading system started (trading %s)", "enabled" if enable_trading else "disabled")
 
-            # Send startup notification
-            trading_status = "enabled" if enable_trading else "disabled"
-            startup_message = f"""🚀 **LLM Agent Trading System**
-
-All components initialized successfully.
-
-Trading: {trading_status}
-Workflow: {self.trading_workflow.get_workflow_type()}
-Market: {'🟢 Open' if await self.is_market_open() else '🔴 Closed'}
-
-Ready to trade! 📊"""
-
-            await self.message_manager.send_message(startup_message)
+            # Startup notification
+            market_status = "🟢 Open" if await self.is_market_open() else "🔴 Closed"
+            await self.message_manager.send_message(
+                f"🚀 **LLM Agent Trading System**\n\n"
+                f"All components initialized successfully.\n\n"
+                f"Trading: {'enabled' if enable_trading else 'disabled'}\n"
+                f"Workflow: {self.trading_workflow.get_workflow_type()}\n"
+                f"Market: {market_status}\n\n"
+                f"Ready to trade! 📊"
+            )
 
             return True
 
         except Exception as e:
-            logger.error(f"Failed to start trading system: {e}")
+            logger.error("Failed to start trading system: %s", e)
             await self.stop()
             raise
 
-    async def stop(self):
-        """Stop the trading system gracefully"""
+    async def stop(self) -> None:
+        """优雅停止交易系统"""
+        if not self.is_running:
+            logger.warning("Trading system is not running")
+            return
+
         try:
-            if not self.is_running:
-                logger.warning("Trading system is not running")
-                return
-
             logger.info("Stopping trading system...")
-
-            # Set shutdown flag to prevent new workflows
             self.is_shutting_down = True
             self.is_trading_enabled = False
 
-            # Stop APScheduler
-            await self.scheduler.stop()
+            # APScheduler
+            self._stop_scheduler()
 
-            # Stop realtime monitoring
+            # Realtime Monitor
             if self.enable_realtime_monitoring and self.realtime_monitor.is_monitoring:
                 logger.info("Stopping realtime market monitoring...")
                 await self.realtime_monitor.stop()
 
-            # Stop message manager processing (keep transport active for commands)
-            logger.info("Stopping message manager processing (keeping transport active for commands)")
+            # Message Manager
             await self.message_manager.stop_processing()
 
-            # Stop event system (will finish processing current events)
-            await self.event_system.stop()
-
-            # Set system state
             self.is_running = False
             self.is_shutting_down = False
-
-            logger.info("Trading system stopped (Telegram commands still available)")
+            logger.info("Trading system stopped")
 
         except Exception as e:
-            logger.error(f"Error stopping trading system: {e}")
+            logger.error("Error stopping trading system: %s", e)
 
-    def _register_scheduled_jobs(self):
+    # ------------------------------------------------------------------
+    # Public API — Workflow 配置与切换
+    # ------------------------------------------------------------------
+
+    def get_workflow_config(self) -> Dict[str, Any]:
+        """获取当前 workflow 的可编辑配置（透传给 workflow 实例）"""
+        return self.trading_workflow.get_config()
+
+    def update_workflow_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Register all scheduled jobs with APScheduler
+        运行时更新 workflow 配置（透传给 workflow 实例）。
 
-        所有定时任务通过 TradingScheduler 管理，不再使用自制调度。
+        注意：仅修改内存中的值，重启后恢复为 env 中的默认值。
         """
-        # Parse rebalance time from settings (format: "HH:MM")
-        rebalance_hour, rebalance_minute = parse_time_config(settings.rebalance_time)
+        return self.trading_workflow.update_config(updates)
 
-        # 1. Daily rebalance - Cron job, only on trading days
-        self.scheduler.add_cron_job(
-            job_id='daily_rebalance',
-            func=self._scheduled_daily_rebalance,
-            hour=rebalance_hour,
-            minute=rebalance_minute,
-            require_trading_day=True,
-            require_market_open=False
-        )
-        logger.info(f"Scheduled daily rebalance: {rebalance_hour:02d}:{rebalance_minute:02d} ET")
+    async def switch_workflow(self, workflow_type: str) -> Dict[str, Any]:
+        """
+        切换到不同的 workflow 类型。
 
-        # 2. EOD analysis - Cron job, after market close
-        eod_hour, eod_minute = parse_time_config(settings.eod_analysis_time)
-        self.scheduler.add_cron_job(
-            job_id='eod_analysis',
-            func=self._scheduled_eod_analysis,
-            hour=eod_hour,
-            minute=eod_minute,
-            require_trading_day=True,
-            require_market_open=False
-        )
-        logger.info(f"Scheduled EOD analysis: {eod_hour:02d}:{eod_minute:02d} ET")
+        注意：
+        - 如果 workflow 正在执行，等待其完成
+        - 重新创建 workflow 实例
+        - 重新注入 _trading_system 引用
+        """
+        if not WorkflowFactory.is_supported(workflow_type):
+            available = list(WorkflowFactory.get_available_workflows().keys())
+            raise ValueError(f"Unknown workflow: {workflow_type}. Available: {available}")
 
-        # 3. Portfolio check - Interval job, during market hours
-        self.scheduler.add_interval_job(
-            job_id='portfolio_check',
-            func=self._scheduled_portfolio_check,
-            minutes=self.portfolio_check_interval,
-            require_market_open=True
-        )
-        logger.info(f"Scheduled portfolio check: every {self.portfolio_check_interval}min (market hours)")
+        current_type = self.trading_workflow.get_workflow_type()
+        if current_type == workflow_type:
+            return {
+                "success": True,
+                "message": f"Already using {workflow_type}",
+                "workflow_type": workflow_type,
+            }
 
-        # 4. Risk check - Interval job, during market hours
-        if self.risk_enabled:
-            self.scheduler.add_interval_job(
-                job_id='risk_check',
-                func=self._scheduled_risk_check,
-                minutes=self.risk_check_interval,
-                require_market_open=True
+        # 等待当前 workflow 执行完毕
+        async with self._workflow_lock:
+            logger.info("Switching workflow: %s -> %s", current_type, workflow_type)
+
+            # 更新 settings（内存级）
+            settings.workflow_type = workflow_type
+
+            # 创建新 workflow
+            self.trading_workflow = WorkflowFactory.create_workflow(
+                workflow_type=workflow_type,
+                message_manager=self.message_manager,
             )
-            logger.info(f"Scheduled risk check: every {self.risk_check_interval}min (market hours)")
+            self.trading_workflow._trading_system = self
 
-    # === Scheduled Job Callbacks (called by APScheduler) ===
+            # 更新实时监控配置
+            self.enable_realtime_monitoring = (
+                workflow_type in ("llm_portfolio", "black_litterman", "cognitive_arbitrage")
+            )
 
-    async def _scheduled_daily_rebalance(self):
-        """APScheduler callback: daily rebalance"""
-        await self.event_system.publish(
-            "trigger_workflow",
-            {"trigger": "daily_rebalance"}
-        )
+            logger.info("Workflow switched to %s", workflow_type)
 
-    async def _scheduled_eod_analysis(self):
-        """APScheduler callback: EOD analysis"""
-        await self._run_eod_analysis()
+            await self.message_manager.send_message(
+                f"🔄 **Workflow Switched**\n\n"
+                f"From: {current_type}\n"
+                f"To: {workflow_type}",
+                "info",
+            )
 
-    async def _scheduled_portfolio_check(self):
-        """APScheduler callback: portfolio check"""
-        try:
-            if not await self.is_market_open():
-                logger.debug("Market closed, skipping portfolio check")
-                return
+            return {
+                "success": True,
+                "message": f"Switched to {workflow_type}",
+                "workflow_type": workflow_type,
+            }
 
-            portfolio = await self.get_portfolio()
-            if self._should_alert_portfolio_change(portfolio):
-                await self._send_portfolio_alert(portfolio)
-        except Exception as e:
-            logger.error(f"Portfolio check failed: {e}")
+    # ------------------------------------------------------------------
+    # Public API — 交易控制（供 Telegram / FastAPI 直接调用）
+    # ------------------------------------------------------------------
 
-    async def _scheduled_risk_check(self):
-        """APScheduler callback: risk check"""
-        try:
-            if await self.is_market_open():
-                await self._run_risk_checks()
-        except Exception as e:
-            logger.error(f"Risk check failed: {e}")
-
-    async def _enable_trading(self):
-        """Enable trading operations (internal method, called by event handler)"""
+    async def enable_trading(self) -> None:
+        """启用交易"""
         if not self.is_running:
             logger.error("Cannot enable trading: system is not running")
             return
-
         if self.is_trading_enabled:
             logger.debug("Trading is already enabled")
             return
 
         self.is_trading_enabled = True
         logger.info("✅ Trading operations enabled")
+        await self.message_manager.send_system_alert(
+            "✅ **Trading Enabled**\n\nTrading operations are now active.",
+            "success",
+        )
 
-    async def _disable_trading(self):
-        """Disable trading operations (internal method, called by event handler)"""
+    async def disable_trading(self, reason: str = "Manual control") -> None:
+        """禁用交易"""
         if not self.is_trading_enabled:
             logger.debug("Trading is already disabled")
             return
 
         self.is_trading_enabled = False
-        logger.info("⏸️ Trading operations disabled")
+        logger.info("⏸️ Trading operations disabled: %s", reason)
+        await self.message_manager.send_system_alert(
+            f"⏸️ **Trading Disabled**\n\nReason: {reason}\n\nSystem continues monitoring.",
+            "warning",
+        )
 
-    async def emergency_stop(self):
-        """Emergency stop - cancel all orders and close positions"""
+    async def emergency_stop(self) -> None:
+        """紧急停止 — 取消所有订单并平仓"""
         try:
             logger.warning("EMERGENCY STOP ACTIVATED")
-
-            # Disable trading
             self.is_trading_enabled = False
 
-            # Cancel all open orders
+            # 取消所有挂单
             orders = await self.get_active_orders()
             for order in orders:
                 try:
                     if order.id:
-                        await self._cancel_order(order.id)
+                        await self.cancel_order(order.id)
                 except Exception as e:
-                    logger.error(f"Failed to cancel order {order.id}: {e}")
+                    logger.error("Failed to cancel order %s: %s", order.id, e)
 
-            # Close all positions (simplified - in practice you'd want more sophisticated logic)
+            # 平仓
             portfolio = await self.get_portfolio()
             for position in portfolio.positions:
                 try:
-                    if position.quantity > 0:
-                        # Close long position
-                        await self._place_market_order(position.symbol, "sell", abs(position.quantity))
-                    elif position.quantity < 0:
-                        # Close short position
-                        await self._place_market_order(position.symbol, "buy", abs(position.quantity))
+                    qty = abs(position.quantity)
+                    if qty == 0:
+                        continue
+                    side = "sell" if position.quantity > 0 else "buy"
+                    await self._place_market_order(position.symbol, side, qty)
                 except Exception as e:
-                    logger.error(f"Failed to close position {position.symbol}: {e}")
+                    logger.error("Failed to close position %s: %s", position.symbol, e)
 
             logger.warning("Emergency stop completed")
-
-        except Exception as e:
-            logger.error(f"Error during emergency stop: {e}")
-            raise
-
-    # === System Control Event Handlers (from Telegram) ===
-
-    async def _handle_emergency_stop(self, event: TradingEvent):
-        """Handle emergency_stop event from Telegram"""
-        try:
-            chat_id = event.data.get("chat_id") if event.data else None
-
-            # Execute emergency stop
-            await self.emergency_stop()
-
             await self.message_manager.send_message(
                 "⛔ **EMERGENCY STOP COMPLETE**\n\n"
                 "All trading operations have been stopped.",
-                chat_id
             )
 
         except Exception as e:
-            logger.error(f"Error handling emergency_stop event: {e}")
+            logger.error("Error during emergency stop: %s", e)
+            raise
 
-    # === Query Event Handlers (from Telegram) ===
+    # ------------------------------------------------------------------
+    # Public API — Workflow 触发
+    # ------------------------------------------------------------------
 
-    async def _handle_query_status(self, event: TradingEvent):
-        """Handle query_status event — delegate to QueryHandler"""
-        try:
-            # 构建系统状态上下文，传递给 QueryHandler
-            system_state: Dict[str, Any] = {
-                'is_running': self.is_running,
-                'is_trading_enabled': self.is_trading_enabled,
-                'workflow_type': self.trading_workflow.get_workflow_type(),
+    async def trigger_workflow(
+        self,
+        trigger: str,
+        context: Optional[Dict[str, Any]] = None,
+        *,
+        fire_and_forget: bool = True,
+    ) -> None:
+        """
+        触发一次 workflow 执行。
+
+        Args:
+            trigger: 触发类型（daily_rebalance / manual_analysis / realtime / llm_scheduled / ...）
+            context: 传递给 workflow 的上下文数据
+            fire_and_forget: 是否使用 create_task 异步执行（默认 True，不阻塞调用方）
+        """
+        if fire_and_forget:
+            asyncio.create_task(
+                self._guarded_workflow_execution(trigger, context),
+                name=f"workflow_{trigger}",
+            )
+        else:
+            await self._guarded_workflow_execution(trigger, context)
+
+    # LLM 自主调度 job_id 前缀
+    _LLM_JOB_PREFIX = "llm_scheduled_"
+
+    def schedule_llm_analysis(
+        self,
+        delay_seconds: float,
+        reason: str,
+    ) -> Dict[str, Any]:
+        """
+        LLM 自主调度分析 — 带上限控制。
+
+        使用动态 job_id（基于时间戳），允许同时存在多个待执行的 LLM 调度。
+        通过 max_pending_llm_jobs 配置项限制最大待执行数量，防止 LLM 无限制创建任务。
+
+        Args:
+            delay_seconds: 延迟秒数
+            reason: 调度原因
+
+        Returns:
+            dict with "success", "job_id", "message"
+        """
+        max_pending = settings.max_pending_llm_jobs
+        current_count = self.count_jobs_by_prefix(self._LLM_JOB_PREFIX)
+
+        if current_count >= max_pending:
+            existing = self.get_jobs_by_prefix(self._LLM_JOB_PREFIX)
+            existing_desc = ", ".join(
+                f"{j['id']} (next: {j['next_run_time'] or '?'})" for j in existing
+            )
+            msg = (
+                f"LLM 调度已达上限 ({current_count}/{max_pending})，"
+                f"拒绝新调度。已有调度: {existing_desc}"
+            )
+            logger.warning(msg)
+            return {"success": False, "job_id": None, "message": msg}
+
+        job_id = f"{self._LLM_JOB_PREFIX}{int(utc_now().timestamp() * 1000)}"
+        success = self.add_delayed_job(
+            job_id=job_id,
+            func=self.trigger_workflow,
+            delay_seconds=delay_seconds,
+            kwargs={
+                "trigger": "llm_scheduled",
+                "context": {
+                    "reason": reason,
+                    "scheduled_by": "llm_agent",
+                    "job_id": job_id,
+                },
+                "fire_and_forget": False,
+            },
+        )
+
+        if success:
+            return {
+                "success": True,
+                "job_id": job_id,
+                "message": f"已安排 {delay_seconds / 3600:.1f} 小时后的分析 (job: {job_id})",
             }
+        else:
+            return {"success": False, "job_id": None, "message": "添加调度任务失败"}
 
-            # 事件队列状态
-            event_status = self.event_system.get_status()
-            system_state['event_queue_size'] = event_status.get('queue_size', 0)
+    async def _guarded_workflow_execution(
+        self,
+        trigger: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Workflow 执行的完整守卫逻辑：前置检查 → 排队 → 互斥锁 → 执行 → 消费队列
 
-            # 调度器状态
-            scheduler_status = self.scheduler.get_status()
-            system_state['scheduler_jobs'] = scheduler_status.get('total_jobs', 0)
+        当 workflow 正在运行时，后续触发不会丢弃，而是放入 _pending_triggers 队列。
+        当前 workflow 执行完毕后，会自动消费队列中的所有待处理触发，
+        将它们的 context 合并后执行一次 workflow（避免短时间内重复执行）。
 
-            # 实时监控状态
-            if self.enable_realtime_monitoring:
-                monitor_status = self.realtime_monitor.get_status()
-                if monitor_status and isinstance(monitor_status, dict):
-                    system_state['realtime_monitor_active'] = monitor_status.get('is_monitoring', False)
+        节流/去重说明：
+        - 定时任务（cron/interval）：由 APScheduler 的 coalesce=True + max_instances=1 处理
+        - LLM 自主调度：动态 job_id + max_pending_llm_jobs 上限控制
+        - 实时触发（realtime / manual）：通过 _pending_triggers 排队合并
+        """
 
-            # 预获取市场状态
+        if not self.is_trading_enabled:
+            logger.info("Trading disabled, skipping %s", trigger)
+            return
+
+        if self.is_shutting_down:
+            logger.info("System shutting down, skipping %s", trigger)
+            return
+
+        # 如果 workflow 正在运行，排队而不是丢弃
+        if self._workflow_lock.locked():
+            entry = {"trigger": trigger, "context": context, "queued_at": utc_now().isoformat()}
+            self._pending_triggers.append(entry)
+            logger.info("Workflow busy, queued trigger: %s (queue size: %d)", trigger, len(self._pending_triggers))
+            return
+
+        async with self._workflow_lock:
+            # 执行当前触发
+            await self._execute_workflow_once(trigger, context)
+
+            # 消费队列：合并所有 pending triggers 并执行一次
+            await self._drain_pending_triggers()
+
+    async def _execute_workflow_once(
+        self,
+        trigger: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """执行一次 workflow（不含锁，由调用方保证互斥）"""
+        try:
+            logger.info("Starting workflow execution: %s", trigger)
+
+            ctx = dict(context) if context else {}
+            ctx.setdefault("trigger", trigger)
+            ctx.setdefault("timestamp", utc_now().isoformat())
+
+            await self.trading_workflow.run_workflow(ctx)
+
+            logger.info("Workflow execution completed: %s", trigger)
+
+        except Exception as e:
+            logger.error("Workflow execution failed (%s): %s", trigger, e, exc_info=True)
+
+    async def _drain_pending_triggers(self) -> None:
+        """
+        消费 _pending_triggers 队列。
+
+        将队列中的所有 trigger 合并为一次 workflow 执行：
+        - trigger 设为 "merged"
+        - context 包含 merged_triggers 列表（每个元素含原始 trigger + context）
+        - 如果队列中只有一个，则直接使用其原始 trigger 和 context
+
+        必须在持有 _workflow_lock 的情况下调用。
+        """
+        if not self._pending_triggers:
+            return
+
+        # 一次性取出所有 pending
+        pending = self._pending_triggers[:]
+        self._pending_triggers.clear()
+
+        logger.info("Draining %d pending triggers", len(pending))
+
+        if len(pending) == 1:
+            # 单个 pending，直接执行，不包装
+            entry = pending[0]
+            await self._execute_workflow_once(entry["trigger"], entry.get("context"))
+        else:
+            # 多个 pending，合并为一次执行
+            merged_ctx: Dict[str, Any] = {
+                "trigger": "merged",
+                "merged_triggers": [
+                    {
+                        "trigger": e["trigger"],
+                        "context": e.get("context"),
+                        "queued_at": e.get("queued_at"),
+                    }
+                    for e in pending
+                ],
+                "merged_count": len(pending),
+            }
+            await self._execute_workflow_once("merged", merged_ctx)
+
+        # 递归检查：执行期间可能又有新的 pending
+        if self._pending_triggers:
+            await self._drain_pending_triggers()
+
+    # ------------------------------------------------------------------
+    # Public API — 查询（供 Telegram / FastAPI 调用）
+    # ------------------------------------------------------------------
+
+    async def handle_query_status(self) -> None:
+        """查询系统状态（结果通过 message_manager 发送）"""
+        try:
+            system_state = self.get_system_state()
+
             try:
-                system_state['market_open'] = await self.is_market_open()
+                system_state["market_open"] = await self.is_market_open()
             except Exception:
                 pass
 
-            # 预获取组合信息
             try:
-                system_state['portfolio'] = await self.get_portfolio()
+                system_state["portfolio"] = await self.get_portfolio()
             except Exception:
                 pass
 
             await self.query_handler.handle_status_query(system_state)
-
         except Exception as e:
-            logger.error(f"Error handling query_status event: {e}")
+            logger.error("Error handling status query: %s", e)
 
-    async def _handle_query_portfolio(self, event: TradingEvent):
-        """Handle query_portfolio event — delegate to QueryHandler"""
+    async def handle_query_portfolio(self) -> None:
+        """查询投资组合（结果通过 message_manager 发送）"""
         try:
             await self.query_handler.handle_portfolio_query()
         except Exception as e:
-            logger.error(f"Error handling query_portfolio event: {e}")
+            logger.error("Error handling portfolio query: %s", e)
 
-    async def _handle_query_orders(self, event: TradingEvent):
-        """Handle query_orders event — delegate to QueryHandler"""
+    async def handle_query_orders(self, status: str = "open") -> None:
+        """查询订单（结果通过 message_manager 发送）"""
         try:
-            status = event.data.get("status", "open") if event.data else "open"
             await self.query_handler.handle_orders_query(status=status)
         except Exception as e:
-            logger.error(f"Error handling query_orders event: {e}")
+            logger.error("Error handling orders query: %s", e)
 
-    async def _execute_workflow(self, trigger: str, event: TradingEvent = None):
-        """
-        Unified workflow execution method
+    # ------------------------------------------------------------------
+    # Public API — 数据获取
+    # ------------------------------------------------------------------
 
-        Args:
-            trigger: Trigger type identifier (daily_rebalance, realtime_rebalance, manual_analysis)
-            event: Optional TradingEvent containing context and historical data
-        """
+    async def get_portfolio(self) -> Portfolio:
+        """获取当前投资组合"""
         try:
-            if not self.is_trading_enabled:
-                logger.info(f"Trading disabled, skipping {trigger}")
-                return
-
-            if self.is_shutting_down:
-                logger.info(f"System shutting down, skipping {trigger}")
-                return
-
-            logger.info(f"Starting workflow execution: {trigger}")
-
-            # Use event.data directly as context (already contains all info)
-            context = event.data if (event and event.data) else {}
-
-            # Ensure trigger is set
-            if "trigger" not in context:
-                context["trigger"] = trigger
-
-            # Ensure timestamp is set (always UTC)
-            if "timestamp" not in context:
-                context["timestamp"] = utc_now().isoformat()
-
-            # Execute workflow - all execution logic is in the workflow itself
-            await self.trading_workflow.run_workflow(context)
-
-            logger.info(f"Workflow execution completed: {trigger}")
-
+            portfolio = await self.broker_api.get_portfolio()
+            if portfolio is None:
+                raise RuntimeError("Failed to get portfolio from broker API")
+            self.last_portfolio_update = utc_now()
+            return portfolio
         except Exception as e:
-            logger.error(f"Workflow execution failed ({trigger}): {e}")
+            logger.error("Error getting portfolio: %s", e)
             raise
 
-    async def _run_risk_checks(self):
-        """Run risk management checks (委托给 RiskManager)"""
+    async def get_active_orders(self) -> List[Order]:
+        """获取活跃订单"""
+        try:
+            orders = await self.broker_api.get_orders(status="open")
+            self.active_orders = orders
+            return orders
+        except Exception as e:
+            logger.error("Error getting active orders: %s", e)
+            raise
+
+    async def is_market_open(self) -> bool:
+        """检查市场是否开放（async，通过 broker API 查询）"""
+        try:
+            return await self.broker_api.is_market_open()
+        except Exception as e:
+            logger.error("Error checking market status: %s", e)
+            return False
+
+    async def cancel_order(self, order_id: str) -> bool:
+        """取消订单"""
+        try:
+            success = await self.broker_api.cancel_order(order_id)
+            if success:
+                logger.info("Order %s cancelled", order_id)
+            return success
+        except Exception as e:
+            logger.error("Error cancelling order %s: %s", order_id, e)
+            raise
+
+    # ------------------------------------------------------------------
+    # System State（供 API 层使用）
+    # ------------------------------------------------------------------
+
+    def get_system_state(self) -> Dict[str, Any]:
+        """获取完整的系统状态"""
+        uptime = (utc_now() - self._started_at).total_seconds() if self._started_at else 0
+
+        scheduler_status = self.get_scheduler_status()
+
+        state: Dict[str, Any] = {
+            "is_running": self.is_running,
+            "is_trading_enabled": self.is_trading_enabled,
+            "workflow_type": self.trading_workflow.get_workflow_type(),
+            "workflow_locked": self._workflow_lock.locked(),
+            "scheduler_jobs": scheduler_status.get("total_jobs", 0),
+            "uptime_seconds": uptime,
+        }
+
+        # 实时监控
+        if self.enable_realtime_monitoring:
+            monitor_status = self.realtime_monitor.get_status()
+            if isinstance(monitor_status, dict):
+                state["realtime_monitor_active"] = monitor_status.get("is_monitoring", False)
+                state["realtime_monitor"] = monitor_status
+        else:
+            state["realtime_monitor_active"] = False
+
+        # 调度器详情
+        state["scheduler"] = scheduler_status
+
+        # 风控
+        state["risk_events"] = (
+            getattr(self.risk_manager, "risk_events", []) if self.risk_manager else []
+        )
+
+        # 每日统计
+        state["daily_stats"] = {
+            k: (float(v) if isinstance(v, Decimal) else v)
+            for k, v in self.daily_stats.items()
+        }
+
+        return state
+
+    # ------------------------------------------------------------------
+    # Internal — 定时任务注册与回调
+    # ------------------------------------------------------------------
+
+    def _register_scheduled_jobs(self) -> None:
+        """注册所有内置定时任务"""
+
+        # 1. Daily rebalance
+        rebalance_h, rebalance_m = parse_time_config(settings.rebalance_time)
+        self.add_cron_job(
+            job_id="daily_rebalance",
+            func=self._scheduled_trigger_workflow,
+            hour=rebalance_h,
+            minute=rebalance_m,
+            require_trading_day=True,
+            kwargs={"trigger": "daily_rebalance"},
+        )
+        logger.info("Scheduled daily rebalance: %02d:%02d", rebalance_h, rebalance_m)
+
+        # 2. EOD analysis
+        eod_h, eod_m = parse_time_config(settings.eod_analysis_time)
+        self.add_cron_job(
+            job_id="eod_analysis",
+            func=self._run_eod_analysis,
+            hour=eod_h,
+            minute=eod_m,
+            require_trading_day=True,
+        )
+        logger.info("Scheduled EOD analysis: %02d:%02d", eod_h, eod_m)
+
+        # 3. Portfolio check (interval, market hours only)
+        self.add_interval_job(
+            job_id="portfolio_check",
+            func=self._scheduled_portfolio_check,
+            minutes=settings.portfolio_check_interval,
+            require_market_open=True,
+        )
+        logger.info("Scheduled portfolio check: every %dmin (market hours)", settings.portfolio_check_interval)
+
+        # 4. Risk check (interval, market hours only)
+        if self.risk_enabled:
+            self.add_interval_job(
+                job_id="risk_check",
+                func=self._scheduled_risk_check,
+                minutes=settings.risk_check_interval,
+                require_market_open=True,
+            )
+            logger.info("Scheduled risk check: every %dmin (market hours)", settings.risk_check_interval)
+
+    async def _scheduled_trigger_workflow(self, trigger: str = "unknown", **extra_context: Any) -> None:
+        """APScheduler 回调：触发 workflow"""
+        await self.trigger_workflow(trigger=trigger, context=extra_context or None, fire_and_forget=False)
+
+    async def _scheduled_portfolio_check(self) -> None:
+        """APScheduler 回调：组合检查"""
+        try:
+            portfolio = await self.get_portfolio()
+            if self._should_alert_portfolio_change(portfolio):
+                await self._send_portfolio_alert(portfolio)
+        except Exception as e:
+            logger.error("Portfolio check failed: %s", e)
+
+    async def _scheduled_risk_check(self) -> None:
+        """APScheduler 回调：风控检查"""
+        try:
+            await self._run_risk_checks()
+        except Exception as e:
+            logger.error("Risk check failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # Internal — 业务逻辑
+    # ------------------------------------------------------------------
+
+    async def _run_risk_checks(self) -> None:
+        """执行风控检查"""
         if not self.risk_enabled or not self.risk_manager:
-            logger.debug("风控模块未启用，跳过检查")
             return
 
         try:
             portfolio = await self.get_portfolio()
             results = await self.risk_manager.run_risk_checks(portfolio)
 
-            # 如果触发日内限制，禁用交易
             if results.get("daily_limit_breached"):
-                await self.event_system.publish(
-                    "disable_trading",
-                    {"reason": "Daily loss limit breached"}
-                )
+                await self.disable_trading(reason="Daily loss limit breached")
 
         except Exception as e:
-            logger.error(f"Error in risk checks: {e}")
+            logger.error("Error in risk checks: %s", e)
 
-    async def _run_eod_analysis(self):
-        """Run end-of-day analysis (internal method)"""
+    async def _run_eod_analysis(self) -> None:
+        """收盘分析"""
         try:
             portfolio = await self.get_portfolio()
 
-            # Update daily stats
             now = utc_now()
-            self.daily_stats['last_update'] = now
-            if self.daily_stats['start_equity'] is None:
-                self.daily_stats['start_equity'] = portfolio.equity
+            self.daily_stats["last_update"] = now
+            if self.daily_stats["start_equity"] is None:
+                self.daily_stats["start_equity"] = portfolio.equity
 
-            # Calculate daily performance
-            day_pnl = portfolio.equity - self.daily_stats['start_equity']
-            daily_return = day_pnl / self.daily_stats['start_equity']
+            day_pnl = portfolio.equity - self.daily_stats["start_equity"]
+            daily_return = (
+                day_pnl / self.daily_stats["start_equity"]
+                if self.daily_stats["start_equity"]
+                else Decimal("0")
+            )
 
-            # Create summary report
-            summary = f"""
-End of Day Summary:
-- Equity: ${portfolio.equity:,.2f}
-- Day P&L: ${day_pnl:,.2f}
-- Daily Return: {daily_return:.2%}
-- Trades Executed: {self.daily_stats['trades_executed']}
-- Active Positions: {len(portfolio.positions)}
-"""
-
-            # Send EOD report
+            summary = (
+                f"📊 **End of Day Summary**\n\n"
+                f"- Equity: ${portfolio.equity:,.2f}\n"
+                f"- Day P&L: ${day_pnl:,.2f}\n"
+                f"- Daily Return: {daily_return:.2%}\n"
+                f"- Trades Executed: {self.daily_stats['trades_executed']}\n"
+                f"- Active Positions: {len(portfolio.positions)}"
+            )
             await self.message_manager.send_message(summary)
 
-            # Reset daily stats for next day
-            self.daily_stats['trades_executed'] = 0
-            self.daily_stats['start_equity'] = portfolio.equity
-
+            # Reset for next day
+            self.daily_stats["trades_executed"] = 0
+            self.daily_stats["start_equity"] = portfolio.equity
             logger.info("End-of-day analysis completed")
 
         except Exception as e:
-            logger.error(f"Error in EOD analysis: {e}")
+            logger.error("Error in EOD analysis: %s", e)
 
-    async def get_portfolio(self) -> Portfolio:
-        """Get current portfolio"""
+    async def _initialize_daily_stats(self) -> None:
+        """初始化每日统计"""
         try:
-            portfolio = await self.broker_api.get_portfolio()
-            if portfolio is None:
-                raise Exception("Failed to get portfolio from broker API")
-            self.last_portfolio_update = utc_now()
-            return portfolio
+            portfolio = await self.get_portfolio()
+            self.daily_stats["start_equity"] = portfolio.equity
+            self.daily_stats["last_update"] = utc_now()
         except Exception as e:
-            logger.error(f"Error getting portfolio: {e}")
+            logger.error("Error initializing daily stats: %s", e)
+
+    async def _place_market_order(self, symbol: str, side: str, quantity: Decimal) -> Optional[Order]:
+        """下市价单"""
+        try:
+            order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
+            order = Order(
+                symbol=symbol,
+                side=order_side,
+                order_type=OrderType.MARKET,
+                quantity=quantity,
+                time_in_force=TimeInForce.DAY,
+            )
+            order_id = await self.broker_api.submit_order(order)
+            if order_id:
+                return await self.broker_api.get_order(order_id)
+            return None
+        except Exception as e:
+            logger.error("Error placing market order: %s", e)
             raise
 
-    async def get_active_orders(self) -> List[Order]:
-        """Get active orders"""
-        try:
-            orders = await self.broker_api.get_orders(status="open")
-            self.active_orders = orders
-            return orders
-        except Exception as e:
-            logger.error(f"Error getting active orders: {e}")
-            raise
-
-    async def is_market_open(self) -> bool:
-        """Check if market is open"""
-        try:
-            return await self.broker_api.is_market_open()
-        except Exception as e:
-            logger.error(f"Error checking market status: {e}")
-            return False
-
-    async def _send_portfolio_alert(self, portfolio: Portfolio):
-        """Send portfolio alert (internal method)"""
+    async def _send_portfolio_alert(self, portfolio: Portfolio) -> None:
+        """发送组合告警"""
         try:
             await self.message_manager.send_portfolio_update(portfolio)
         except Exception as e:
-            logger.error(f"Error sending portfolio alert: {e}")
+            logger.error("Error sending portfolio alert: %s", e)
 
     def _should_alert_portfolio_change(self, portfolio: Portfolio) -> bool:
-        """Check if portfolio change warrants an alert"""
+        """判断组合变动是否需要告警"""
         try:
-            # Alert if day P&L exceeds configured threshold of equity
             pnl_threshold = Decimal(str(settings.portfolio_pnl_alert_threshold))
             if abs(portfolio.day_pnl) > (portfolio.equity * pnl_threshold):
                 return True
 
-            # Alert if any position has unrealized loss exceeding configured threshold
             loss_threshold = Decimal(str(settings.position_loss_alert_threshold))
             for position in portfolio.positions:
                 if position.unrealized_pnl_percentage < -loss_threshold:
                     return True
 
             return False
-
         except Exception as e:
-            logger.error(f"Error checking portfolio change: {e}")
+            logger.error("Error checking portfolio change: %s", e)
             return False
-
-    # === Workflow Trigger Event Handlers ===
-
-    async def _handle_workflow_trigger(self, event: TradingEvent):
-        """
-        Unified workflow trigger handler with event throttling and merging
-
-        Features:
-        - Throttles frequent workflow executions (minimum interval)
-        - Merges context from multiple pending events
-        - High-priority events bypass throttling
-
-        Handles all workflow triggers:
-        - daily_rebalance: Scheduled by APScheduler
-        - realtime_rebalance: One-time execution
-        - manual_analysis: One-time execution
-        - llm_scheduled: One-time execution (scheduled by LLM agent)
-        """
-        try:
-            # Extract trigger type from event data
-            trigger = event.data.get("trigger", "unknown") if event.data else "unknown"
-            priority = event.priority if hasattr(event, 'priority') else 0
-
-            logger.info(f"Received workflow trigger: {trigger} (priority: {priority})")
-
-            # === Event Throttling Logic ===
-            # Only throttle specific triggers (e.g., llm_scheduled)
-            # High-priority events (priority < 0) bypass throttling
-            should_throttle = trigger in self.throttled_triggers and priority >= self.throttle_priority_threshold
-
-            if should_throttle:
-                current_time = utc_now()
-                last_execution = self.last_workflow_execution.get(trigger)
-
-                if last_execution:
-                    time_since_last = (current_time - last_execution).total_seconds() / 60  # minutes
-
-                    # Check if we're within minimum interval (TOO SOON)
-                    if time_since_last < self.min_workflow_interval_minutes:
-                        # Too soon! Store event in throttled_events, don't execute
-                        if trigger not in self.throttled_events:
-                            self.throttled_events[trigger] = []
-
-                        self.throttled_events[trigger].append(event)
-
-                        # Limit throttled events list size
-                        if len(self.throttled_events[trigger]) > 50:
-                            self.throttled_events[trigger] = self.throttled_events[trigger][-50:]
-
-                        throttle_msg = (
-                            f"⏱️ **事件节流**\n\n"
-                            f"触发器: {trigger}\n"
-                            f"距上次执行: {time_since_last:.1f}分钟\n"
-                            f"最小间隔: {self.min_workflow_interval_minutes}分钟\n"
-                            f"已暂存事件数: {len(self.throttled_events[trigger])}\n\n"
-                            f"将在达到最小间隔后合并执行"
-                        )
-                        await self.message_manager.send_message(throttle_msg, "info")
-
-                        logger.info(
-                            f"⏱️ Workflow throttling: Last execution {time_since_last:.1f}min ago. "
-                            f"Storing event (total throttled: {len(self.throttled_events[trigger])}). "
-                            f"Will merge and execute when interval passes."
-                        )
-
-                        # Schedule a delayed check via APScheduler if not already pending
-                        if not self.pending_throttle_checks.get(trigger, False):
-                            remaining_seconds = (self.min_workflow_interval_minutes - time_since_last) * 60
-                            self.scheduler.add_delayed_job(
-                                job_id=f'throttle_check_{trigger}',
-                                func=self._execute_throttled_events,
-                                delay_seconds=max(remaining_seconds, 1),
-                                kwargs={'trigger': trigger}
-                            )
-                            self.pending_throttle_checks[trigger] = True
-                            logger.info(f"Scheduled throttle check for {trigger} in {remaining_seconds:.0f}s")
-
-                        # Don't execute now
-                        return
-
-                    # Time has passed! Check if there are throttled events to merge
-                    throttled = self.throttled_events.get(trigger, [])
-
-                    if throttled:
-                        all_events = throttled + [event]
-                        logger.info(f"📦 Merging {len(all_events)} events for {trigger}")
-
-                        merge_msg = (
-                            f"📦 **事件合并执行**\n\n"
-                            f"触发器: {trigger}\n"
-                            f"合并事件数: {len(all_events)}\n"
-                            f"距上次执行: {time_since_last:.1f}分钟\n\n"
-                            f"正在合并所有暂存事件的数据..."
-                        )
-                        await self.message_manager.send_message(merge_msg, "info")
-
-                        # Merge data from ALL events
-                        merged_data = self._merge_event_data(all_events)
-                        event.data = merged_data
-
-                        # Clear throttled events and pending check flag
-                        self.throttled_events[trigger] = []
-                        self.pending_throttle_checks[trigger] = False
-            elif priority < self.throttle_priority_threshold:
-                logger.info(f"⚡ High-priority event (priority={priority}), bypassing throttling")
-            else:
-                logger.debug(f"📋 Trigger '{trigger}' not in throttled list, executing normally")
-
-            # === Execute Workflow ===
-            await self._execute_workflow(trigger=trigger, event=event)
-
-            # Update last execution time
-            self.last_workflow_execution[trigger] = utc_now()
-
-        except Exception as e:
-            logger.error(f"Workflow trigger handling failed: {e}")
-
-    async def _execute_throttled_events(self, trigger: str):
-        """
-        Execute throttled events (called by APScheduler delayed job)
-
-        Args:
-            trigger: The trigger type to check
-        """
-        try:
-            self.pending_throttle_checks[trigger] = False
-            throttled = self.throttled_events.get(trigger, [])
-
-            if not throttled:
-                logger.info(f"Throttle check for {trigger}: no throttled events found")
-                return
-
-            logger.info(f"📦 Throttle check triggered: merging {len(throttled)} throttled events for {trigger}")
-
-            # Create a merged event
-            merged_data = self._merge_event_data(throttled)
-            merged_data["trigger"] = trigger
-
-            merged_event = TradingEvent(
-                event_type="trigger_workflow",
-                data=merged_data
-            )
-
-            # Clear throttled events
-            self.throttled_events[trigger] = []
-
-            # Execute
-            await self._execute_workflow(trigger=trigger, event=merged_event)
-            self.last_workflow_execution[trigger] = utc_now()
-
-        except Exception as e:
-            logger.error(f"Error executing throttled events for {trigger}: {e}")
-
-    def _merge_event_data(self, events: List[TradingEvent]) -> Dict[str, Any]:
-        """
-        Merge data from multiple workflow events
-
-        Strategy: For each key, always collect values into a list for consistency
-
-        Args:
-            events: List of events to merge
-
-        Returns:
-            Merged data dictionary
-        """
-        if not events:
-            return {}
-
-        merged = {
-            "merged": True,
-            "merged_events_count": len(events)
-        }
-
-        # Collect all keys from all events
-        all_keys = set()
-        for event in events:
-            if event.data:
-                all_keys.update(event.data.keys())
-
-        # For each key, always collect values as a list
-        for key in all_keys:
-            values = []
-            for event in events:
-                if event.data and key in event.data:
-                    values.append(event.data[key])
-
-            if values:
-                # Always store as list for consistency
-                merged[key] = values
-
-        return merged
-
-    async def _handle_enable_trading(self, event: TradingEvent):
-        """Handle enable trading event"""
-        try:
-            await self._enable_trading()
-            await self.message_manager.send_system_alert(
-                "✅ **Trading Enabled**\n\nTrading operations are now active.",
-                "success"
-            )
-        except Exception as e:
-            logger.error(f"Error handling enable trading event: {e}")
-
-    async def _handle_disable_trading(self, event: TradingEvent):
-        """Handle disable trading event"""
-        try:
-            await self._disable_trading()
-            reason = event.data.get("reason", "Manual control") if event.data else "Manual control"
-            await self.message_manager.send_system_alert(
-                f"⏸️ **Trading Disabled**\n\nReason: {reason}\n\nSystem continues monitoring.",
-                "warning"
-            )
-        except Exception as e:
-            logger.error(f"Error handling disable trading event: {e}")
-
-
-    async def _initialize_daily_stats(self):
-        """Initialize daily statistics"""
-        try:
-            portfolio = await self.get_portfolio()
-            self.daily_stats['start_equity'] = portfolio.equity
-            self.daily_stats['last_update'] = utc_now()
-        except Exception as e:
-            logger.error(f"Error initializing daily stats: {e}")
-
-    async def _place_market_order(self, symbol: str, side: str, quantity: Decimal):
-        """Place a market order"""
-        try:
-            order_side = OrderSide.BUY if side.lower() == "buy" else OrderSide.SELL
-
-            order = Order(
-                symbol=symbol,
-                side=order_side,
-                order_type=OrderType.MARKET,
-                quantity=quantity,
-                time_in_force=TimeInForce.DAY
-            )
-
-            order_id = await self.broker_api.submit_order(order)
-            if order_id:
-                # Get the full order details
-                placed_order = await self.broker_api.get_order(order_id)
-                if placed_order:
-                    return placed_order
-
-            return None
-
-        except Exception as e:
-            logger.error(f"Error placing market order: {e}")
-            raise
-
-    async def _cancel_order(self, order_id: str):
-        """Cancel an order"""
-        try:
-            success = await self.broker_api.cancel_order(order_id)
-            if success:
-                await self.event_system.publish(
-                    "order_canceled",
-                    {"order_id": order_id, "message": f"Order {order_id} cancelled"}
-                )
-            return success
-        except Exception as e:
-            logger.error(f"Error cancelling order {order_id}: {e}")
-            raise
-
-    # 注意: 止损/止盈/组合风险处理已移至 RiskManager
-    # 参见: src/services/risk_manager.py

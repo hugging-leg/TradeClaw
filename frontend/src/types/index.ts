@@ -237,6 +237,26 @@ export interface RuleTrigger {
   trigger_count: number;
 }
 
+// ========== Agent Config ==========
+
+/**
+ * Agent 配置 — 字段完全由后端 workflow 声明。
+ * 通用字段: workflow_type, name, system_prompt
+ * 其他字段由各 workflow 自行定义（如 llm_model, bl_risk_aversion 等）
+ */
+export type AgentConfig = Record<string, unknown> & {
+  workflow_type: string;
+  name: string;
+  system_prompt: string | null;
+};
+
+export interface ActiveWorkflow {
+  workflow_type: string;
+  name: string;
+  is_running: boolean;
+  stats: Record<string, unknown>;
+}
+
 // ========== Settings ==========
 
 export interface TradingSettings {

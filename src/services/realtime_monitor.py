@@ -422,30 +422,27 @@ class RealtimeMarketMonitor:
 
     async def _publish_event(self, trigger: str, context: Dict[str, Any]):
         """
-        发布事件到事件系统
-        
-        Monitor 只负责检测和发布，冷却期/合流由事件系统处理
-        
+        触发 workflow 执行
+
+        Monitor 只负责检测和触发，节流由 TradingSystem 处理。
+
         Args:
             trigger: 触发类型（breaking_news, price_change, high_volatility）
             context: 上下文信息
         """
         try:
-            logger.info(f"发布事件: {trigger}")
+            logger.info(f"触发 workflow: {trigger}")
 
-            if self.trading_system and hasattr(self.trading_system, 'event_system'):
-                await self.trading_system.event_system.publish(
-                    "trigger_workflow",
-                    {
-                        "trigger": trigger,
-                        "context": context
-                    }
+            if self.trading_system and hasattr(self.trading_system, 'trigger_workflow'):
+                await self.trading_system.trigger_workflow(
+                    trigger=trigger,
+                    context=context,
                 )
             else:
-                logger.warning("event_system 不可用")
+                logger.warning("trading_system 不可用")
 
         except Exception as e:
-            logger.error(f"发布事件失败: {e}")
+            logger.error(f"触发 workflow 失败: {e}")
 
     def update_portfolio_positions(self, portfolio: Portfolio):
         """更新监控的组合持仓"""
@@ -457,7 +454,7 @@ class RealtimeMarketMonitor:
             symbols_to_remove = monitored_symbols - current_symbols
 
             if symbols_to_add:
-                asyncio.create_task(self.subscribe_symbols(list(symbols_to_add), portfolio))
+                asyncio.create_task(self._subscribe_trades(list(symbols_to_add), portfolio))
 
             if symbols_to_remove:
                 asyncio.create_task(self.unsubscribe_symbols(list(symbols_to_remove)))

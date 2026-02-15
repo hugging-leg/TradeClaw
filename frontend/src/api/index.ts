@@ -1,28 +1,10 @@
 /**
  * API Layer
  *
- * Currently returns mock data. When the backend API is ready,
- * replace implementations here — all pages use this layer exclusively.
+ * 所有页面通过此层获取数据，直接调用后端 API。
  */
 
-import {
-  mockPortfolio,
-  mockPortfolioSnapshots,
-  mockOrders,
-  mockDecisions,
-  mockAnalyses,
-  mockAgentMessages,
-  mockSystemStatus,
-  mockSchedulerJobs,
-  mockExecutionRecords,
-  mockRiskEvents,
-  mockWorkflows,
-  mockSettings,
-  mockBacktestResults,
-  mockAgentTools,
-  mockWorkflowExecutions,
-  mockRuleTriggers,
-} from '@/mocks/data';
+import { api } from './client';
 
 import type {
   Portfolio,
@@ -39,206 +21,224 @@ import type {
   TradingSettings,
   BacktestResult,
   AgentTool,
+  AgentConfig,
+  ActiveWorkflow,
   WorkflowExecution,
   RuleTrigger,
   JobFormData,
 } from '@/types';
 
-// Simulate network delay
-const delay = (ms = 300) => new Promise((r) => setTimeout(r, ms));
-
 // ========== Portfolio ==========
 
 export async function fetchPortfolio(): Promise<Portfolio> {
-  await delay();
-  return mockPortfolio;
+  return api.get<Portfolio>('/portfolio');
 }
 
 export async function fetchPortfolioHistory(days = 30): Promise<PortfolioSnapshot[]> {
-  await delay();
-  return mockPortfolioSnapshots.slice(0, days);
+  return api.get<PortfolioSnapshot[]>(`/portfolio/history?days=${days}`);
 }
 
 // ========== Orders ==========
 
 export async function fetchOrders(status?: string): Promise<Order[]> {
-  await delay();
-  if (status) return mockOrders.filter((o) => o.status === status);
-  return mockOrders;
+  const query = status ? `?status=${status}` : '';
+  return api.get<Order[]>(`/orders${query}`);
 }
 
 export async function fetchActiveOrders(): Promise<Order[]> {
-  await delay();
-  return mockOrders.filter((o) => ['pending', 'submitted', 'partial'].includes(o.status));
+  return api.get<Order[]>('/orders/active');
 }
 
 // ========== Agent ==========
 
 export async function fetchDecisions(limit = 20): Promise<TradingDecision[]> {
-  await delay();
-  return mockDecisions.slice(0, limit);
+  return api.get<TradingDecision[]>(`/agent/decisions?limit=${limit}`);
 }
 
 export async function fetchAnalyses(limit = 20): Promise<AnalysisHistory[]> {
-  await delay();
-  return mockAnalyses.slice(0, limit);
+  return api.get<AnalysisHistory[]>(`/agent/executions?limit=${limit}`);
 }
 
 export async function fetchAgentMessages(sessionId?: string): Promise<AgentMessage[]> {
-  await delay();
-  if (sessionId) return mockAgentMessages.filter((m) => m.session_id === sessionId);
-  return mockAgentMessages;
+  const query = sessionId ? `?session_id=${sessionId}` : '';
+  return api.get<AgentMessage[]>(`/agent/messages${query}`);
 }
 
 // ========== System ==========
 
 export async function fetchSystemStatus(): Promise<SystemStatus> {
-  await delay(200);
-  return mockSystemStatus;
+  return api.get<SystemStatus>('/system/status');
 }
 
 export async function fetchSchedulerJobs(): Promise<SchedulerJob[]> {
-  await delay();
-  return mockSchedulerJobs;
+  return api.get<SchedulerJob[]>('/scheduler/jobs');
 }
 
 export async function fetchExecutionHistory(): Promise<ExecutionRecord[]> {
-  await delay();
-  return mockExecutionRecords;
+  const status = await api.get<{ execution_history?: ExecutionRecord[] }>('/scheduler/status');
+  return status.execution_history ?? [];
 }
 
 export async function fetchRiskEvents(): Promise<RiskEvent[]> {
-  await delay();
-  return mockRiskEvents;
+  const status = await api.get<{ risk_events: RiskEvent[] }>('/system/status');
+  return status.risk_events ?? [];
 }
 
 // ========== Workflows ==========
 
 export async function fetchWorkflows(): Promise<Record<string, WorkflowInfo>> {
-  await delay();
-  return mockWorkflows;
+  return api.get<Record<string, WorkflowInfo>>('/agent/workflows');
+}
+
+export async function fetchActiveWorkflow(): Promise<ActiveWorkflow> {
+  return api.get<ActiveWorkflow>('/agent/active');
+}
+
+export async function switchWorkflow(workflowType: string): Promise<{ success: boolean; message: string; workflow_type: string }> {
+  return api.post('/agent/switch', { workflow_type: workflowType });
+}
+
+// ========== Agent Config ==========
+
+export async function fetchAgentConfig(): Promise<AgentConfig> {
+  return api.get<AgentConfig>('/agent/config');
+}
+
+export async function updateAgentConfig(updates: Partial<AgentConfig>): Promise<{ updated: string[]; config: AgentConfig }> {
+  return api.patch('/agent/config', updates);
 }
 
 // ========== Settings ==========
 
 export async function fetchSettings(): Promise<TradingSettings> {
-  await delay();
-  return mockSettings;
+  return api.get<TradingSettings>('/settings');
 }
 
 export async function updateSettings(_settings: Partial<TradingSettings>): Promise<TradingSettings> {
-  await delay(500);
-  // In real impl, this would POST to the backend
-  return { ...mockSettings, ..._settings };
+  const res = await api.patch<{ current: TradingSettings }>('/settings', _settings);
+  return res.current;
 }
 
 // ========== Actions ==========
 
 export async function triggerAnalysis(): Promise<{ success: boolean; message: string }> {
-  await delay(500);
-  return { success: true, message: 'Analysis triggered successfully' };
+  return api.post<{ success: boolean; message: string }>('/system/analyze');
 }
 
 export async function toggleTrading(enabled: boolean): Promise<{ success: boolean }> {
-  await delay(500);
-  mockSystemStatus.is_trading_enabled = enabled;
-  return { success: true };
+  const path = enabled ? '/system/trading/enable' : '/system/trading/disable';
+  return api.post<{ success: boolean }>(path);
 }
 
 export async function emergencyStop(): Promise<{ success: boolean }> {
-  await delay(500);
-  return { success: true };
+  return api.post<{ success: boolean }>('/system/emergency-stop');
 }
 
 // ========== Agent Tools & Execution ==========
 
 export async function fetchAgentTools(): Promise<AgentTool[]> {
-  await delay();
-  return mockAgentTools;
+  return api.get<AgentTool[]>('/agent/tools');
 }
 
-export async function updateAgentTool(name: string, updates: Partial<AgentTool>): Promise<AgentTool> {
-  await delay(300);
-  const tool = mockAgentTools.find((t) => t.name === name);
-  if (!tool) throw new Error(`Tool ${name} not found`);
-  return { ...tool, ...updates };
+export async function toggleAgentTool(toolName: string, enabled: boolean): Promise<{ name: string; enabled: boolean }> {
+  return api.patch<{ name: string; enabled: boolean }>(`/agent/tools/${toolName}`, { enabled });
 }
 
 export async function fetchWorkflowExecutions(): Promise<WorkflowExecution[]> {
-  await delay();
-  return mockWorkflowExecutions;
+  const analyses = await api.get<AnalysisHistory[]>('/agent/executions?limit=10');
+  return analyses.map((a) => _analysisToExecution(a));
 }
 
 export async function fetchLatestExecution(): Promise<WorkflowExecution | null> {
-  await delay(200);
-  return mockWorkflowExecutions[0] || null;
+  const executions = await fetchWorkflowExecutions();
+  return executions[0] || null;
+}
+
+export async function fetchWorkflowStats(): Promise<{ workflow_type: string; is_running: boolean; stats: Record<string, unknown> }> {
+  return api.get('/agent/stats');
 }
 
 // ========== Scheduler CRUD ==========
 
-export async function createSchedulerJob(_job: JobFormData): Promise<SchedulerJob> {
-  await delay(500);
-  const newJob: SchedulerJob = {
-    id: _job.id,
-    name: _job.name,
-    trigger: _job.trigger_type === 'cron'
-      ? `cron[hour=${_job.cron_hour ?? 9}, minute=${_job.cron_minute ?? 30}]`
-      : `interval[${_job.interval_hours ? _job.interval_hours + 'h' : _job.interval_minutes + 'm'}]`,
-    next_run_time: new Date(Date.now() + 3600000).toISOString(),
-    status: 'active',
-    require_trading_day: _job.require_trading_day,
-    require_market_open: _job.require_market_open,
-  };
-  mockSchedulerJobs.push(newJob);
-  return newJob;
+export async function createSchedulerJob(job: JobFormData): Promise<SchedulerJob> {
+  if (job.trigger_type === 'cron') {
+    return api.post<SchedulerJob>('/scheduler/jobs/cron', {
+      job_id: job.id,
+      hour: job.cron_hour ?? 9,
+      minute: job.cron_minute ?? 30,
+      day_of_week: job.cron_day_of_week ?? 'mon-fri',
+      require_trading_day: job.require_trading_day,
+      require_market_open: job.require_market_open,
+      event_type: job.event_type,
+      event_data: job.event_data,
+    });
+  } else {
+    return api.post<SchedulerJob>('/scheduler/jobs/interval', {
+      job_id: job.id,
+      minutes: job.interval_minutes,
+      hours: job.interval_hours,
+      require_market_open: job.require_market_open,
+      event_type: job.event_type,
+      event_data: job.event_data,
+    });
+  }
 }
 
 export async function deleteSchedulerJob(jobId: string): Promise<{ success: boolean }> {
-  await delay(300);
-  const idx = mockSchedulerJobs.findIndex((j) => j.id === jobId);
-  if (idx >= 0) mockSchedulerJobs.splice(idx, 1);
-  return { success: true };
+  return api.delete<{ success: boolean }>(`/scheduler/jobs/${jobId}`);
 }
 
 export async function pauseSchedulerJob(jobId: string): Promise<SchedulerJob> {
-  await delay(300);
-  const job = mockSchedulerJobs.find((j) => j.id === jobId);
-  if (!job) throw new Error(`Job ${jobId} not found`);
-  job.status = 'paused';
-  return job;
+  return api.post<SchedulerJob>(`/scheduler/jobs/${jobId}/pause`);
 }
 
 export async function resumeSchedulerJob(jobId: string): Promise<SchedulerJob> {
-  await delay(300);
-  const job = mockSchedulerJobs.find((j) => j.id === jobId);
-  if (!job) throw new Error(`Job ${jobId} not found`);
-  job.status = 'active';
-  return job;
+  return api.post<SchedulerJob>(`/scheduler/jobs/${jobId}/resume`);
 }
 
 // ========== Rule Triggers ==========
 
 export async function fetchRuleTriggers(): Promise<RuleTrigger[]> {
-  await delay();
-  return mockRuleTriggers;
+  return api.get<RuleTrigger[]>('/scheduler/rules');
 }
 
 export async function updateRuleTrigger(id: string, updates: Partial<RuleTrigger>): Promise<RuleTrigger> {
-  await delay(300);
-  const trigger = mockRuleTriggers.find((t) => t.id === id);
-  if (!trigger) throw new Error(`Rule ${id} not found`);
-  Object.assign(trigger, updates);
-  return trigger;
+  const result = await api.patch<RuleTrigger[]>(`/scheduler/rules/${id}`, updates);
+  const updated = (Array.isArray(result) ? result : []).find((r) => r.id === id);
+  if (!updated) throw new Error(`Rule ${id} not found in response`);
+  return updated;
 }
 
 // ========== Backtest ==========
 
 export async function fetchBacktestResults(): Promise<BacktestResult[]> {
-  await delay();
-  return mockBacktestResults;
+  return api.get<BacktestResult[]>('/backtest');
 }
 
-export async function runBacktest(_config: unknown): Promise<BacktestResult> {
-  await delay(2000);
-  return mockBacktestResults[0];
+export async function runBacktest(config: unknown): Promise<BacktestResult> {
+  return api.post<BacktestResult>('/backtest', config);
+}
+
+// ========== Helpers ==========
+
+/**
+ * 将 AnalysisHistory DB 记录映射为前端 WorkflowExecution 格式
+ */
+function _analysisToExecution(a: AnalysisHistory): WorkflowExecution {
+  return {
+    id: a.id,
+    workflow_type: a.analysis_type ?? a.trigger,
+    trigger: a.trigger,
+    status: a.success ? 'completed' : 'failed',
+    steps: (a.tool_calls ?? []).map((tc, i) => ({
+      id: `${a.id}-step-${i}`,
+      type: 'tool_call' as const,
+      name: tc,
+      status: 'completed' as const,
+      timestamp: a.created_at,
+    })),
+    started_at: a.created_at,
+    completed_at: a.created_at,
+    total_duration_ms: a.execution_time_seconds ? a.execution_time_seconds * 1000 : undefined,
+  };
 }

@@ -14,11 +14,10 @@
 
 from src.utils.logging_config import get_logger
 from typing import Dict, Any, List, Optional
-from decimal import Decimal
 
 from src.interfaces.broker_api import BrokerAPI
 from src.messaging.message_manager import MessageManager
-from src.models.trading_models import Portfolio, Order
+from src.models.trading_models import Portfolio
 
 logger = get_logger(__name__)
 
@@ -55,7 +54,6 @@ class QueryHandler:
                 - is_trading_enabled: bool
                 - workflow_type: str
                 - market_open: bool (optional)
-                - event_queue_size: int (optional)
                 - scheduler_jobs: int (optional)
                 - realtime_monitor_active: bool (optional)
                 - portfolio: Portfolio (optional, pre-fetched)
@@ -92,11 +90,6 @@ class QueryHandler:
 
             workflow_type = system_state.get('workflow_type', 'unknown')
             status_lines.append(f"🤖 **Workflow**: {workflow_type}")
-
-            # 事件队列状态
-            event_queue_size = system_state.get('event_queue_size')
-            if event_queue_size is not None:
-                status_lines.append(f"📋 **Event Queue**: {event_queue_size} pending")
 
             # 实时监控状态
             realtime_monitor_active = system_state.get('realtime_monitor_active')
@@ -227,43 +220,3 @@ class QueryHandler:
             await self.message_manager.send_error(error_msg)
             return error_msg
 
-    async def handle_performance_query(
-        self,
-        daily_stats: Dict[str, Any]
-    ) -> str:
-        """
-        处理绩效查询
-
-        Args:
-            daily_stats: 每日统计数据
-
-        Returns:
-            格式化的绩效消息
-        """
-        try:
-            portfolio = await self.broker_api.get_portfolio()
-
-            lines = ["📊 **今日绩效**\n"]
-
-            if portfolio:
-                start_equity = daily_stats.get('start_equity') or portfolio.equity
-                day_pnl = portfolio.equity - start_equity
-                day_return = day_pnl / start_equity if start_equity else Decimal('0')
-
-                lines.extend([
-                    f"当前权益: ${portfolio.equity:,.2f}",
-                    f"起始权益: ${start_equity:,.2f}",
-                    f"当日盈亏: ${day_pnl:,.2f}",
-                    f"当日收益率: {day_return:.2%}",
-                    f"交易次数: {daily_stats.get('trades_executed', 0)}"
-                ])
-
-            perf_msg = "\n".join(lines)
-            await self.message_manager.send_message(perf_msg, message_type="info")
-            return perf_msg
-
-        except Exception as e:
-            logger.error(f"绩效查询失败: {e}")
-            error_msg = f"❌ 绩效查询失败: {e}"
-            await self.message_manager.send_error(error_msg)
-            return error_msg

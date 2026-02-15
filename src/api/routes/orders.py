@@ -1,0 +1,57 @@
+"""
+订单 API
+"""
+
+from fastapi import APIRouter, Depends, Query
+from typing import Optional
+
+from src.api.deps import get_trading_system
+from src.trading_system import TradingSystem
+from src.db.repository import TradingRepository
+
+router = APIRouter()
+
+
+@router.get("/orders")
+async def get_orders(
+    status: Optional[str] = Query(default=None, description="Filter by status"),
+    symbol: Optional[str] = Query(default=None, description="Filter by symbol"),
+    limit: int = Query(default=50, ge=1, le=500),
+):
+    """获取订单列表（来自 DB）"""
+    records = await TradingRepository.get_orders(
+        status=status, symbol=symbol, limit=limit
+    )
+    return [r.to_dict() for r in records]
+
+
+@router.get("/orders/active")
+async def get_active_orders(ts: TradingSystem = Depends(get_trading_system)):
+    """获取活跃订单（实时，来自 Broker）"""
+    orders = await ts.get_active_orders()
+    return [_order_to_dict(o) for o in orders]
+
+
+def _order_to_dict(order) -> dict:
+    """将 Order model 转为 API 响应格式"""
+    return {
+        "id": order.id,
+        "symbol": order.symbol,
+        "side": order.side.value if hasattr(order.side, "value") else str(order.side),
+        "order_type": order.order_type.value if hasattr(order.order_type, "value") else str(order.order_type),
+        "quantity": float(order.quantity),
+        "price": float(order.price) if order.price else None,
+        "stop_price": float(order.stop_price) if hasattr(order, "stop_price") and order.stop_price else None,
+        "stop_loss": float(order.stop_loss) if hasattr(order, "stop_loss") and order.stop_loss else None,
+        "take_profit": float(order.take_profit) if hasattr(order, "take_profit") and order.take_profit else None,
+        "time_in_force": order.time_in_force.value if hasattr(order.time_in_force, "value") else str(order.time_in_force),
+        "status": order.status.value if hasattr(order.status, "value") else str(order.status),
+        "filled_quantity": float(order.filled_quantity) if hasattr(order, "filled_quantity") and order.filled_quantity else 0,
+        "filled_price": float(order.filled_price) if hasattr(order, "filled_price") and order.filled_price else None,
+        "broker_order_id": getattr(order, "broker_order_id", None),
+        "created_at": order.created_at.isoformat() if hasattr(order, "created_at") and order.created_at else None,
+        "updated_at": order.updated_at.isoformat() if hasattr(order, "updated_at") and order.updated_at else None,
+        "filled_at": order.filled_at.isoformat() if hasattr(order, "filled_at") and order.filled_at else None,
+        "cancelled_at": order.cancelled_at.isoformat() if hasattr(order, "cancelled_at") and order.cancelled_at else None,
+        "error_message": getattr(order, "error_message", None),
+    }

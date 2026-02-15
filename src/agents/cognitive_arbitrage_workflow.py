@@ -20,7 +20,6 @@
 import asyncio
 import json
 import re
-from src.utils.logging_config import get_logger
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -28,6 +27,10 @@ from dataclasses import dataclass, field
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy import select, update
+
+from config import settings
+
+from src.utils.logging_config import get_logger
 from src.agents.workflow_base import WorkflowBase
 from src.agents.workflow_factory import register_workflow
 from src.db.session import get_db
@@ -41,7 +44,6 @@ from src.models.trading_models import (
 )
 from src.utils.llm_utils import create_llm_client
 from src.utils.timezone import utc_now
-from config import settings
 
 logger = get_logger(__name__)
 
@@ -185,6 +187,52 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         self.analyzed_news_ids: set = set()
 
         logger.info("认知套利 Workflow 已初始化")
+
+    # ========== 配置管理 ==========
+
+    def get_config(self) -> Dict[str, Any]:
+        config = super().get_config()
+        config.update({
+            "llm_model": settings.llm_model,
+            "news_limit": self.news_limit,
+            # 评分配置
+            "ca_direct_min_score": settings.ca_direct_min_score,
+            "ca_direct_max_score": settings.ca_direct_max_score,
+            "ca_indirect_multiplier": settings.ca_indirect_multiplier,
+            "ca_min_confidence": settings.ca_min_confidence,
+            "ca_score_window_days": settings.ca_score_window_days,
+            # 交易配置
+            "ca_top_k": settings.ca_top_k,
+            "ca_default_holding_days": settings.ca_default_holding_days,
+            "ca_min_holding_days": settings.ca_min_holding_days,
+            "ca_max_holding_days": settings.ca_max_holding_days,
+            "ca_position_size_pct": settings.ca_position_size_pct,
+            "ca_max_positions": settings.ca_max_positions,
+        })
+        return config
+
+    def update_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        if "news_limit" in updates:
+            self.news_limit = updates["news_limit"]
+        if "llm_model" in updates:
+            settings.llm_model = updates["llm_model"]
+
+        # 评分配置和交易配置 — 直接更新 settings，然后刷新本地缓存
+        ca_fields = [
+            "ca_direct_min_score", "ca_direct_max_score", "ca_indirect_multiplier",
+            "ca_min_confidence", "ca_score_window_days",
+            "ca_top_k", "ca_default_holding_days", "ca_min_holding_days",
+            "ca_max_holding_days", "ca_position_size_pct", "ca_max_positions",
+        ]
+        for field in ca_fields:
+            if field in updates:
+                setattr(settings, field, updates[field])
+
+        # 刷新本地缓存
+        self.scoring_config = _get_scoring_config()
+        self.trading_config = _get_trading_config()
+
+        return super().update_config(updates)
 
     # ==================== 持仓管理（数据库） ====================
 

@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     portfolio_check_interval: int = 60
     risk_check_interval: int = 15
     min_workflow_interval_minutes: int = 30
+    scheduler_misfire_grace_time: int = 60  # APScheduler misfire grace time (seconds)
+    scheduler_max_history: int = 200  # 调度器执行历史最大保留条数
+    max_pending_llm_jobs: int = 5  # LLM 自主调度最大待执行任务数
     message_rate_limit: float = 1.0
 
     # === LLM Agent 配置 ===
@@ -104,16 +107,20 @@ class Settings(BaseSettings):
     llm_max_summary_tokens: int = 1500
 
     # === 均衡组合策略配置 ===
-    balanced_target_positions: int = 5
-    balanced_target_percentage: float = 18.0
-    balanced_rebalance_threshold: float = 3.0
-    balanced_max_positions: int = 6
+    # === 交易执行配置 ===
+    rebalance_min_value_threshold: float = 20.0  # 最小调整市值阈值 ($)
+    rebalance_min_pct_threshold: float = 1.0  # 最小调整百分比阈值 (%)
+    rebalance_buy_reserve_ratio: float = 0.95  # 买入时预留资金比例
+    rebalance_weight_diff_threshold: float = 0.02  # 权重差异阈值 (BL 模式)
+    rebalance_order_delay_seconds: float = 1.0  # 连续下单间隔秒数
+    cash_keywords: str = "CASH,USD,DOLLAR"  # 现金关键词（逗号分隔）
 
     # === Black-Litterman 配置 ===
     bl_risk_aversion: float = 2.5
     bl_historical_days: int = 252
     bl_base_variance: float = 0.05
     bl_min_weight: float = 0.01
+    bl_default_universe: str = "SPY,QQQ,IWM,AAPL,MSFT,GOOGL,NVDA,AMD,META,GLD,TLT,XLF,XLE"
 
     # === 认知套利配置 ===
     ca_direct_min_score: int = 7
@@ -127,6 +134,11 @@ class Settings(BaseSettings):
     ca_max_holding_days: int = 14
     ca_position_size_pct: float = 0.10
     ca_max_positions: int = 5
+
+    # === API 配置 ===
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+    api_cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
     # === 环境配置 ===
     environment: str = "development"
@@ -164,6 +176,21 @@ class Settings(BaseSettings):
         if not self.market_etfs:
             return ["SPY", "QQQ", "IWM"]
         return [s.strip().upper() for s in self.market_etfs.split(",") if s.strip()]
+
+    def get_cash_keywords(self) -> list[str]:
+        if not self.cash_keywords:
+            return []
+        return [k.strip().upper() for k in self.cash_keywords.split(",") if k.strip()]
+
+    def get_bl_default_universe(self) -> list[str]:
+        if not self.bl_default_universe:
+            return []
+        return [s.strip().upper() for s in self.bl_default_universe.split(",") if s.strip()]
+
+    def get_cors_origins(self) -> list[str]:
+        if not self.api_cors_origins:
+            return []
+        return [o.strip() for o in self.api_cors_origins.split(",") if o.strip()]
 
     def get_news_llm_config(self) -> dict:
         """获取新闻过滤 LLM 配置（如果未配置则使用主 LLM）"""

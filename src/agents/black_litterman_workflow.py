@@ -17,59 +17,43 @@ Black-Litterman Portfolio Optimization Workflow
 
 import asyncio
 import json
-from src.utils.logging_config import get_logger
 from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime, timedelta
-from decimal import Decimal
-import pytz
+from datetime import timedelta
 
 import numpy as np
 import pandas as pd
 
-from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
-from langchain.tools import tool
-from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import HumanMessage, AIMessage
+from langchain.agents import create_agent
 from langgraph.checkpoint.memory import MemorySaver
-from pydantic import BaseModel, Field
 
 from config import settings
+
+from src.utils.logging_config import get_logger
 from src.agents.workflow_base import WorkflowBase
 from src.agents.workflow_factory import register_workflow
 from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.news_api import NewsAPI
 from src.messaging.message_manager import MessageManager
-from src.events.event_system import event_system
-from src.models.trading_models import (
-    Order, Portfolio, TradingDecision, OrderSide, OrderType,
-    TimeInForce, Position
-)
 from src.utils.llm_utils import create_llm_client
-from src.utils.db_utils import check_db_available, DB_AVAILABLE, get_trading_repository
+from src.utils.db_utils import DB_AVAILABLE, get_trading_repository
 from src.utils.timezone import utc_now, format_for_display
+from src.agents.tools.registry import ToolRegistry
+from src.agents.tools.common import create_common_tools
+from src.agents.tools.trading_tools import execute_rebalance_trades
 
 logger = get_logger(__name__)
 
 # 尝试导入 pypfopt (包名是 pyportfolioopt)
 try:
     from pypfopt import BlackLittermanModel, EfficientFrontier
-    from pypfopt import risk_models, expected_returns
+    from pypfopt import risk_models
     from pypfopt.black_litterman import market_implied_prior_returns
     PYPFOPT_AVAILABLE = True
 except ImportError:
     PYPFOPT_AVAILABLE = False
     logger.warning("pyportfolioopt 未安装。运行: pip install pyportfolioopt cvxpy")
-
-
-class ViewOutput(BaseModel):
-    """LLM 输出的投资观点"""
-    views: Dict[str, float] = Field(
-        description="投资观点，格式: {'AAPL': 0.15, 'MSFT': 0.10}，表示预期超额收益率"
-    )
-    view_confidences: Dict[str, float] = Field(
-        description="观点置信度，格式: {'AAPL': 0.8}，0-1 之间"
-    )
-    reasoning: str = Field(description="分析推理过程")
 
 
 @register_workflow(
@@ -94,15 +78,6 @@ class BlackLittermanWorkflow(WorkflowBase):
     - 考虑风险和收益的数学优化
     - 观点可解释、可追溯
     """
-
-    # 默认资产池（可通过配置覆盖）
-    DEFAULT_UNIVERSE = [
-        'SPY', 'QQQ', 'IWM',      # 指数 ETF
-        'AAPL', 'MSFT', 'GOOGL',  # 大型科技
-        'NVDA', 'AMD', 'META',    # 科技成长
-        'GLD', 'TLT',             # 黄金、长期国债
-        'XLF', 'XLE'              # 金融、能源
-    ]
 
     def __init__(
         self,
@@ -129,25 +104,32 @@ class BlackLittermanWorkflow(WorkflowBase):
                 "pypfopt 未安装。请运行: pip install pypfopt cvxpy"
             )
 
-        self.universe = universe or self.DEFAULT_UNIVERSE
+        self.universe = universe or settings.get_bl_default_universe()
         self.risk_aversion = risk_aversion if risk_aversion is not None else settings.bl_risk_aversion
         self.session_id = session_id
 
         self.llm = create_llm_client()
-        self.event_system = event_system
         self.memory = MemorySaver()
 
-        # 创建 tools
-        self.tools = self._create_tools()
+        # BL 观点状态（供 analysis_tools 中的 generate_investment_views 写入）
+        self._current_views: Dict[str, float] = {}
+        self._current_confidences: Dict[str, float] = {}
+        self._current_reasoning: str = ""
 
-        # 创建 ReAct agent
-        self.agent = create_react_agent(
-            self.llm,
-            self.tools,
-            checkpointer=self.memory
-        )
+        # Tool Registry: 统一管理 tools 的启用/禁用
+        self.tool_registry = ToolRegistry()
+        self._register_tools()
+        self.tools = self.tool_registry.get_enabled_tools()
 
         self.system_prompt = self._get_system_prompt()
+
+        # 创建 Agent（system_prompt 在创建时注入）
+        self.agent = create_agent(
+            self.llm,
+            self.tools,
+            system_prompt=self.system_prompt,
+            checkpointer=self.memory,
+        )
 
         # 状态
         self._db_available = DB_AVAILABLE
@@ -191,120 +173,60 @@ class BlackLittermanWorkflow(WorkflowBase):
 使用 generate_investment_views 工具输出你的观点
 """
 
-    def _create_tools(self) -> List:
-        """创建 LLM 工具"""
+    def _register_tools(self) -> None:
+        """注册所有 tools 到 ToolRegistry"""
+        # create_common_tools 返回所有分类的 tools
+        # 其中 analysis_tools 会检测 _current_views 属性并自动注册 generate_investment_views
+        all_tools = create_common_tools(self)
+        self.tool_registry.register_many(all_tools)
 
-        @tool
-        async def get_market_news() -> str:
-            """获取最新市场新闻"""
-            try:
-                await self.message_manager.send_message("📰 获取市场新闻...", "info")
-                news = await self.get_news(limit=15)
-                return json.dumps(news[:15], indent=2, ensure_ascii=False)
-            except Exception as e:
-                return f"获取新闻失败: {e}"
+    def rebuild_agent(self) -> None:
+        """当 tool 启用/禁用状态变更后，重新构建 agent"""
+        self.tools = self.tool_registry.get_enabled_tools()
+        self.agent = create_agent(
+            self.llm,
+            self.tools,
+            system_prompt=self.system_prompt,
+            checkpointer=self.memory,
+        )
+        logger.info(f"BL Agent rebuilt with {len(self.tools)} tools")
 
-        @tool
-        async def get_asset_prices() -> str:
-            """获取资产池的最新价格和涨跌幅"""
-            try:
-                await self.message_manager.send_message(
-                    f"📊 获取 {len(self.universe)} 个资产价格...", "info"
-                )
-                prices = {}
-                for symbol in self.universe:
-                    try:
-                        data = await self.market_data_api.get_latest_price(symbol)
-                        if data:
-                            prices[symbol] = {
-                                'price': data.get('close'),
-                                'change_pct': data.get('change_percent', 0)
-                            }
-                    except Exception:
-                        pass
+    # ========== 配置管理 ==========
 
-                return json.dumps(prices, indent=2)
-            except Exception as e:
-                return f"获取价格失败: {e}"
+    def get_config(self) -> Dict[str, Any]:
+        config = super().get_config()
+        config.update({
+            "llm_model": settings.llm_model,
+            "llm_recursion_limit": settings.llm_recursion_limit,
+            "bl_risk_aversion": self.risk_aversion,
+            "bl_historical_days": settings.bl_historical_days,
+            "bl_base_variance": settings.bl_base_variance,
+            "bl_min_weight": settings.bl_min_weight,
+            "bl_default_universe": self.universe,
+        })
+        return config
 
-        @tool
-        async def get_portfolio_status() -> str:
-            """获取当前组合状态"""
-            try:
-                await self.message_manager.send_message("💼 获取组合状态...", "info")
-                portfolio = await self.get_portfolio()
-                if not portfolio:
-                    return "无法获取组合信息"
+    def update_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        # BL 特有参数
+        if "bl_risk_aversion" in updates:
+            self.risk_aversion = updates["bl_risk_aversion"]
+        if "bl_default_universe" in updates:
+            self.universe = updates["bl_default_universe"]
+        for field in ("bl_historical_days", "bl_base_variance", "bl_min_weight"):
+            if field in updates:
+                setattr(settings, field, updates[field])
 
-                positions_info = []
-                for pos in portfolio.positions:
-                    if pos.quantity != 0:
-                        pct = float((pos.market_value / portfolio.equity * 100))
-                        positions_info.append({
-                            "symbol": pos.symbol,
-                            "weight_pct": round(pct, 2),
-                            "pnl_pct": float(pos.unrealized_pnl_percentage)
-                        })
+        # LLM 参数
+        for field in ("llm_model", "llm_recursion_limit"):
+            if field in updates:
+                setattr(settings, field, updates[field])
 
-                return json.dumps({
-                    "equity": float(portfolio.equity),
-                    "cash_pct": float(portfolio.cash / portfolio.equity * 100),
-                    "positions": positions_info
-                }, indent=2)
-            except Exception as e:
-                return f"获取组合失败: {e}"
+        return super().update_config(updates)
 
-        @tool
-        async def generate_investment_views(
-            views: Dict[str, float],
-            view_confidences: Dict[str, float],
-            reasoning: str
-        ) -> str:
-            """
-            生成投资观点
-
-            Args:
-                views: 预期超额收益，如 {"AAPL": 0.15, "TLT": -0.05}
-                view_confidences: 置信度，如 {"AAPL": 0.8, "TLT": 0.6}
-                reasoning: 分析推理过程
-
-            Returns:
-                观点确认信息
-            """
-            try:
-                # 保存观点
-                self._current_views = views
-                self._current_confidences = view_confidences
-                self._current_reasoning = reasoning
-
-                await self.message_manager.send_message(
-                    f"💡 **投资观点已生成**\n\n"
-                    f"观点数量: {len(views)}\n"
-                    f"分析: {reasoning[:200]}...",
-                    "info"
-                )
-
-                return json.dumps({
-                    "success": True,
-                    "views_count": len(views),
-                    "views": views,
-                    "confidences": view_confidences
-                }, indent=2)
-
-            except Exception as e:
-                return f"生成观点失败: {e}"
-
-        return [
-            get_market_news,
-            get_asset_prices,
-            get_portfolio_status,
-            generate_investment_views
-        ]
+    # ========== BL 模型核心逻辑 ==========
 
     async def _fetch_historical_prices(self, days: int = None) -> pd.DataFrame:
         """获取历史价格数据"""
-        from datetime import datetime, timedelta
-        
         if days is None:
             days = settings.bl_historical_days
         prices_dict = {}
@@ -358,9 +280,6 @@ class BlackLittermanWorkflow(WorkflowBase):
         Returns:
             (先验收益, 协方差矩阵)
         """
-        # 计算收益率
-        returns = prices.pct_change().dropna()
-
         # 计算协方差矩阵（年化）
         cov_matrix = risk_models.sample_cov(prices)
         self._cached_cov = cov_matrix
@@ -497,23 +416,29 @@ class BlackLittermanWorkflow(WorkflowBase):
 
         return weights_dict
 
-    async def _execute_rebalance(
+    async def _execute_bl_rebalance(
         self,
         target_weights: Dict[str, float]
     ) -> List[Dict[str, Any]]:
-        """执行组合再平衡"""
-        results = []
+        """
+        执行 BL 优化后的组合再平衡
 
+        Args:
+            target_weights: BL 模型输出的权重 {symbol: weight}（0-1）
+
+        Returns:
+            交易执行结果列表
+        """
         # 检查市场状态
         if not await self.is_market_open():
             await self.message_manager.send_message(
                 "⚠️ 市场未开放，无法执行交易", "warning"
             )
-            return results
+            return []
 
         portfolio = await self.get_portfolio()
         if not portfolio:
-            return results
+            return []
 
         equity = float(portfolio.equity)
         current_positions = {
@@ -522,23 +447,24 @@ class BlackLittermanWorkflow(WorkflowBase):
             if pos.quantity != 0
         }
 
+        weight_diff_threshold = settings.rebalance_weight_diff_threshold
+
         # 计算需要的交易
-        trades = []
+        trades: List[Dict[str, Any]] = []
         for symbol, target_weight in target_weights.items():
-            if target_weight < settings.bl_min_weight:  # 忽略小于配置阈值的配置
+            if target_weight < settings.bl_min_weight:
                 continue
 
             current_weight = current_positions.get(symbol, 0)
             weight_diff = target_weight - current_weight
 
-            if abs(weight_diff) < 0.02:  # 2% 以内不调整
+            if abs(weight_diff) < weight_diff_threshold:
                 continue
 
             target_value = equity * target_weight
             current_value = equity * current_weight
             value_diff = target_value - current_value
 
-            # 获取价格
             try:
                 price_data = await self.market_data_api.get_latest_price(symbol)
                 if price_data:
@@ -551,63 +477,29 @@ class BlackLittermanWorkflow(WorkflowBase):
                             'shares': abs(shares),
                             'price': price,
                             'target_weight': target_weight,
-                            'current_weight': current_weight
+                            'current_weight': current_weight,
                         })
             except Exception as e:
                 logger.warning(f"获取 {symbol} 价格失败: {e}")
 
         # 清仓不在目标中的持仓
         for symbol, current_weight in current_positions.items():
-            if symbol not in target_weights and current_weight > 0.01:
-                try:
-                    for pos in portfolio.positions:
-                        if pos.symbol == symbol and pos.quantity > 0:
-                            trades.append({
-                                'symbol': symbol,
-                                'action': 'SELL',
-                                'shares': int(pos.quantity),
-                                'price': 0,
-                                'target_weight': 0,
-                                'current_weight': current_weight
-                            })
-                except Exception:
-                    pass
+            if symbol not in target_weights and current_weight > settings.bl_min_weight:
+                for pos in portfolio.positions:
+                    if pos.symbol == symbol and pos.quantity > 0:
+                        trades.append({
+                            'symbol': symbol,
+                            'action': 'SELL',
+                            'shares': int(pos.quantity),
+                            'price': 0,
+                            'target_weight': 0,
+                            'current_weight': current_weight,
+                        })
 
-        # 先卖后买
-        sell_trades = [t for t in trades if t['action'] == 'SELL']
-        buy_trades = [t for t in trades if t['action'] == 'BUY']
+        # 使用通用交易执行（先卖后买）
+        return await execute_rebalance_trades(self.broker_api, trades)
 
-        for trade in sell_trades + buy_trades:
-            try:
-                order = Order(
-                    symbol=trade['symbol'],
-                    side=OrderSide.BUY if trade['action'] == 'BUY' else OrderSide.SELL,
-                    order_type=OrderType.MARKET,
-                    quantity=Decimal(str(trade['shares'])),
-                    time_in_force=TimeInForce.DAY
-                )
-                order_id = await self.broker_api.submit_order(order)
-
-                results.append({
-                    'success': order_id is not None,
-                    'symbol': trade['symbol'],
-                    'action': trade['action'],
-                    'shares': trade['shares'],
-                    'order_id': str(order_id) if order_id else None
-                })
-
-                if order_id:
-                    await asyncio.sleep(0.5)
-
-            except Exception as e:
-                results.append({
-                    'success': False,
-                    'symbol': trade['symbol'],
-                    'action': trade['action'],
-                    'error': str(e)
-                })
-
-        return results
+    # ========== 历史摘要 ==========
 
     async def _update_history_summary(
         self, 
@@ -643,6 +535,8 @@ class BlackLittermanWorkflow(WorkflowBase):
             logger.debug(f"历史摘要已更新: {len(self.history_summary)} 字符")
         except Exception as e:
             logger.warning(f"更新历史摘要失败: {e}")
+
+    # ========== 主 Workflow ==========
 
     async def run_workflow(
         self,
@@ -692,13 +586,8 @@ class BlackLittermanWorkflow(WorkflowBase):
 {user_prompt}"""
 
             result = await self.agent.ainvoke(
-                {
-                    "messages": [
-                        SystemMessage(content=self.system_prompt),
-                        HumanMessage(content=user_prompt)
-                    ]
-                },
-                config=config
+                {"messages": [HumanMessage(content=user_prompt)]},
+                config=config,
             )
 
             # 提取 LLM 响应
@@ -738,7 +627,7 @@ class BlackLittermanWorkflow(WorkflowBase):
             )
 
             # 3. 执行再平衡
-            trade_results = await self._execute_rebalance(optimal_weights)
+            trade_results = await self._execute_bl_rebalance(optimal_weights)
 
             # 计算执行时间
             self.end_time = utc_now()
@@ -792,4 +681,3 @@ class BlackLittermanWorkflow(WorkflowBase):
     def get_optimization_result(self) -> Optional[Dict]:
         """获取最近一次优化结果"""
         return self._last_optimization
-

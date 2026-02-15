@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
@@ -9,7 +9,12 @@ import {
   fetchWorkflows,
   fetchAgentTools,
   fetchWorkflowExecutions,
+  fetchActiveWorkflow,
+  fetchAgentConfig,
+  updateAgentConfig,
+  switchWorkflow,
   triggerAnalysis,
+  toggleAgentTool,
 } from '@/api';
 import { formatCurrency, formatRelative, formatDuration } from '@/utils/format';
 import { cn } from '@/utils/cn';
@@ -36,6 +41,9 @@ import {
   ChevronRight,
   Send,
   Loader2,
+  Save,
+  RotateCcw,
+  Shuffle,
 } from 'lucide-react';
 import type {
   TradingDecision,
@@ -43,11 +51,13 @@ import type {
   AgentMessage,
   WorkflowInfo,
   AgentTool,
+  AgentConfig,
+  ActiveWorkflow,
   WorkflowExecution,
   ExecutionStep,
 } from '@/types';
 
-type Tab = 'execution' | 'tools' | 'decisions' | 'analyses' | 'messages';
+type Tab = 'execution' | 'tools' | 'config' | 'decisions' | 'analyses' | 'messages';
 
 const TOOL_CATEGORY_META: Record<string, { label: string; color: string; icon: typeof Database }> = {
   data: { label: 'Data', color: 'bg-blue-500/15 text-blue-400', icon: Database },
@@ -62,6 +72,35 @@ const STEP_TYPE_META: Record<string, { label: string; color: string; icon: typeo
   decision: { label: 'Decision', color: 'text-emerald-400', icon: Zap },
   notification: { label: 'Notification', color: 'text-amber-400', icon: Send },
 };
+
+// ========== Config field rendering helpers ==========
+
+/** Fields that should be rendered as textarea instead of input */
+const TEXTAREA_FIELDS = new Set(['system_prompt']);
+
+/** Fields that are read-only (shown but not editable) */
+const READONLY_FIELDS = new Set(['workflow_type', 'name']);
+
+/** Detect field type for rendering */
+function detectFieldType(key: string, value: unknown): 'textarea' | 'number' | 'array' | 'boolean' | 'text' {
+  if (TEXTAREA_FIELDS.has(key)) return 'textarea';
+  if (typeof value === 'number') return 'number';
+  if (typeof value === 'boolean') return 'boolean';
+  if (Array.isArray(value)) return 'array';
+  return 'text';
+}
+
+/** Human-readable label from snake_case key */
+function fieldLabel(key: string): string {
+  return key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .replace(/\bLlm\b/, 'LLM')
+    .replace(/\bBl\b/, 'BL')
+    .replace(/\bCa\b/, 'CA');
+}
+
+// ========== Sub-components ==========
 
 function ExecutionStepItem({ step, isLast }: { step: ExecutionStep; isLast: boolean }) {
   const [expanded, setExpanded] = useState(false);
@@ -78,7 +117,6 @@ function ExecutionStepItem({ step, isLast }: { step: ExecutionStep; isLast: bool
 
   return (
     <div className="flex gap-3">
-      {/* Timeline connector */}
       <div className="flex flex-col items-center">
         <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2', statusColor)}>
           {step.status === 'running' ? (
@@ -91,8 +129,6 @@ function ExecutionStepItem({ step, isLast }: { step: ExecutionStep; isLast: bool
         </div>
         {!isLast && <div className="w-px flex-1 bg-border" />}
       </div>
-
-      {/* Content */}
       <div className={cn('mb-4 min-w-0 flex-1 pb-1', isLast && 'mb-0')}>
         <button
           onClick={() => setExpanded(!expanded)}
@@ -109,7 +145,6 @@ function ExecutionStepItem({ step, isLast }: { step: ExecutionStep; isLast: bool
             <span className="ml-auto text-xs text-muted">{step.duration_ms}ms</span>
           )}
         </button>
-
         {expanded && (
           <div className="mt-2 space-y-2 pl-5">
             {step.input && (
@@ -188,7 +223,6 @@ function ExecutionCard({ execution }: { execution: WorkflowExecution }) {
           <ChevronRight className="h-5 w-5 shrink-0 text-muted" />
         )}
       </button>
-
       {expanded && (
         <div className="mt-4 border-t border-border pt-4">
           {execution.steps.map((step, i) => (
@@ -239,7 +273,6 @@ function ToolCard({ tool, onToggle }: { tool: AgentTool; onToggle: (name: string
           />
         </button>
       </div>
-
       {tool.parameters.length > 0 && (
         <div className="mt-3">
           <button
@@ -270,6 +303,286 @@ function ToolCard({ tool, onToggle }: { tool: AgentTool; onToggle: (name: string
   );
 }
 
+// ========== Config Editor ==========
+
+function ConfigEditor({
+  config,
+  onSave,
+  saving,
+}: {
+  config: AgentConfig;
+  onSave: (updates: Record<string, unknown>) => Promise<void>;
+  saving: boolean;
+}) {
+  const [draft, setDraft] = useState<Record<string, unknown>>({});
+  const [editedKeys, setEditedKeys] = useState<Set<string>>(new Set());
+
+  // Reset draft when config changes (e.g. after save or workflow switch)
+  useEffect(() => {
+    setDraft({});
+    setEditedKeys(new Set());
+  }, [config]);
+
+  const getValue = (key: string) => (key in draft ? draft[key] : config[key]);
+
+  const handleChange = (key: string, raw: string | boolean) => {
+    const original = config[key];
+    let parsed: unknown = raw;
+
+    // Type-aware parsing
+    if (typeof original === 'number' && typeof raw === 'string') {
+      const n = Number(raw);
+      parsed = isNaN(n) ? raw : n;
+    }
+    if (Array.isArray(original) && typeof raw === 'string') {
+      parsed = raw.split(',').map((s) => s.trim()).filter(Boolean);
+    }
+
+    setDraft((prev) => ({ ...prev, [key]: parsed }));
+    setEditedKeys((prev) => {
+      const next = new Set(prev);
+      // If reverted to original, remove from edited set
+      if (JSON.stringify(parsed) === JSON.stringify(original)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  };
+
+  const handleReset = () => {
+    setDraft({});
+    setEditedKeys(new Set());
+  };
+
+  const handleSave = async () => {
+    // Only send changed fields
+    const updates: Record<string, unknown> = {};
+    for (const key of editedKeys) {
+      updates[key] = draft[key];
+    }
+    await onSave(updates);
+  };
+
+  // Separate config keys into groups
+  const allKeys = Object.keys(config);
+  const readonlyKeys = allKeys.filter((k) => READONLY_FIELDS.has(k));
+  const editableKeys = allKeys.filter((k) => !READONLY_FIELDS.has(k));
+
+  return (
+    <div className="space-y-6">
+      {/* Readonly info */}
+      <div className="flex items-center gap-4">
+        {readonlyKeys.map((key) => (
+          <div key={key} className="flex items-center gap-2">
+            <span className="text-xs text-muted">{fieldLabel(key)}:</span>
+            <Badge variant="info">{String(config[key])}</Badge>
+          </div>
+        ))}
+      </div>
+
+      {/* Editable fields */}
+      <div className="space-y-4">
+        {editableKeys.map((key) => {
+          const value = getValue(key);
+          const type = detectFieldType(key, config[key]);
+          const isEdited = editedKeys.has(key);
+
+          return (
+            <div key={key}>
+              <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-foreground">
+                {fieldLabel(key)}
+                {isEdited && (
+                  <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] text-accent-light">modified</span>
+                )}
+              </label>
+
+              {type === 'textarea' ? (
+                <textarea
+                  value={value != null ? String(value) : ''}
+                  onChange={(e) => handleChange(key, e.target.value)}
+                  rows={10}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              ) : type === 'number' ? (
+                <input
+                  type="number"
+                  step="any"
+                  value={value != null ? String(value) : ''}
+                  onChange={(e) => handleChange(key, e.target.value)}
+                  className="w-full max-w-xs rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              ) : type === 'boolean' ? (
+                <button
+                  onClick={() => handleChange(key, !(value as boolean))}
+                  className={cn(
+                    'flex h-7 w-12 items-center rounded-full px-0.5 transition-colors',
+                    value ? 'bg-accent' : 'bg-gray-700'
+                  )}
+                >
+                  <div
+                    className={cn(
+                      'h-6 w-6 rounded-full bg-white shadow transition-transform',
+                      value ? 'translate-x-5' : 'translate-x-0'
+                    )}
+                  />
+                </button>
+              ) : type === 'array' ? (
+                <input
+                  type="text"
+                  value={Array.isArray(value) ? (value as string[]).join(', ') : String(value ?? '')}
+                  onChange={(e) => handleChange(key, e.target.value)}
+                  placeholder="Comma-separated values"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              ) : (
+                <input
+                  type="text"
+                  value={value != null ? String(value) : ''}
+                  onChange={(e) => handleChange(key, e.target.value)}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-3 border-t border-border pt-4">
+        <Button
+          icon={<Save className="h-4 w-4" />}
+          onClick={handleSave}
+          loading={saving}
+          disabled={editedKeys.size === 0}
+        >
+          Save Changes
+        </Button>
+        <Button
+          variant="secondary"
+          icon={<RotateCcw className="h-4 w-4" />}
+          onClick={handleReset}
+          disabled={editedKeys.size === 0}
+        >
+          Reset
+        </Button>
+        {editedKeys.size > 0 && (
+          <span className="text-xs text-muted">
+            {editedKeys.size} field{editedKeys.size > 1 ? 's' : ''} modified (runtime only, not persisted to .env)
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ========== Workflow Switcher ==========
+
+function WorkflowSwitcher({
+  active,
+  workflows,
+  onSwitch,
+  switching,
+}: {
+  active: ActiveWorkflow | null;
+  workflows: Record<string, WorkflowInfo>;
+  onSwitch: (type: string) => void;
+  switching: boolean;
+}) {
+  const [showPicker, setShowPicker] = useState(false);
+
+  return (
+    <div className="space-y-4">
+      {/* Current workflow */}
+      <Card className="border-accent/30 bg-accent/5">
+        <div className="flex items-center gap-4">
+          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-accent/15">
+            <Bot className="h-6 w-6 text-accent-light" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-foreground">
+                {active?.name ?? 'Loading...'}
+              </h3>
+              <Badge variant="info">{active?.workflow_type ?? '—'}</Badge>
+              {active?.is_running && <Badge variant="profit">Running</Badge>}
+            </div>
+            {active?.stats && (
+              <div className="mt-1 flex items-center gap-3 text-xs text-muted">
+                <span>Runs: {String(active.stats.total_runs ?? 0)}</span>
+                <span>Success: {String(active.stats.successful_runs ?? 0)}</span>
+                <span>Failed: {String(active.stats.failed_runs ?? 0)}</span>
+                {active.stats.last_run != null && (
+                  <span>Last: {formatRelative(String(active.stats.last_run))}</span>
+                )}
+              </div>
+            )}
+          </div>
+          <Button
+            variant="secondary"
+            icon={<Shuffle className="h-4 w-4" />}
+            onClick={() => setShowPicker(!showPicker)}
+            loading={switching}
+          >
+            Switch
+          </Button>
+        </div>
+      </Card>
+
+      {/* Workflow picker */}
+      {showPicker && (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+          {Object.entries(workflows).map(([key, wf]) => {
+            const isCurrent = key === active?.workflow_type;
+            return (
+              <Card
+                key={key}
+                hover={!isCurrent}
+                className={cn(
+                  'cursor-pointer transition-all',
+                  isCurrent && 'border-accent/40 bg-accent/5',
+                  !isCurrent && 'hover:border-accent/20'
+                )}
+              >
+                <button
+                  className="w-full text-left"
+                  disabled={isCurrent || switching}
+                  onClick={() => {
+                    onSwitch(key);
+                    setShowPicker(false);
+                  }}
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-semibold text-foreground">{wf.name}</h3>
+                        {isCurrent && <Badge variant="profit">Active</Badge>}
+                        {wf.deprecated && <Badge variant="loss">Deprecated</Badge>}
+                      </div>
+                      <p className="mt-1 text-xs text-muted">{wf.description}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-1">
+                    {wf.features.slice(0, 3).map((f) => (
+                      <Badge key={f} variant="muted">{f}</Badge>
+                    ))}
+                  </div>
+                  {wf.best_for && (
+                    <p className="mt-2 text-xs text-accent-light">{wf.best_for}</p>
+                  )}
+                </button>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ========== Main Agent Page ==========
+
 export default function Agent() {
   const [decisions, setDecisions] = useState<TradingDecision[]>([]);
   const [analyses, setAnalyses] = useState<AnalysisHistory[]>([]);
@@ -277,11 +590,15 @@ export default function Agent() {
   const [workflows, setWorkflows] = useState<Record<string, WorkflowInfo>>({});
   const [tools, setTools] = useState<AgentTool[]>([]);
   const [executions, setExecutions] = useState<WorkflowExecution[]>([]);
-  const [tab, setTab] = useState<Tab>('execution');
+  const [active, setActive] = useState<ActiveWorkflow | null>(null);
+  const [config, setConfig] = useState<AgentConfig | null>(null);
+  const [tab, setTab] = useState<Tab>('config');
   const [triggering, setTriggering] = useState(false);
+  const [switching, setSwitching] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [toolFilter, setToolFilter] = useState<string>('all');
 
-  useEffect(() => {
+  const loadAll = useCallback(() => {
     Promise.all([
       fetchDecisions(20),
       fetchAnalyses(20),
@@ -289,15 +606,23 @@ export default function Agent() {
       fetchWorkflows(),
       fetchAgentTools(),
       fetchWorkflowExecutions(),
-    ]).then(([d, a, m, w, t, e]) => {
+      fetchActiveWorkflow(),
+      fetchAgentConfig(),
+    ]).then(([d, a, m, w, t, e, aw, cfg]) => {
       setDecisions(d);
       setAnalyses(a);
       setMessages(m);
       setWorkflows(w);
       setTools(t);
       setExecutions(e);
+      setActive(aw);
+      setConfig(cfg);
     });
   }, []);
+
+  useEffect(() => {
+    loadAll();
+  }, [loadAll]);
 
   const handleTriggerAnalysis = async () => {
     setTriggering(true);
@@ -305,10 +630,53 @@ export default function Agent() {
     setTriggering(false);
   };
 
-  const handleToggleTool = (name: string) => {
+  const handleToggleTool = async (name: string) => {
+    const target = tools.find((t) => t.name === name);
+    if (!target) return;
+
+    const newEnabled = !target.enabled;
     setTools((prev) =>
-      prev.map((t) => (t.name === name ? { ...t, enabled: !t.enabled } : t))
+      prev.map((t) => (t.name === name ? { ...t, enabled: newEnabled } : t))
     );
+    try {
+      await toggleAgentTool(name, newEnabled);
+    } catch {
+      setTools((prev) =>
+        prev.map((t) => (t.name === name ? { ...t, enabled: !newEnabled } : t))
+      );
+    }
+  };
+
+  const handleSwitchWorkflow = async (type: string) => {
+    setSwitching(true);
+    try {
+      await switchWorkflow(type);
+      // Reload active workflow, config, and tools after switch
+      const [aw, cfg, t] = await Promise.all([
+        fetchActiveWorkflow(),
+        fetchAgentConfig(),
+        fetchAgentTools(),
+      ]);
+      setActive(aw);
+      setConfig(cfg);
+      setTools(t);
+    } catch (err) {
+      console.error('Failed to switch workflow:', err);
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  const handleSaveConfig = async (updates: Record<string, unknown>) => {
+    setSaving(true);
+    try {
+      const result = await updateAgentConfig(updates);
+      setConfig(result.config);
+    } catch (err) {
+      console.error('Failed to update config:', err);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const filteredTools =
@@ -347,34 +715,18 @@ export default function Agent() {
         </Button>
       </div>
 
-      {/* Workflow Cards */}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-        {Object.entries(workflows).slice(0, 6).map(([key, wf]) => (
-          <Card key={key} hover className="cursor-pointer">
-            <div className="flex items-start justify-between">
-              <div>
-                <div className="flex items-center gap-2">
-                  <h3 className="text-sm font-semibold text-foreground">{wf.name}</h3>
-                  {wf.deprecated && <Badge variant="loss">Deprecated</Badge>}
-                </div>
-                <p className="mt-1 text-xs text-muted">{wf.description}</p>
-              </div>
-            </div>
-            <div className="mt-3 flex flex-wrap gap-1">
-              {wf.features.slice(0, 3).map((f) => (
-                <Badge key={f} variant="muted">{f}</Badge>
-              ))}
-            </div>
-            {wf.best_for && (
-              <p className="mt-2 text-xs text-accent-light">{wf.best_for}</p>
-            )}
-          </Card>
-        ))}
-      </div>
+      {/* Active Workflow & Switcher */}
+      <WorkflowSwitcher
+        active={active}
+        workflows={workflows}
+        onSwitch={handleSwitchWorkflow}
+        switching={switching}
+      />
 
       {/* Tab Switcher */}
       <div className="flex gap-1 overflow-x-auto border-b border-border pb-0">
         {([
+          { key: 'config', label: 'Config', icon: Settings2 },
           { key: 'execution', label: 'Execution', icon: Zap },
           { key: 'tools', label: 'Tools', icon: Wrench },
           { key: 'decisions', label: 'Decisions', icon: BarChart3 },
@@ -401,6 +753,27 @@ export default function Agent() {
           </button>
         ))}
       </div>
+
+      {/* Config Tab */}
+      {tab === 'config' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-foreground">Workflow Configuration</h2>
+            <span className="text-xs text-muted">Changes are runtime-only and reset on restart</span>
+          </div>
+          {config ? (
+            <Card>
+              <ConfigEditor config={config} onSave={handleSaveConfig} saving={saving} />
+            </Card>
+          ) : (
+            <Card>
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-6 w-6 animate-spin text-muted" />
+              </div>
+            </Card>
+          )}
+        </div>
+      )}
 
       {/* Execution Timeline Tab */}
       {tab === 'execution' && (
@@ -440,8 +813,6 @@ export default function Agent() {
               </span>
             </div>
           </div>
-
-          {/* Category filter */}
           <div className="flex gap-1.5">
             {toolCategories.map((cat) => {
               const count = cat === 'all' ? tools.length : tools.filter((t) => t.category === cat).length;
@@ -462,7 +833,6 @@ export default function Agent() {
               );
             })}
           </div>
-
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {filteredTools.map((tool) => (
               <ToolCard key={tool.name} tool={tool} onToggle={handleToggleTool} />
@@ -561,7 +931,6 @@ export default function Agent() {
                 </div>
                 <span className="text-xs text-muted">{formatRelative(a.created_at)}</span>
               </div>
-
               {a.output_response && (
                 <p className="mt-3 rounded-lg bg-background p-3 text-sm text-muted-foreground">
                   {a.output_response}
@@ -572,7 +941,6 @@ export default function Agent() {
                   {a.error_message}
                 </p>
               )}
-
               <div className="mt-3 flex items-center gap-4">
                 {a.execution_time_seconds && (
                   <span className="text-xs text-muted">

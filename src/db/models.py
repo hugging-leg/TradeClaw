@@ -206,6 +206,28 @@ class AgentMessage(Base):
         }
 
 
+class SchedulerJobExecution(Base):
+    """调度任务执行历史"""
+    __tablename__ = 'scheduler_job_executions'
+
+    id = Column(GUID(), primary_key=True, default=uuid.uuid4)
+    job_id = Column(String(200), nullable=False, index=True)
+    scheduled_time = Column(DateTime(timezone=True), nullable=True)
+    executed_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    success = Column(Boolean, nullable=False, default=True)
+    error = Column(Text, nullable=True)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': str(self.id),
+            'job_id': self.job_id,
+            'scheduled_time': self.scheduled_time.isoformat() if self.scheduled_time else None,
+            'executed_at': self.executed_at.isoformat() if self.executed_at else None,
+            'success': self.success,
+            'error': self.error,
+        }
+
+
 class CAPosition(Base):
     """
     认知套利 Workflow 持仓跟踪

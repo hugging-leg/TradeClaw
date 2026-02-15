@@ -138,7 +138,7 @@ class MessageTransportFactory:
             logger.debug(f"部分 MessageTransport 适配器导入失败: {e}")
 
     @classmethod
-    def create_message_transport(cls, provider: Optional[str] = None, event_system=None, **kwargs):
+    def create_message_transport(cls, provider: Optional[str] = None, trading_system=None, **kwargs):
         """创建 Message Transport"""
         cls._ensure_initialized()
         provider_name = (provider or settings.message_provider).lower()
@@ -147,7 +147,7 @@ class MessageTransportFactory:
             raise ValueError(f"Unknown message transport: {provider_name}. Available: {list(cls._registry.keys())}")
 
         logger.info(f"Creating {provider_name} message transport")
-        return cls._registry[provider_name](event_system=event_system, **kwargs)
+        return cls._registry[provider_name](trading_system=trading_system, **kwargs)
 
     @classmethod
     def get_available_providers(cls) -> List[str]:

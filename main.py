@@ -4,9 +4,15 @@ import signal
 import sys
 from pathlib import Path
 
+import uvicorn
+
 from src.trading_system import TradingSystem
 from src.interfaces.factory import get_news_api
 from src.utils.logging_config import setup_logging as setup_structlog, get_logger
+from src.api.app import create_app
+from src.api.deps import set_trading_system
+from src.api.routes.backtest import set_backtest_runner
+from src.services.backtest_runner import BacktestRunner
 from config import settings
 
 
@@ -19,6 +25,16 @@ async def main():
 
     # Create trading system
     trading_system = TradingSystem()
+
+    # Create backtest runner (独立进程池，不阻塞实盘)
+    backtest_runner = BacktestRunner()
+
+    # 注入到 API 层
+    set_trading_system(trading_system)
+    set_backtest_runner(backtest_runner)
+
+    # Create FastAPI app
+    app = create_app()
 
     # Graceful shutdown flag
     shutdown_event = asyncio.Event()
@@ -69,17 +85,36 @@ async def main():
         logger.info("🎯 Trading system started successfully!")
         logger.info("📱 Telegram bot is ready for commands")
         logger.info("📊 Daily rebalancing scheduled (APScheduler)")
-        logger.info("⚡ Event-driven system active")
 
-        # Wait for shutdown signal (replaces busy-wait `while True: sleep(1)`)
+        # Start FastAPI server (non-blocking, 共享同一 event loop)
+        uvicorn_config = uvicorn.Config(
+            app=app,
+            host=settings.api_host,
+            port=settings.api_port,
+            log_level="warning",  # 避免 uvicorn 日志淹没交易日志
+        )
+        server = uvicorn.Server(uvicorn_config)
+
+        # uvicorn.Server.serve() 是一个 coroutine，用 create_task 并行运行
+        api_task = asyncio.create_task(server.serve())
+
+        logger.info(f"🌐 API server started at http://{settings.api_host}:{settings.api_port}")
+        logger.info(f"📖 API docs at http://localhost:{settings.api_port}/docs")
+
+        # Wait for shutdown signal
         await shutdown_event.wait()
         logger.info("Shutdown signal received, stopping...")
+
+        # 关闭 API server
+        server.should_exit = True
+        await api_task
 
     except Exception as e:
         logger.error(f"Fatal error: {e}")
         raise
     finally:
         # Cleanup — only called once
+        backtest_runner.shutdown()
         await trading_system.stop()
         logger.info("🛑 Trading system stopped")
 

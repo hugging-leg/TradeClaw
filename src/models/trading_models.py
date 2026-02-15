@@ -18,7 +18,7 @@ class EventPriority(IntEnum):
     are dequeued first.
     
     Usage:
-        event_system.publish("trigger_workflow", data, priority=EventPriority.HIGH)
+        EventPriority.HIGH  # Higher priority events are processed first
     """
     CRITICAL = -10    # Emergency/critical events (e.g., system failures)
     HIGH = -5         # High priority (e.g., risk alerts)

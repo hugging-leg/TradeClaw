@@ -4,14 +4,20 @@ Telegram Service
 组合 TelegramTransport（消息发送）和 TelegramBot（命令处理）
 """
 
-from src.utils.logging_config import get_logger
-from typing import Dict, Any
+from __future__ import annotations
 
-from src.interfaces.message_transport import MessageTransport, MessageFormat
-from src.interfaces.factory import register_message_transport
-from .transport import TelegramTransport
-from .bot import TelegramBot
+from typing import TYPE_CHECKING, Any, Dict, Optional
+
 from config import settings
+from src.interfaces.message_transport import MessageFormat, MessageTransport
+from src.interfaces.factory import register_message_transport
+from src.utils.logging_config import get_logger
+
+from .bot import TelegramBot
+from .transport import TelegramTransport
+
+if TYPE_CHECKING:
+    from src.trading_system import TradingSystem
 
 logger = get_logger(__name__)
 
@@ -27,24 +33,25 @@ class TelegramService(MessageTransport):
 
     def __init__(
         self,
-        bot_token: str = None,
-        chat_id: str = None,
-        event_system=None
+        bot_token: Optional[str] = None,
+        chat_id: Optional[str] = None,
+        trading_system: Optional["TradingSystem"] = None,
+        # 保留 **kwargs 以兼容 factory 可能传入的额外参数
+        **kwargs: Any,
     ):
-        # 调用基类初始化
         super().__init__()
 
         self.bot_token = bot_token or settings.telegram_bot_token
         self.chat_id = chat_id or settings.telegram_chat_id
-        self.event_system = event_system
+        self.trading_system = trading_system
 
         # 内部组件
         self.transport = TelegramTransport(self.bot_token, self.chat_id)
         self.bot = TelegramBot(
             self.bot_token,
             self.chat_id,
-            event_system,
-            self.transport
+            trading_system,
+            self.transport,
         )
 
     async def initialize(self) -> bool:
@@ -56,12 +63,10 @@ class TelegramService(MessageTransport):
 
     async def start(self) -> bool:
         """启动服务（包括 Bot 命令处理）"""
-        # 启动 transport
         if not await self.transport.start():
             logger.warning("Transport 启动失败，将以只发送模式运行")
 
-        # 启动 bot（如果有 event_system）
-        if self.event_system:
+        if self.trading_system is not None:
             if not await self.bot.start():
                 logger.warning("Bot 启动失败，将只处理消息发送")
 
@@ -81,7 +86,7 @@ class TelegramService(MessageTransport):
         self,
         content: str,
         format_type: MessageFormat = MessageFormat.MARKDOWN,
-        **kwargs
+        **kwargs: Any,
     ) -> bool:
         """发送消息"""
         return await self.transport.send_raw_message(content, format_type, **kwargs)
@@ -97,7 +102,7 @@ class TelegramService(MessageTransport):
         base_info = super().get_transport_info()
         base_info.update({
             "transport": self.transport.get_transport_info(),
-            "bot": self.bot.get_status()
+            "bot": self.bot.get_status(),
         })
         return base_info
 
@@ -106,11 +111,10 @@ class TelegramService(MessageTransport):
 
     # ========== 便捷方法 ==========
 
-    async def send_message(self, message: str, chat_id: str = None) -> bool:
+    async def send_message(self, message: str, chat_id: Optional[str] = None) -> bool:
         """发送消息（便捷方法）"""
         return await self.transport.send_raw_message(
             content=message,
             format_type=MessageFormat.MARKDOWN,
-            chat_id=chat_id
+            chat_id=chat_id,
         )
-

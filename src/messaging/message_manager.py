@@ -23,7 +23,7 @@ from tenacity import (
 from aiolimiter import AsyncLimiter
 
 from src.interfaces.message_transport import MessageTransport, MessageFormat
-from src.models.trading_models import Order, Portfolio, Position, TradingEvent
+from src.models.trading_models import Order, Portfolio, Position
 from config import settings
 from src.utils.string_utils import safe_format_text
 from src.utils.message_formatters import (

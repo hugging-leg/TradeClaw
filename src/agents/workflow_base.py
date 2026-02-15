@@ -92,6 +92,48 @@ class WorkflowBase(ABC):
         meta = getattr(self, '_workflow_metadata', {})
         return meta.get('type', self.__class__.__name__.lower())
 
+    # ========== 配置管理（子类 override 声明自己的可编辑配置） ==========
+
+    def get_config(self) -> Dict[str, Any]:
+        """
+        获取该 workflow 的可编辑配置。
+
+        子类应 override 此方法，在 super().get_config() 基础上追加自己的参数。
+        返回的字典会直接暴露给前端编辑。
+
+        Returns:
+            配置字典，key 为配置名，value 为当前值
+        """
+        meta = getattr(self, '_workflow_metadata', {})
+        return {
+            "workflow_type": self.get_workflow_type(),
+            "name": meta.get("description", self.get_workflow_type()),
+            "system_prompt": getattr(self, "system_prompt", None),
+        }
+
+    def update_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        更新该 workflow 的配置（运行时，不持久化）。
+
+        子类应 override 此方法处理自己的特有参数，
+        未识别的 key 交给 super().update_config() 处理。
+
+        Args:
+            updates: 要更新的配置字典
+
+        Returns:
+            更新后的完整配置
+        """
+        if "system_prompt" in updates and hasattr(self, "system_prompt"):
+            self.system_prompt = updates["system_prompt"]
+            # 如果有 rebuild_agent 方法，重建 agent
+            rebuild_fn = getattr(self, "rebuild_agent", None)
+            if rebuild_fn:
+                rebuild_fn()
+                logger.info("Agent rebuilt after system_prompt update")
+
+        return self.get_config()
+
     # ========== 通用工具方法 ==========
 
     async def get_portfolio(self) -> Optional[Portfolio]:
