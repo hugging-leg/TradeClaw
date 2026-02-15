@@ -257,31 +257,64 @@ export interface ActiveWorkflow {
 // ========== Settings ==========
 
 export interface TradingSettings {
+  // Trading
   paper_trading: boolean;
   max_position_size: number;
   max_positions: number;
   rebalance_time: string;
   eod_analysis_time: string;
+  workflow_type: string;
+  trading_timezone: string;
+  exchange: string;
+  // Risk
+  risk_management_enabled: boolean;
   stop_loss_percentage: number;
   take_profit_percentage: number;
   daily_loss_limit_percentage: number;
   max_position_concentration: number;
   portfolio_pnl_alert_threshold: number;
   position_loss_alert_threshold: number;
-  price_change_threshold: number;
-  volatility_threshold: number;
+  // Scheduling
   portfolio_check_interval: number;
   risk_check_interval: number;
   min_workflow_interval_minutes: number;
-  workflow_type: string;
-  trading_timezone: string;
-  exchange: string;
+  scheduler_misfire_grace_time: number;
+  max_pending_llm_jobs: number;
+  message_rate_limit: number;
+  // Monitoring
+  price_change_threshold: number;
+  volatility_threshold: number;
+  rebalance_cooldown_seconds: number;
+  market_etfs: string;
+  // Providers
   broker_provider: string;
   market_data_provider: string;
+  realtime_data_provider: string;
   news_providers: string;
-  llm_model: string;
-  llm_recursion_limit: number;
+  message_provider: string;
+  // Endpoints / non-secret connection info
+  alpaca_base_url: string;
+  telegram_chat_id: string;
+  // LLM (agent-specific params like llm_model are in AgentConfig)
+  llm_base_url: string;
+  news_llm_base_url: string | null;
+  news_llm_model: string | null;
+  // Execution
+  rebalance_min_value_threshold: number;
+  rebalance_min_pct_threshold: number;
+  rebalance_buy_reserve_ratio: number;
+  rebalance_weight_diff_threshold: number;
+  rebalance_order_delay_seconds: number;
+  cash_keywords: string;
+  // Infra
+  api_host: string;
+  api_port: number;
+  api_cors_origins: string;
   environment: string;
+  log_level: string;
+  log_to_file: boolean;
+  // Index signature for dynamic access
+  [key: string]: unknown;
 }
 
 // ========== Backtest ==========

@@ -1,21 +1,21 @@
-version: '3.8'
-
 services:
   trading-agent:
     image: brerudike/trading-agent
     container_name: llm-trading-agent
+    build: .
     restart: unless-stopped
     env_file:
       - .env
     environment:
       - DATA_DIR=/app/user_data
       - ENVIRONMENT=production
-      - TZ=America/New_York
+    ports:
+      - "${API_PORT:-8000}:${API_PORT:-8000}"
     volumes:
       - ./user_data:/app/user_data
     healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
+      test: ["CMD", "curl", "-sf", "http://localhost:${API_PORT:-8000}/api/settings"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 30s

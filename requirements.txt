@@ -1,70 +1,57 @@
-# Core trading APIs
+# ========== Core Trading ==========
 alpaca-py>=0.21.0
-openai>=1.0.0
 python-telegram-bot>=20.0
 requests>=2.31.0
 
-# Data processing
+# ========== Data Processing ==========
 pandas>=2.0.0
 numpy>=1.24.0
-scipy>=1.11.0
 
-# Portfolio Optimization
+# ========== Portfolio Optimization ==========
 pyportfolioopt>=1.5.5  # Black-Litterman, Mean-Variance Optimization
-cvxpy>=1.4.0           # 凸优化求解器
+cvxpy>=1.4.0           # 凸优化求解器 (pypfopt 依赖)
 
-# Configuration and environment
-python-dotenv>=1.0.0
-pydantic>=2.0.0
-pydantic_settings>=2.0.0
-pytz>=2024.1
-tzlocal>=5.0
-
-# Async support
-websockets>=12.0
-
-# LangGraph and AI
+# ========== LLM / AI Agent ==========
 langgraph>=0.2.0
 langchain>=0.2.0
 langchain-openai>=0.1.0
-langchain-deepseek>=0.1.0
+# langchain-deepseek>=0.1.0  # 可选：DeepSeek 模型支持
 
-# Web framework (optional)
+# ========== Web Framework ==========
 fastapi>=0.110.0
 uvicorn>=0.27.0
+python-multipart>=0.0.9  # FastAPI 表单解析
 
-# Database
+# ========== Database ==========
 sqlalchemy>=2.0.0
 alembic>=1.13.0
 aiosqlite>=0.20.0  # SQLite 异步驱动
-asyncpg>=0.29.0    # PostgreSQL 异步驱动
+asyncpg>=0.29.0    # PostgreSQL 异步驱动 (可选)
 
-# Authentication
+# ========== Authentication ==========
 python-jose[cryptography]>=3.3.0
 bcrypt>=4.0.0
 
-# Utilities
-python-multipart>=0.0.9
-aiofiles>=23.2.0
-httpx>=0.27.0
-aiohttp>=3.9.0
-
-# NEW: Scheduling and retry
+# ========== Scheduling & Async ==========
 apscheduler>=3.10.0
 tenacity>=8.2.0
 aiolimiter>=1.1.0
+aiohttp>=3.9.0
+websockets>=12.0
 
-# NEW: Structured logging
+# ========== Time & Calendar ==========
+pytz>=2024.1
+exchange-calendars>=4.5.0  # 交易日历（节假日、交易时间）
+
+# ========== Configuration ==========
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# ========== Logging ==========
 structlog>=24.1.0
 
-# NEW: Time handling
-pendulum>=3.0.0
-exchange-calendars>=4.5.0
-
-# NEW: Interactive Brokers (optional)
-# ib_async>=1.0.0  # 替代已停止维护的 ib_insync
-
-# Testing
+# ========== Testing ==========
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 pytest-mock>=3.12.0

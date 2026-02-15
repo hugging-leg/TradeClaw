@@ -10,40 +10,146 @@ from config import settings
 
 router = APIRouter()
 
-# 可通过 API 读取的配置字段（安全字段，不含密钥）
+# 可通过 GET /settings 读取的配置字段
+# 密钥/Token 类字段不在此列表中 —— 只写不读，避免每次请求都传输密钥
 _READABLE_FIELDS = [
+    # Trading
     "paper_trading", "max_position_size", "max_positions",
     "rebalance_time", "eod_analysis_time",
+    "workflow_type", "trading_timezone", "exchange",
+    # Risk
+    "risk_management_enabled",
     "stop_loss_percentage", "take_profit_percentage",
     "daily_loss_limit_percentage", "max_position_concentration",
     "portfolio_pnl_alert_threshold", "position_loss_alert_threshold",
-    "price_change_threshold", "volatility_threshold",
+    # Scheduling
     "portfolio_check_interval", "risk_check_interval",
     "min_workflow_interval_minutes",
-    "workflow_type", "trading_timezone", "exchange",
-    "broker_provider", "market_data_provider", "news_providers",
-    "llm_model", "llm_recursion_limit",
-    "environment",
+    "scheduler_misfire_grace_time", "max_pending_llm_jobs",
+    "message_rate_limit",
+    # Monitoring
+    "price_change_threshold", "volatility_threshold",
+    "rebalance_cooldown_seconds", "market_etfs",
+    # Providers
+    "broker_provider", "market_data_provider", "realtime_data_provider",
+    "news_providers", "message_provider",
+    # Endpoints / non-secret connection info (readable)
+    "alpaca_base_url", "telegram_chat_id",
+    # LLM endpoints (agent-specific params like llm_model are in /api/agent/config)
+    "llm_base_url",
+    "news_llm_base_url", "news_llm_model",
+    # Rebalance execution
+    "rebalance_min_value_threshold", "rebalance_min_pct_threshold",
+    "rebalance_buy_reserve_ratio", "rebalance_weight_diff_threshold",
+    "rebalance_order_delay_seconds", "cash_keywords",
+    # NOTE: bl_* and ca_* params are managed via /api/agent/config
+    # API / infra
+    "api_host", "api_port", "api_cors_origins",
+    # General
+    "environment", "log_level", "log_to_file",
 ]
+
+# 密钥字段 — 只写不读：PATCH 时接受明文新值，GET 时不返回
+_WRITE_ONLY_FIELDS = frozenset({
+    "alpaca_api_key", "alpaca_secret_key",
+    "tiingo_api_key", "finnhub_api_key",
+    "unusual_whales_api_key",
+    "llm_api_key", "news_llm_api_key",
+    "telegram_bot_token",
+})
+
+# 绝不可通过 API 读写的字段
+_FORBIDDEN_FIELDS = frozenset({
+    "database_url", "data_dir",
+    "auth_username", "auth_password_hash",
+    "jwt_secret_key", "jwt_algorithm", "jwt_expire_minutes",
+})
 
 
 class SettingsUpdate(BaseModel):
-    """可更新的配置子集（运行时可安全修改的参数）"""
+    """
+    可更新的配置 — 所有非禁止的运行时参数。
+
+    所有字段均为 Optional，只发送需要修改的字段即可。
+    密钥字段为只写：提交明文新值即可更新，空字符串表示不修改。
+    """
+    # Trading
+    paper_trading: Optional[bool] = None
+    max_position_size: Optional[float] = None
+    max_positions: Optional[int] = None
+    rebalance_time: Optional[str] = None
+    eod_analysis_time: Optional[str] = None
+    trading_timezone: Optional[str] = None
+    exchange: Optional[str] = None
+    # Risk
+    risk_management_enabled: Optional[bool] = None
     stop_loss_percentage: Optional[float] = None
     take_profit_percentage: Optional[float] = None
     daily_loss_limit_percentage: Optional[float] = None
     max_position_concentration: Optional[float] = None
     portfolio_pnl_alert_threshold: Optional[float] = None
     position_loss_alert_threshold: Optional[float] = None
+    # Scheduling
+    portfolio_check_interval: Optional[int] = None
+    risk_check_interval: Optional[int] = None
+    min_workflow_interval_minutes: Optional[int] = None
+    scheduler_misfire_grace_time: Optional[int] = None
+    max_pending_llm_jobs: Optional[int] = None
+    message_rate_limit: Optional[float] = None
+    # Monitoring
     price_change_threshold: Optional[float] = None
     volatility_threshold: Optional[float] = None
-    min_workflow_interval_minutes: Optional[int] = None
+    rebalance_cooldown_seconds: Optional[int] = None
+    market_etfs: Optional[str] = None
+    # Providers
+    broker_provider: Optional[str] = None
+    market_data_provider: Optional[str] = None
+    realtime_data_provider: Optional[str] = None
+    news_providers: Optional[str] = None
+    message_provider: Optional[str] = None
+    # API Keys (BYO key)
+    alpaca_api_key: Optional[str] = None
+    alpaca_secret_key: Optional[str] = None
+    alpaca_base_url: Optional[str] = None
+    tiingo_api_key: Optional[str] = None
+    finnhub_api_key: Optional[str] = None
+    unusual_whales_api_key: Optional[str] = None
+    telegram_bot_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+    # LLM (agent-specific params like llm_model are in /api/agent/config)
+    llm_base_url: Optional[str] = None
+    llm_api_key: Optional[str] = None
+    news_llm_base_url: Optional[str] = None
+    news_llm_api_key: Optional[str] = None
+    news_llm_model: Optional[str] = None
+    # Rebalance execution
+    rebalance_min_value_threshold: Optional[float] = None
+    rebalance_min_pct_threshold: Optional[float] = None
+    rebalance_buy_reserve_ratio: Optional[float] = None
+    rebalance_weight_diff_threshold: Optional[float] = None
+    rebalance_order_delay_seconds: Optional[float] = None
+    cash_keywords: Optional[str] = None
+    # NOTE: bl_* and ca_* params are managed via /api/agent/config
+    # API / infra
+    api_cors_origins: Optional[str] = None
+    # General
+    environment: Optional[str] = None
+    log_level: Optional[str] = None
+    log_to_file: Optional[bool] = None
+
+
+def _build_readable_dict() -> dict:
+    """构建可读配置字典 — 密钥字段不包含在内"""
+    result = {}
+    for field in _READABLE_FIELDS:
+        result[field] = getattr(settings, field, None)
+    return result
 
 
 @router.get("/settings")
 async def get_settings():
-    """获取当前配置（安全字段）"""
-    return {field: getattr(settings, field) for field in _READABLE_FIELDS}
+    """获取当前配置 — 密钥字段不返回"""
+    return _build_readable_dict()
 
 
 @router.patch("/settings")
@@ -53,14 +159,23 @@ async def update_settings(update: SettingsUpdate):
 
     注意：仅修改内存中的值，不持久化到 .env 文件。
     重启后恢复为 .env / 环境变量中的值。
+    密钥字段为只写：提交非空明文新值即可更新。
     """
     updated = {}
     for field, value in update.model_dump(exclude_none=True).items():
+        if field in _FORBIDDEN_FIELDS:
+            continue
+        # 密钥字段：空字符串视为"不修改"
+        if field in _WRITE_ONLY_FIELDS:
+            if not isinstance(value, str) or not value.strip():
+                continue
+            value = value.strip()
         if hasattr(settings, field):
             setattr(settings, field, value)
-            updated[field] = value
+            # 密钥字段更新成功后只返回确认，不回显值
+            updated[field] = "(updated)" if field in _WRITE_ONLY_FIELDS else value
 
     return {
         "updated": updated,
-        "current": {field: getattr(settings, field) for field in _READABLE_FIELDS},
+        "current": _build_readable_dict(),
     }

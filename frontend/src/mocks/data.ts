@@ -633,31 +633,62 @@ export const mockWorkflows: Record<string, WorkflowInfo> = {
 // ========== Settings ==========
 
 export const mockSettings: TradingSettings = {
+  // Trading
   paper_trading: true,
   max_position_size: 0.1,
   max_positions: 10,
   rebalance_time: '09:30',
   eod_analysis_time: '16:05',
+  workflow_type: 'llm_portfolio',
+  trading_timezone: 'US/Eastern',
+  exchange: 'XNYS',
+  // Risk
+  risk_management_enabled: true,
   stop_loss_percentage: 0.05,
   take_profit_percentage: 0.15,
   daily_loss_limit_percentage: 0.1,
   max_position_concentration: 0.25,
   portfolio_pnl_alert_threshold: 0.05,
   position_loss_alert_threshold: 0.1,
-  price_change_threshold: 5.0,
-  volatility_threshold: 8.0,
+  // Scheduling
   portfolio_check_interval: 60,
   risk_check_interval: 15,
   min_workflow_interval_minutes: 30,
-  workflow_type: 'llm_portfolio',
-  trading_timezone: 'US/Eastern',
-  exchange: 'XNYS',
+  scheduler_misfire_grace_time: 60,
+  max_pending_llm_jobs: 5,
+  message_rate_limit: 1.0,
+  // Monitoring
+  price_change_threshold: 5.0,
+  volatility_threshold: 8.0,
+  rebalance_cooldown_seconds: 3600,
+  market_etfs: 'SPY,QQQ,IWM',
+  // Providers
   broker_provider: 'alpaca',
   market_data_provider: 'tiingo',
+  realtime_data_provider: 'finnhub',
   news_providers: 'tiingo,finnhub',
-  llm_model: 'gpt-4o',
-  llm_recursion_limit: 64,
+  message_provider: 'telegram',
+  // Endpoints / non-secret connection info
+  alpaca_base_url: 'https://paper-api.alpaca.markets',
+  telegram_chat_id: '123456789',
+  // LLM
+  llm_base_url: 'https://api.openai.com/v1',
+  news_llm_base_url: null,
+  news_llm_model: null,
+  // Execution
+  rebalance_min_value_threshold: 20.0,
+  rebalance_min_pct_threshold: 1.0,
+  rebalance_buy_reserve_ratio: 0.95,
+  rebalance_weight_diff_threshold: 0.02,
+  rebalance_order_delay_seconds: 1.0,
+  cash_keywords: 'CASH,USD,DOLLAR',
+  // Infra
+  api_host: '0.0.0.0',
+  api_port: 8000,
+  api_cors_origins: 'http://localhost:5173,http://localhost:3000',
   environment: 'development',
+  log_level: 'INFO',
+  log_to_file: true,
 };
 
 // ========== Backtest Results ==========

@@ -1,47 +1,25 @@
-# Python cache files
+# Python cache
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
 *.egg-info/
-.installed.cfg
 *.egg
-MANIFEST
 
 # Virtual environments
+.venv/
 venv/
 env/
-ENV/
-env.bak/
-venv.bak/
 
-# IDE files
+# IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
-*~
 
-# OS files
+# OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
 Thumbs.db
 
 # Git
@@ -49,85 +27,40 @@ Thumbs.db
 .gitignore
 .gitattributes
 
-# Docker files
+# Docker
 Dockerfile
-docker-compose.yml
+docker-compose*.yml
 .dockerignore
 
-# Documentation
+# Docs
 *.md
 docs/
 
-# Environment files
+# Environment (secrets)
 .env
 .env.*
 env.template
 
-# Logs
+# Logs & data (runtime)
 logs/
 *.log
-
-# Data directories
+user_data/
 data/
 backups/
 
-# Temporary files
-tmp/
-temp/
-
-# Test files
+# Test
 tests/
-test_*
-*_test.py
 pytest.ini
 .pytest_cache/
-
-# Coverage reports
 htmlcov/
-.tox/
 .coverage
 .coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Frontend — only keep source for build stage; exclude node_modules & dist
+frontend/node_modules/
+frontend/dist/
 
-# pyenv
-.python-version
-
-# pipenv
-Pipfile.lock
-
-# celery beat schedule file
-celerybeat-schedule
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
+# Misc
+tmp/
+temp/
 .mypy_cache/
-.dmypy.json
-dmypy.json 
