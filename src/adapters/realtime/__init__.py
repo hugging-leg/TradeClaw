@@ -10,3 +10,4 @@ from src.adapters.realtime.finnhub_realtime import FinnhubRealtimeAdapter
 
 __all__ = ["FinnhubRealtimeAdapter"]
 
+

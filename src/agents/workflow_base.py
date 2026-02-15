@@ -11,7 +11,6 @@ Trading Workflow 基类
 from src.utils.logging_config import get_logger
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional, List
-from datetime import datetime
 
 from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
@@ -21,6 +20,7 @@ from src.interfaces.factory import (
 )
 from src.messaging.message_manager import MessageManager
 from src.models.trading_models import TradingDecision, Portfolio
+from src.utils.timezone import utc_now, format_for_display
 
 logger = get_logger(__name__)
 
@@ -66,18 +66,23 @@ class WorkflowBase(ABC):
     @abstractmethod
     async def run_workflow(
         self,
-        trigger_reason: str = "scheduled",
-        **kwargs
-    ) -> TradingDecision:
+        initial_context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         """
         执行工作流
 
         Args:
-            trigger_reason: 触发原因
-            **kwargs: 其他参数
+            initial_context: 初始上下文字典，通常包含:
+                - trigger: 触发原因 (str)
+                - timestamp: 触发时间 (str, ISO format)
+                - 其他触发器特定的数据
 
         Returns:
-            TradingDecision
+            执行结果字典，通常包含:
+                - success: bool
+                - decision: TradingDecision 或 None
+                - execution_time: float
+                - workflow_type: str
         """
         pass
 
@@ -138,7 +143,7 @@ class WorkflowBase(ABC):
     def update_stats(self, success: bool, error: Optional[str] = None):
         """更新统计"""
         self.stats['total_runs'] += 1
-        self.stats['last_run'] = datetime.now().isoformat()
+        self.stats['last_run'] = utc_now().isoformat()
 
         if success:
             self.stats['successful_runs'] += 1
@@ -150,12 +155,12 @@ class WorkflowBase(ABC):
 
     def _generate_workflow_id(self) -> str:
         """生成工作流 ID"""
-        return f"{self.get_workflow_type()}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        return f"{self.get_workflow_type()}_{utc_now().strftime('%Y%m%d_%H%M%S')}"
 
     async def send_workflow_start_notification(self, workflow_name: str):
         """发送工作流开始通知"""
         message = f"🚀 **{workflow_name} Workflow Started**\n\n"
-        message += f"Starting AI trading analysis at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        message += f"Starting AI trading analysis at {format_for_display(utc_now())}"
         await self.send_notification(message, "info")
 
     async def send_workflow_complete_notification(self, workflow_name: str, execution_time: float):

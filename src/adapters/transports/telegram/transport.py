@@ -7,7 +7,7 @@ Telegram Transport - 纯消息发送层
 import asyncio
 from src.utils.logging_config import get_logger
 from typing import Optional, Dict, Any
-from datetime import datetime
+from src.utils.timezone import utc_now
 
 from aiolimiter import AsyncLimiter
 from telegram import Bot
@@ -216,7 +216,7 @@ class TelegramTransport(MessageTransport):
     def _on_success(self):
         """成功发送后更新统计"""
         self._stats['sent'] += 1
-        self._stats['last_sent'] = datetime.now()
+        self._stats['last_sent'] = utc_now()
 
     # MessageTransport 接口方法
 

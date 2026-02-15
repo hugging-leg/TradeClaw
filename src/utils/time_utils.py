@@ -3,12 +3,13 @@
 
 注意：
 - 禁止简化！必须使用 exchange_calendars 检查节假日
-- 所有时间操作都应该是时区感知的
-- 服务器时区可能与交易时区不同，必须显式转换
+- 所有内部时间一律使用 UTC aware datetime
+- 服务器时区不确定，禁止使用 datetime.now() (naive)
+- 交易时区仅用于交易日历查询和展示
 """
 
 from src.utils.logging_config import get_logger
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 import pytz
 
@@ -124,15 +125,18 @@ def is_trading_day(
         RuntimeError: 如果无法获取交易日历
     """
     tz = pytz.timezone(timezone)
-    check_dt = dt or datetime.now(tz)
+    check_dt = dt or datetime.now(pytz.UTC)
 
     # 确保时区感知
     if check_dt.tzinfo is None:
-        check_dt = tz.localize(check_dt)
+        check_dt = check_dt.replace(tzinfo=pytz.UTC)
+
+    # 转换到交易时区以获取正确日期
+    check_dt_local = check_dt.astimezone(tz)
 
     try:
         calendar = get_calendar(exchange)
-        return calendar.is_session(check_dt.date())
+        return calendar.is_session(check_dt_local.date())
     except Exception as e:
         logger.error(f"检查交易日失败: {e}")
         raise RuntimeError(f"无法确定是否为交易日: {e}") from e
@@ -147,7 +151,7 @@ def is_market_open(
     检查市场是否开放
 
     Args:
-        dt: 要检查的日期时间（默认当前时间）
+        dt: 要检查的日期时间（默认当前 UTC 时间）
         exchange: 交易所代码
         timezone: 时区
 
@@ -157,12 +161,11 @@ def is_market_open(
     Raises:
         RuntimeError: 如果无法获取交易日历
     """
-    tz = pytz.timezone(timezone)
-    check_dt = dt or datetime.now(tz)
+    check_dt = dt or datetime.now(pytz.UTC)
 
     # 确保时区感知
     if check_dt.tzinfo is None:
-        check_dt = tz.localize(check_dt)
+        check_dt = check_dt.replace(tzinfo=pytz.UTC)
 
     try:
         calendar = get_calendar(exchange)
@@ -193,14 +196,17 @@ def get_next_trading_day(
         RuntimeError: 如果无法获取交易日历
     """
     tz = pytz.timezone(timezone)
-    check_dt = dt or datetime.now(tz)
+    check_dt = dt or datetime.now(pytz.UTC)
 
     if check_dt.tzinfo is None:
-        check_dt = tz.localize(check_dt)
+        check_dt = check_dt.replace(tzinfo=pytz.UTC)
+
+    # 转换到交易时区以获取正确日期
+    check_dt_local = check_dt.astimezone(tz)
 
     try:
         calendar = get_calendar(exchange)
-        check_date = pd.Timestamp(check_dt.date())
+        check_date = pd.Timestamp(check_dt_local.date())
 
         # 查找大于当前日期的所有交易日
         future_sessions = calendar.sessions[calendar.sessions > check_date]
@@ -210,7 +216,8 @@ def get_next_trading_day(
 
         next_session = future_sessions[0]
         result_dt = datetime.combine(next_session.date(), datetime.min.time())
-        return tz.localize(result_dt)
+        # 返回 UTC aware datetime
+        return tz.localize(result_dt).astimezone(pytz.UTC)
     except Exception as e:
         logger.error(f"获取下一个交易日失败: {e}")
         raise RuntimeError(f"无法获取下一个交易日: {e}") from e
@@ -235,21 +242,19 @@ def get_next_market_open(
     Raises:
         RuntimeError: 如果无法获取交易日历
     """
-    tz = pytz.timezone(timezone)
-    check_dt = dt or datetime.now(tz)
+    check_dt = dt or datetime.now(pytz.UTC)
 
     if check_dt.tzinfo is None:
-        check_dt = tz.localize(check_dt)
+        check_dt = check_dt.replace(tzinfo=pytz.UTC)
 
     try:
         calendar = get_calendar(exchange)
-        # 正确创建 UTC 时间戳
         utc_dt = check_dt.astimezone(pytz.UTC)
         ts = pd.Timestamp(utc_dt.replace(tzinfo=None), tz='UTC')
 
         next_open = calendar.next_open(ts)
-        # 转换回目标时区
-        return next_open.tz_convert(timezone).to_pydatetime()
+        # 返回 UTC aware datetime
+        return next_open.tz_convert('UTC').to_pydatetime()
     except Exception as e:
         logger.error(f"获取下一个市场开放时间失败: {e}")
         raise RuntimeError(f"无法获取下一个市场开放时间: {e}") from e
@@ -264,31 +269,29 @@ def get_next_market_close(
     获取下一个市场关闭时间
 
     Args:
-        dt: 起始日期时间（默认当前时间）
+        dt: 起始日期时间（默认当前 UTC 时间）
         exchange: 交易所代码
         timezone: 时区
 
     Returns:
-        下一个市场关闭时间（带时区）
+        下一个市场关闭时间（UTC aware）
 
     Raises:
         RuntimeError: 如果无法获取交易日历
     """
-    tz = pytz.timezone(timezone)
-    check_dt = dt or datetime.now(tz)
+    check_dt = dt or datetime.now(pytz.UTC)
 
     if check_dt.tzinfo is None:
-        check_dt = tz.localize(check_dt)
+        check_dt = check_dt.replace(tzinfo=pytz.UTC)
 
     try:
         calendar = get_calendar(exchange)
-        # 正确创建 UTC 时间戳
         utc_dt = check_dt.astimezone(pytz.UTC)
         ts = pd.Timestamp(utc_dt.replace(tzinfo=None), tz='UTC')
 
         next_close = calendar.next_close(ts)
-        # 转换回目标时区
-        return next_close.tz_convert(timezone).to_pydatetime()
+        # 返回 UTC aware datetime
+        return next_close.tz_convert('UTC').to_pydatetime()
     except Exception as e:
         logger.error(f"获取下一个市场关闭时间失败: {e}")
         raise RuntimeError(f"无法获取下一个市场关闭时间: {e}") from e
@@ -304,13 +307,13 @@ def calculate_next_trading_day_time(
     计算下一个交易日的指定时间
 
     Args:
-        hour: 目标小时 (0-23)
-        minute: 目标分钟 (0-59)
-        timezone: 时区对象（默认使用配置）
+        hour: 目标小时 (0-23)，交易时区
+        minute: 目标分钟 (0-59)，交易时区
+        timezone: 时区对象（默认使用配置），用于确定交易日的本地时间
         exchange: 交易所代码（默认使用配置）
 
     Returns:
-        下一个交易日的指定时间（时区感知）
+        下一个交易日的指定时间（UTC aware datetime）
 
     Raises:
         RuntimeError: 如果无法获取交易日历
@@ -319,11 +322,13 @@ def calculate_next_trading_day_time(
         timezone = pytz.timezone(get_default_timezone())
     exchange = exchange or get_default_exchange()
 
-    now = datetime.now(timezone)
-    target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    # 在交易时区中计算目标时间
+    now_utc = datetime.now(pytz.UTC)
+    now_local = now_utc.astimezone(timezone)
+    target = now_local.replace(hour=hour, minute=minute, second=0, microsecond=0)
 
     # 如果今天的目标时间已过，从明天开始
-    if target <= now:
+    if target <= now_local:
         target += timedelta(days=1)
 
     try:
@@ -333,7 +338,8 @@ def calculate_next_trading_day_time(
         while not calendar.is_session(target.date()):
             target += timedelta(days=1)
 
-        return target
+        # 返回 UTC aware datetime
+        return target.astimezone(pytz.UTC)
 
     except Exception as e:
         logger.error(f"计算下一个交易日时间失败: {e}")
@@ -351,12 +357,12 @@ def calculate_next_interval(
 
     Args:
         interval_minutes: 间隔分钟数
-        timezone: 时区对象（默认使用配置）
+        timezone: 时区对象（默认使用配置），用于对齐市场时间
         market_hours_only: 是否只在市场时间内
         exchange: 交易所代码（默认使用配置）
 
     Returns:
-        下一个间隔时间点
+        下一个间隔时间点（UTC aware datetime）
 
     Raises:
         RuntimeError: 如果无法获取交易日历
@@ -364,40 +370,41 @@ def calculate_next_interval(
     if timezone is None:
         timezone = pytz.timezone(get_default_timezone())
     exchange = exchange or get_default_exchange()
-    now = datetime.now(timezone)
 
-    # 计算下一个间隔
+    now_utc = datetime.now(pytz.UTC)
+    now_local = now_utc.astimezone(timezone)
+
+    # 在交易时区中计算下一个间隔
     if interval_minutes >= 60:
         hours_interval = interval_minutes // 60
-        next_time = (now + timedelta(hours=hours_interval)).replace(
+        next_time = (now_local + timedelta(hours=hours_interval)).replace(
             minute=30, second=0, microsecond=0
         )
     else:
-        minutes = ((now.minute // interval_minutes) + 1) * interval_minutes
+        minutes = ((now_local.minute // interval_minutes) + 1) * interval_minutes
         if minutes >= 60:
-            next_time = (now + timedelta(hours=1)).replace(
+            next_time = (now_local + timedelta(hours=1)).replace(
                 minute=0, second=0, microsecond=0
             )
         else:
-            next_time = now.replace(minute=minutes, second=0, microsecond=0)
+            next_time = now_local.replace(minute=minutes, second=0, microsecond=0)
 
     if not market_hours_only:
-        return next_time
+        return next_time.astimezone(pytz.UTC)
 
     # 检查是否在市场时间内
     try:
         calendar = get_calendar(exchange)
-        # 正确创建 UTC 时间戳
         utc_dt = next_time.astimezone(pytz.UTC)
         ts = pd.Timestamp(utc_dt.replace(tzinfo=None), tz='UTC')
 
         if calendar.is_open_on_minute(ts):
-            return next_time
+            return next_time.astimezone(pytz.UTC)
         else:
             # 返回下一个市场开放后 30 分钟
             next_open = calendar.next_open(ts)
             result = (next_open + pd.Timedelta(minutes=30))
-            return result.tz_convert(str(timezone)).to_pydatetime()
+            return result.tz_convert('UTC').to_pydatetime()
 
     except Exception as e:
         logger.error(f"计算下一个间隔时间失败: {e}")

@@ -12,7 +12,7 @@
 import asyncio
 from src.utils.logging_config import get_logger
 from typing import Dict, Any, Optional, Callable, Awaitable, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 from enum import Enum
 import pytz
@@ -267,18 +267,22 @@ class TradingScheduler:
             是否添加成功
         """
         try:
-            # 计算执行时间
+            # 计算执行时间（统一使用 UTC）
+            now_utc = datetime.now(pytz.UTC)
             if run_at:
                 run_time = run_at
+                # 确保是 aware datetime
+                if run_time.tzinfo is None:
+                    run_time = run_time.replace(tzinfo=pytz.UTC)
             elif delay_hours is not None:
-                run_time = datetime.now(self.timezone) + timedelta(hours=delay_hours)
+                run_time = now_utc + timedelta(hours=delay_hours)
             elif delay_seconds is not None:
-                run_time = datetime.now(self.timezone) + timedelta(seconds=delay_seconds)
+                run_time = now_utc + timedelta(seconds=delay_seconds)
             else:
                 raise ValueError("必须指定 delay_seconds, delay_hours 或 run_at")
 
             # 如果要求交易日，调整到下一个交易日
-            if require_trading_day and self._calendar:
+            if require_trading_day:
                 run_time = self._adjust_to_trading_day(run_time)
 
             # 包装函数
@@ -530,7 +534,7 @@ class TradingScheduler:
         execution_record = {
             'job_id': event.job_id,
             'scheduled_time': event.scheduled_run_time.isoformat() if event.scheduled_run_time else None,
-            'executed_at': datetime.now(self.timezone).isoformat(),
+            'executed_at': datetime.now(pytz.UTC).isoformat(),
             'success': event.exception is None,
             'error': str(event.exception) if event.exception else None
         }

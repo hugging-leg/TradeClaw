@@ -14,12 +14,12 @@
 
 from src.utils.logging_config import get_logger
 from typing import Optional, List, Dict, Any
-from datetime import datetime
 from decimal import Decimal
 
 from src.interfaces.broker_api import BrokerAPI
 from src.messaging.message_manager import MessageManager
 from src.models.trading_models import Portfolio, Position, Order, OrderSide, OrderType, TimeInForce
+from src.utils.timezone import utc_now
 from config import settings
 
 logger = get_logger(__name__)
@@ -67,9 +67,10 @@ class RiskManager:
         self.daily_loss_limit_pct = self._normalize_pct(daily_loss_limit_pct or settings.daily_loss_limit_percentage)
         self.max_position_concentration = self._normalize_pct(max_position_concentration or settings.max_position_concentration)
 
-        # 统计
+        # 统计（限制最大事件数避免内存泄漏）
         self.risk_events: List[Dict[str, Any]] = []
-        self.last_check: Optional[datetime] = None
+        self._max_risk_events = 200
+        self.last_check = None
 
         logger.info(
             f"RiskManager 初始化: 止损={self.stop_loss_pct:.1%}, "
@@ -93,7 +94,7 @@ class RiskManager:
         Returns:
             风险检查结果
         """
-        self.last_check = datetime.now()
+        self.last_check = utc_now()
         results = {
             "timestamp": self.last_check.isoformat(),
             "stop_loss_triggered": [],
@@ -143,7 +144,7 @@ class RiskManager:
                         "concentration": concentration
                     })
 
-            # 记录事件
+            # 记录事件（限制列表大小）
             if any([
                 results["stop_loss_triggered"],
                 results["take_profit_triggered"],
@@ -151,6 +152,8 @@ class RiskManager:
                 results["concentration_warnings"]
             ]):
                 self.risk_events.append(results)
+                if len(self.risk_events) > self._max_risk_events:
+                    self.risk_events = self.risk_events[-self._max_risk_events:]
 
             return results
 
@@ -176,26 +179,27 @@ class RiskManager:
                 message_type="warning"
             )
 
-            # 平仓
+            # 构建 Order 对象并提交
             side = OrderSide.SELL if position.quantity > 0 else OrderSide.BUY
-            order = await self.broker_api.submit_order(
+            order = Order(
                 symbol=position.symbol,
                 side=side,
-                quantity=abs(position.quantity),
                 order_type=OrderType.MARKET,
+                quantity=abs(position.quantity),
                 time_in_force=TimeInForce.DAY
             )
+            order_id = await self.broker_api.submit_order(order)
 
-            if order:
+            if order_id:
                 await self.message_manager.send_message(
                     f"✅ 止损订单已提交: {position.symbol}\n"
-                    f"订单ID: {order.id}",
+                    f"订单ID: {order_id}",
                     message_type="info"
                 )
                 return {
                     "type": "stop_loss",
                     "symbol": position.symbol,
-                    "order_id": order.id
+                    "order_id": order_id
                 }
 
         except Exception as e:
@@ -224,26 +228,27 @@ class RiskManager:
                 message_type="info"
             )
 
-            # 平仓
+            # 构建 Order 对象并提交
             side = OrderSide.SELL if position.quantity > 0 else OrderSide.BUY
-            order = await self.broker_api.submit_order(
+            order = Order(
                 symbol=position.symbol,
                 side=side,
-                quantity=abs(position.quantity),
                 order_type=OrderType.MARKET,
+                quantity=abs(position.quantity),
                 time_in_force=TimeInForce.DAY
             )
+            order_id = await self.broker_api.submit_order(order)
 
-            if order:
+            if order_id:
                 await self.message_manager.send_message(
                     f"✅ 止盈订单已提交: {position.symbol}\n"
-                    f"订单ID: {order.id}",
+                    f"订单ID: {order_id}",
                     message_type="info"
                 )
                 return {
                     "type": "take_profit",
                     "symbol": position.symbol,
-                    "order_id": order.id
+                    "order_id": order_id
                 }
 
         except Exception as e:

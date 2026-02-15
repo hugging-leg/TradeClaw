@@ -17,6 +17,8 @@ from typing import Dict, List, Any, Optional, Union
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from src.utils.timezone import utc_now, format_for_display
+
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
@@ -133,7 +135,7 @@ class SequentialWorkflow(WorkflowBase):
         """
         try:
             self.workflow_id = self._generate_workflow_id()
-            self.start_time = datetime.now()
+            self.start_time = utc_now()
             
             # Send start notification
             await self.send_workflow_start_notification("Sequential")
@@ -141,7 +143,7 @@ class SequentialWorkflow(WorkflowBase):
             # Initialize context
             context = initial_context or {}
             context.setdefault("trigger", "manual")
-            context.setdefault("timestamp", datetime.now().isoformat())
+            context.setdefault("timestamp", utc_now().isoformat())
             context.setdefault("workflow_type", "sequential")
             
             # Create initial state
@@ -157,7 +159,7 @@ class SequentialWorkflow(WorkflowBase):
             result = await self.workflow.ainvoke(initial_state)
             
             # Calculate execution time
-            self.end_time = datetime.now()
+            self.end_time = utc_now()
             execution_time = (self.end_time - self.start_time).total_seconds()
             
             # Send completion notification

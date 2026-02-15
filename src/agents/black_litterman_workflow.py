@@ -46,6 +46,7 @@ from src.models.trading_models import (
 )
 from src.utils.llm_utils import create_llm_client
 from src.utils.db_utils import check_db_available, DB_AVAILABLE, get_trading_repository
+from src.utils.timezone import utc_now, format_for_display
 
 logger = get_logger(__name__)
 
@@ -110,7 +111,7 @@ class BlackLittermanWorkflow(WorkflowBase):
         news_api: NewsAPI = None,
         message_manager: MessageManager = None,
         universe: List[str] = None,
-        risk_aversion: float = 2.5,
+        risk_aversion: float = None,
         session_id: str = "bl_agent"
     ):
         """
@@ -118,7 +119,7 @@ class BlackLittermanWorkflow(WorkflowBase):
 
         Args:
             universe: 资产池列表
-            risk_aversion: 风险厌恶系数 (delta)，默认 2.5
+            risk_aversion: 风险厌恶系数 (delta)，默认从配置读取
             session_id: 会话 ID
         """
         super().__init__(broker_api, market_data_api, news_api, message_manager)
@@ -129,7 +130,7 @@ class BlackLittermanWorkflow(WorkflowBase):
             )
 
         self.universe = universe or self.DEFAULT_UNIVERSE
-        self.risk_aversion = risk_aversion
+        self.risk_aversion = risk_aversion if risk_aversion is not None else settings.bl_risk_aversion
         self.session_id = session_id
 
         self.llm = create_llm_client()
@@ -300,12 +301,14 @@ class BlackLittermanWorkflow(WorkflowBase):
             generate_investment_views
         ]
 
-    async def _fetch_historical_prices(self, days: int = 252) -> pd.DataFrame:
+    async def _fetch_historical_prices(self, days: int = None) -> pd.DataFrame:
         """获取历史价格数据"""
         from datetime import datetime, timedelta
         
+        if days is None:
+            days = settings.bl_historical_days
         prices_dict = {}
-        end_date = datetime.now()
+        end_date = utc_now()
         start_date = end_date - timedelta(days=days + 30)  # 多取 30 天以确保足够数据
 
         for symbol in self.universe:
@@ -413,7 +416,7 @@ class BlackLittermanWorkflow(WorkflowBase):
 
         # Omega: 观点不确定性矩阵（对角矩阵）
         # 不确定性 = (1 - confidence) * 基础方差
-        base_variance = 0.05  # 基础方差
+        base_variance = settings.bl_base_variance
         omega_diag = []
         for symbol in views.keys():
             conf = confidences.get(symbol, 0.5)
@@ -444,7 +447,7 @@ class BlackLittermanWorkflow(WorkflowBase):
         )
 
         # 获取历史数据
-        prices = await self._fetch_historical_prices(days=252)
+        prices = await self._fetch_historical_prices()
         available_assets = list(prices.columns)
 
         # 过滤观点，只保留可用资产
@@ -489,7 +492,7 @@ class BlackLittermanWorkflow(WorkflowBase):
             "posterior_returns": posterior_returns.to_dict(),
             "views": filtered_views,
             "weights": weights_dict,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": utc_now().isoformat()
         }
 
         return weights_dict
@@ -522,7 +525,7 @@ class BlackLittermanWorkflow(WorkflowBase):
         # 计算需要的交易
         trades = []
         for symbol, target_weight in target_weights.items():
-            if target_weight < 0.01:  # 忽略小于 1% 的配置
+            if target_weight < settings.bl_min_weight:  # 忽略小于配置阈值的配置
                 continue
 
             current_weight = current_positions.get(symbol, 0)
@@ -620,7 +623,7 @@ class BlackLittermanWorkflow(WorkflowBase):
 {self.history_summary if self.history_summary else "无（首次分析）"}
 
 **本次 Black-Litterman 分析：**
-- 时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+- 时间: {format_for_display(utc_now())}
 - 投资观点: {json.dumps(views, ensure_ascii=False) if views else '无'}
 - 优化后权重: {json.dumps(weights, ensure_ascii=False) if weights else '无'}
 - 分析推理: {reasoning[:500] if reasoning else '无'}
@@ -655,7 +658,7 @@ class BlackLittermanWorkflow(WorkflowBase):
         """
         try:
             self.workflow_id = self._generate_workflow_id()
-            self.start_time = datetime.now()
+            self.start_time = utc_now()
 
             context = initial_context or {}
             trigger = context.get("trigger", "manual")
@@ -676,7 +679,7 @@ class BlackLittermanWorkflow(WorkflowBase):
             unique_thread_id = f"{self.session_id}_{self.workflow_id}"
             config = {
                 "configurable": {"thread_id": unique_thread_id},
-                "recursion_limit": 64
+                "recursion_limit": settings.llm_recursion_limit
             }
 
             # 构建包含历史摘要的 prompt
@@ -726,7 +729,7 @@ class BlackLittermanWorkflow(WorkflowBase):
             weights_str = "\n".join([
                 f"  • {sym}: {w * 100:.1f}%"
                 for sym, w in sorted(optimal_weights.items(), key=lambda x: -x[1])
-                if w >= 0.01
+                if w >= settings.bl_min_weight
             ])
 
             await self.message_manager.send_message(
@@ -738,7 +741,7 @@ class BlackLittermanWorkflow(WorkflowBase):
             trade_results = await self._execute_rebalance(optimal_weights)
 
             # 计算执行时间
-            self.end_time = datetime.now()
+            self.end_time = utc_now()
             execution_time = (self.end_time - self.start_time).total_seconds()
 
             # 保存到数据库

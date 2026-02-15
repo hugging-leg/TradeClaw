@@ -10,8 +10,9 @@ templating, queuing, and routing messages to appropriate transports.
 import asyncio
 from src.utils.logging_config import get_logger
 from typing import Dict, List, Any, Optional
-from datetime import datetime
 from decimal import Decimal
+
+from src.utils.timezone import utc_now, format_for_display
 
 from tenacity import (
     retry,
@@ -23,6 +24,7 @@ from aiolimiter import AsyncLimiter
 
 from src.interfaces.message_transport import MessageTransport, MessageFormat
 from src.models.trading_models import Order, Portfolio, Position, TradingEvent
+from config import settings
 from src.utils.string_utils import safe_format_text
 from src.utils.message_formatters import (
     format_alert_message,
@@ -38,8 +40,8 @@ from src.utils.message_formatters import (
 
 logger = get_logger(__name__)
 
-# Telegram 速率限制：每秒 1 条消息
-MESSAGE_RATE_LIMITER = AsyncLimiter(1, 1.0)
+# 消息速率限制（从配置读取）
+MESSAGE_RATE_LIMITER = AsyncLimiter(settings.message_rate_limit, 1.0)
 
 
 class MessageManager:
@@ -69,6 +71,7 @@ class MessageManager:
         self.processing_task = None
         self.message_queue = asyncio.Queue()
         self.failed_messages = []
+        self._max_failed_messages = 100
         self.transport_initialized = False
 
         # 使用 aiolimiter 进行速率限制
@@ -227,7 +230,7 @@ class MessageManager:
         try:
             await _send()
             self.stats['total_sent'] += 1
-            self.stats['last_sent'] = datetime.now()
+            self.stats['last_sent'] = utc_now()
             logger.debug(f"消息发送成功: {message_type}")
 
         except Exception as e:
@@ -235,9 +238,12 @@ class MessageManager:
             self.stats['total_failed'] += 1
             self.failed_messages.append({
                 'message': message_data,
-                'failed_at': datetime.now(),
+                'failed_at': utc_now(),
                 'error': str(e)
             })
+            # 限制失败消息列表大小
+            if len(self.failed_messages) > self._max_failed_messages:
+                self.failed_messages = self.failed_messages[-self._max_failed_messages:]
     
 
     
@@ -406,7 +412,7 @@ class MessageManager:
 
 Trading analysis and execution workflow has completed successfully.
 
-📅 *Time*: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+📅 *Time*: {format_for_display(utc_now())}
             """
             
             await self._queue_message(completion_message.strip(), 'workflow_complete')
@@ -451,7 +457,7 @@ Trading analysis and execution workflow has completed successfully.
         message_data = {
             'text': message,
             'type': message_type,
-            'timestamp': datetime.now(),
+            'timestamp': utc_now(),
             'retries': 0
         }
         

@@ -4,7 +4,8 @@ from src.utils.logging_config import get_logger
 from typing import Dict, List, Any, Optional, Annotated
 from datetime import datetime, timedelta
 from decimal import Decimal
-import pytz
+
+from src.utils.timezone import utc_now, format_for_display
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain.tools import tool
@@ -82,18 +83,19 @@ class LLMPortfolioAgent(WorkflowBase):
         )
         
         # Agent 配置
-        self.agent_config = {"recursion_limit": 64}
+        self.agent_config = {"recursion_limit": settings.llm_recursion_limit}
         
         # 保存system prompt以便后续使用
         self.system_prompt = self._get_system_prompt()
         
-        # Agent状态
+        # Agent状态（限制内存历史大小）
         self.analysis_history = []
+        self._max_analysis_history = settings.llm_max_analysis_history
         self.last_analysis_time = None
         
         # 历史摘要
         self.history_summary = ""
-        self.max_summary_tokens = 1500  # 限制摘要长度
+        self.max_summary_tokens = settings.llm_max_summary_tokens
         
         # 数据持久化
         self._db_available = DB_AVAILABLE
@@ -377,7 +379,7 @@ class LLMPortfolioAgent(WorkflowBase):
                 )
                 
                 # 根据 timeframe 计算日期范围
-                end_date = datetime.now()
+                end_date = utc_now()
                 if timeframe in ["1Day", "1Week", "1Month"]:
                     # 日线/周线/月线用 EOD 接口
                     days_multiplier = {"1Day": 1, "1Week": 7, "1Month": 30}
@@ -968,7 +970,7 @@ class LLMPortfolioAgent(WorkflowBase):
         """
         try:
             self.workflow_id = self._generate_workflow_id()
-            self.start_time = datetime.now()
+            self.start_time = utc_now()
             
             context = initial_context or {}
             trigger = context.get("trigger", "manual")
@@ -982,7 +984,7 @@ class LLMPortfolioAgent(WorkflowBase):
             unique_thread_id = f"{self.session_id}_{self.workflow_id}"
             config = {
                 "configurable": {"thread_id": unique_thread_id},
-                "recursion_limit": 64
+                "recursion_limit": settings.llm_recursion_limit
             }
             
             result = await self.agent.ainvoke(
@@ -1024,7 +1026,7 @@ class LLMPortfolioAgent(WorkflowBase):
                 )
             
             # 计算执行时间
-            self.end_time = datetime.now()
+            self.end_time = utc_now()
             execution_time = (self.end_time - self.start_time).total_seconds()
             
             # 保存到数据库
@@ -1037,12 +1039,15 @@ class LLMPortfolioAgent(WorkflowBase):
             )
             
             # 记录到内存历史
-            self.last_analysis_time = datetime.now()
+            self.last_analysis_time = utc_now()
             self.analysis_history.append({
                 "timestamp": self.last_analysis_time.isoformat(),
                 "trigger": trigger,
                 "response": final_response
             })
+            # 限制内存历史大小
+            if len(self.analysis_history) > self._max_analysis_history:
+                self.analysis_history = self.analysis_history[-self._max_analysis_history:]
             
             # 更新历史摘要（类似 Cursor summarize）
             if final_response:
@@ -1119,7 +1124,7 @@ class LLMPortfolioAgent(WorkflowBase):
 {self.history_summary if self.history_summary else "无（首次分析）"}
 
 **本次分析：**
-- 时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+- 时间: {format_for_display(utc_now(), '%Y-%m-%d %H:%M %Z')}
 - 使用工具: {', '.join(tool_calls) if tool_calls else '无'}
 - 分析结论: {current_analysis[:1000] if current_analysis else '无'}
 

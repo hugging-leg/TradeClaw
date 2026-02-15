@@ -73,6 +73,7 @@ class Settings(BaseSettings):
     max_position_size: float = 0.1
     max_positions: int = 10
     rebalance_time: str = "09:30"
+    eod_analysis_time: str = "16:05"
     stop_loss_percentage: float = 0.05
     take_profit_percentage: float = 0.15
 
@@ -81,14 +82,51 @@ class Settings(BaseSettings):
     daily_loss_limit_percentage: float = 0.10
     max_position_concentration: float = 0.25
 
+    # === 告警阈值 ===
+    portfolio_pnl_alert_threshold: float = 0.05
+    position_loss_alert_threshold: float = 0.10
+
     # === 实时监控配置 ===
     price_change_threshold: float = 5.0
     volatility_threshold: float = 8.0
     rebalance_cooldown_seconds: int = 3600
+    market_etfs: str = "SPY,QQQ,IWM"
 
     # === 调度配置 ===
     portfolio_check_interval: int = 60
     risk_check_interval: int = 15
+    min_workflow_interval_minutes: int = 30
+    message_rate_limit: float = 1.0
+
+    # === LLM Agent 配置 ===
+    llm_recursion_limit: int = 64
+    llm_max_analysis_history: int = 50
+    llm_max_summary_tokens: int = 1500
+
+    # === 均衡组合策略配置 ===
+    balanced_target_positions: int = 5
+    balanced_target_percentage: float = 18.0
+    balanced_rebalance_threshold: float = 3.0
+    balanced_max_positions: int = 6
+
+    # === Black-Litterman 配置 ===
+    bl_risk_aversion: float = 2.5
+    bl_historical_days: int = 252
+    bl_base_variance: float = 0.05
+    bl_min_weight: float = 0.01
+
+    # === 认知套利配置 ===
+    ca_direct_min_score: int = 7
+    ca_direct_max_score: int = 10
+    ca_indirect_multiplier: float = 1.5
+    ca_min_confidence: int = 3
+    ca_score_window_days: int = 7
+    ca_top_k: int = 3
+    ca_default_holding_days: int = 7
+    ca_min_holding_days: int = 3
+    ca_max_holding_days: int = 14
+    ca_position_size_pct: float = 0.10
+    ca_max_positions: int = 5
 
     # === 环境配置 ===
     environment: str = "development"
@@ -121,6 +159,11 @@ class Settings(BaseSettings):
         if not self.news_providers:
             return ["tiingo"]
         return [p.strip() for p in self.news_providers.split(",") if p.strip()]
+
+    def get_market_etfs(self) -> list[str]:
+        if not self.market_etfs:
+            return ["SPY", "QQQ", "IWM"]
+        return [s.strip().upper() for s in self.market_etfs.split(",") if s.strip()]
 
     def get_news_llm_config(self) -> dict:
         """获取新闻过滤 LLM 配置（如果未配置则使用主 LLM）"""

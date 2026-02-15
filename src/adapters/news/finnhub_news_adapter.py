@@ -16,6 +16,7 @@ from config import settings
 from src.interfaces.news_api import NewsAPI
 from src.interfaces.factory import register_news
 from src.models.trading_models import NewsItem
+from src.utils.timezone import utc_now
 
 logger = get_logger(__name__)
 
@@ -65,8 +66,8 @@ class FinnhubNewsAdapter(NewsAPI):
 
     async def _get_company_news(self, symbol: str, limit: int) -> List[NewsItem]:
         """获取公司新闻"""
-        from_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-        to_date = datetime.now().strftime("%Y-%m-%d")
+        from_date = (utc_now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        to_date = utc_now().strftime("%Y-%m-%d")
 
         url = f"{self.API_URL}/company-news"
         params = {

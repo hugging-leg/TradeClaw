@@ -5,9 +5,11 @@
 """
 
 from src.utils.logging_config import get_logger
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import List, Optional, Dict, Any
 from decimal import Decimal
+
+from src.utils.timezone import utc_now
 
 from sqlalchemy import select, desc, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -172,9 +174,9 @@ class TradingRepository:
                 if error_message:
                     order.error_message = error_message
                 if status == 'filled':
-                    order.filled_at = datetime.utcnow()
+                    order.filled_at = utc_now()
                 elif status == 'cancelled':
-                    order.cancelled_at = datetime.utcnow()
+                    order.cancelled_at = utc_now()
                 logger.info(f"更新订单状态: {broker_order_id} -> {status}")
             return order
 
@@ -228,7 +230,7 @@ class TradingRepository:
     ) -> List[PortfolioSnapshot]:
         """获取组合历史"""
         async with get_db() as db:
-            since = datetime.utcnow() - timedelta(days=days)
+            since = utc_now() - timedelta(days=days)
             query = (
                 select(PortfolioSnapshot)
                 .where(PortfolioSnapshot.created_at >= since)

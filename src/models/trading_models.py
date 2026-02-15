@@ -1,14 +1,13 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field
 from decimal import Decimal
 from enum import Enum, IntEnum
-import pytz
 
 
 def utc_now():
     """Get current UTC time (timezone-aware)"""
-    return datetime.now(pytz.UTC)
+    return datetime.now(timezone.utc)
 
 
 class EventPriority(IntEnum):
@@ -99,8 +98,8 @@ class Order(BaseModel):
     status: OrderStatus = OrderStatus.PENDING
     filled_quantity: Decimal = Decimal('0')
     filled_price: Optional[Decimal] = None
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     client_order_id: Optional[str] = None
     
     @property
@@ -126,7 +125,7 @@ class Portfolio(BaseModel):
     positions: List[Position] = []
     total_pnl: Decimal = Decimal('0')
     day_pnl: Decimal = Decimal('0')
-    last_updated: datetime = Field(default_factory=datetime.now)
+    last_updated: datetime = Field(default_factory=utc_now)
 
 
 class MarketData(BaseModel):
@@ -136,7 +135,7 @@ class MarketData(BaseModel):
     bid: Optional[Decimal] = None
     ask: Optional[Decimal] = None
     volume: Optional[int] = None
-    timestamp: datetime = Field(default_factory=datetime.now)
+    timestamp: datetime = Field(default_factory=utc_now)
 
 
 class NewsItem(BaseModel):
@@ -148,7 +147,7 @@ class NewsItem(BaseModel):
     published_at: datetime
     symbols: List[str] = []
     sentiment: Optional[Decimal] = None  # -1.0 to 1.0 sentiment score
-    created_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class TradingEvent(BaseModel):
@@ -195,4 +194,4 @@ class TradingDecision(BaseModel):
     confidence: Decimal = Field(ge=Decimal('0.0'), le=Decimal('1.0'))
     stop_loss: Optional[Decimal] = None
     take_profit: Optional[Decimal] = None
-    created_at: datetime = Field(default_factory=datetime.now) 
+    created_at: datetime = Field(default_factory=utc_now) 

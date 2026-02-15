@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from config import settings
 from src.agents.workflow_base import WorkflowBase
 from src.agents.workflow_factory import register_workflow
+from src.utils.timezone import utc_now
 from src.utils.llm_utils import create_llm_client
 from src.interfaces.broker_api import BrokerAPI
 from src.interfaces.market_data_api import MarketDataAPI
@@ -82,7 +83,7 @@ class ToolCallingWorkflow(WorkflowBase):
         self.llm_with_tools = self.llm.bind_tools(self.tools)
         
         logger.info("Initialized ToolCallingWorkflow with advanced AI capabilities")
-        self.max_iterations = 64  # Prevent infinite loops
+        self.max_iterations = settings.llm_recursion_limit  # Prevent infinite loops
         
     def _create_llm_client(self):
         """Create LLM client."""
@@ -190,7 +191,7 @@ Market Data for {symbol}:
             """Check if market is open and get trading session info"""
             try:
                 is_open = await self.is_market_open()
-                current_time = datetime.now()
+                current_time = utc_now()
                 
                 status = f"""
 Market Status:
@@ -300,19 +301,19 @@ The trading analysis has been completed. The system will now process the final d
         """
         try:
             self.workflow_id = self._generate_workflow_id()
-            self.start_time = datetime.now()
+            self.start_time = utc_now()
             
             # Initialize context
             context = initial_context or {}
             context.setdefault("trigger", "manual")
-            context.setdefault("timestamp", datetime.now().isoformat())
+            context.setdefault("timestamp", utc_now().isoformat())
             context.setdefault("workflow_type", "tool_calling")
             
             # Execute the interactive workflow (this will send its own start notification)
             result = await self._execute_interactive_workflow(context)
             
             # Calculate execution time
-            self.end_time = datetime.now()
+            self.end_time = utc_now()
             execution_time = (self.end_time - self.start_time).total_seconds()
             
             return {

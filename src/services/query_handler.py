@@ -14,7 +14,6 @@
 
 from src.utils.logging_config import get_logger
 from typing import Dict, Any, List, Optional
-from datetime import datetime
 from decimal import Decimal
 
 from src.interfaces.broker_api import BrokerAPI
@@ -55,44 +54,70 @@ class QueryHandler:
                 - is_running: bool
                 - is_trading_enabled: bool
                 - workflow_type: str
-                - timezone: str
-                - etc.
+                - market_open: bool (optional)
+                - event_queue_size: int (optional)
+                - scheduler_jobs: int (optional)
+                - realtime_monitor_active: bool (optional)
+                - portfolio: Portfolio (optional, pre-fetched)
 
         Returns:
             格式化的状态消息
         """
         try:
-            # 获取市场状态
-            try:
-                market_open = await self.broker_api.is_market_open()
-            except Exception:
-                market_open = None
+            # 使用预获取的市场状态，或自行获取
+            market_open = system_state.get('market_open')
+            if market_open is None:
+                try:
+                    market_open = await self.broker_api.is_market_open()
+                except Exception:
+                    market_open = None
 
-            # 获取组合信息
-            try:
-                portfolio = await self.broker_api.get_portfolio()
-            except Exception:
-                portfolio = None
+            # 使用预获取的组合信息，或自行获取
+            portfolio = system_state.get('portfolio')
+            if portfolio is None:
+                try:
+                    portfolio = await self.broker_api.get_portfolio()
+                except Exception:
+                    portfolio = None
 
             # 构建状态消息
             status_lines = [
-                "📊 **系统状态**\n",
-                f"运行状态: {'🟢 运行中' if system_state.get('is_running') else '🔴 已停止'}",
-                f"交易状态: {'🟢 已启用' if system_state.get('is_trading_enabled') else '🔴 已禁用'}",
-                f"工作流: {system_state.get('workflow_type', 'unknown')}",
+                "📊 **Trading System Status**\n",
+                f"🏃 **Running**: {'✅ Yes' if system_state.get('is_running') else '❌ No'}",
+                f"💰 **Trading Enabled**: {'✅ Yes' if system_state.get('is_trading_enabled') else '❌ No'}",
             ]
 
             if market_open is not None:
-                status_lines.append(f"市场: {'🟢 开盘' if market_open else '🔴 休市'}")
+                status_lines.append(f"🏪 **Market Open**: {'✅ Yes' if market_open else '❌ No'}")
 
+            workflow_type = system_state.get('workflow_type', 'unknown')
+            status_lines.append(f"🤖 **Workflow**: {workflow_type}")
+
+            # 事件队列状态
+            event_queue_size = system_state.get('event_queue_size')
+            if event_queue_size is not None:
+                status_lines.append(f"📋 **Event Queue**: {event_queue_size} pending")
+
+            # 实时监控状态
+            realtime_monitor_active = system_state.get('realtime_monitor_active')
+            if realtime_monitor_active is not None:
+                monitor_text = '✅ Active' if realtime_monitor_active else '❌ Inactive'
+                status_lines.append(f"📡 **Realtime Monitor**: {monitor_text}")
+
+            # 调度器状态
+            scheduler_jobs = system_state.get('scheduler_jobs')
+            if scheduler_jobs is not None:
+                status_lines.append(f"⏰ **Scheduler**: {scheduler_jobs} jobs")
+
+            # 组合概览
             if portfolio:
                 status_lines.extend([
                     "",
-                    "💰 **账户概览**",
-                    f"总权益: ${portfolio.equity:,.2f}",
-                    f"现金: ${portfolio.cash:,.2f}",
-                    f"当日盈亏: ${portfolio.day_pnl:,.2f}",
-                    f"持仓数: {len([p for p in portfolio.positions if p.quantity != 0])}"
+                    "📈 **Portfolio Summary**:",
+                    f"• Total Equity: ${float(portfolio.equity):,.2f}",
+                    f"• Cash: ${float(portfolio.cash):,.2f}",
+                    f"• Day P&L: ${float(portfolio.day_pnl):,.2f}",
+                    f"• Positions: {len(portfolio.positions)}"
                 ])
 
             status_msg = "\n".join(status_lines)
@@ -242,4 +267,3 @@ class QueryHandler:
             error_msg = f"❌ 绩效查询失败: {e}"
             await self.message_manager.send_error(error_msg)
             return error_msg
-

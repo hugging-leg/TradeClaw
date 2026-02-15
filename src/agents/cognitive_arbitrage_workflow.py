@@ -21,7 +21,7 @@ import asyncio
 import json
 import re
 from src.utils.logging_config import get_logger
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta
 from decimal import Decimal
 from dataclasses import dataclass, field
@@ -40,30 +40,34 @@ from src.models.trading_models import (
     TradingDecision, TradingAction, Order, OrderSide, OrderType, TimeInForce
 )
 from src.utils.llm_utils import create_llm_client
+from src.utils.timezone import utc_now
+from config import settings
 
 logger = get_logger(__name__)
 
 
 # ============================================================
-# 配置
+# 配置（从 settings 读取，支持环境变量覆盖）
 # ============================================================
 
-SCORING_CONFIG = {
-    "direct_min_score": 7,
-    "direct_max_score": 10,
-    "indirect_multiplier": 1.5,
-    "min_confidence": 3,
-    "score_window_days": 7,
-}
+def _get_scoring_config() -> dict:
+    return {
+        "direct_min_score": settings.ca_direct_min_score,
+        "direct_max_score": settings.ca_direct_max_score,
+        "indirect_multiplier": settings.ca_indirect_multiplier,
+        "min_confidence": settings.ca_min_confidence,
+        "score_window_days": settings.ca_score_window_days,
+    }
 
-TRADING_CONFIG = {
-    "top_k": 3,
-    "default_holding_days": 7,
-    "min_holding_days": 3,
-    "max_holding_days": 14,
-    "position_size_pct": 0.10,
-    "max_positions": 5,
-}
+def _get_trading_config() -> dict:
+    return {
+        "top_k": settings.ca_top_k,
+        "default_holding_days": settings.ca_default_holding_days,
+        "min_holding_days": settings.ca_min_holding_days,
+        "max_holding_days": settings.ca_max_holding_days,
+        "position_size_pct": settings.ca_position_size_pct,
+        "max_positions": settings.ca_max_positions,
+    }
 
 
 # ============================================================
@@ -170,6 +174,10 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         self.llm = create_llm_client()
         self.news_limit = news_limit
 
+        # 从配置读取策略参数
+        self.scoring_config = _get_scoring_config()
+        self.trading_config = _get_trading_config()
+
         # 评分表
         self.ticker_scores: Dict[str, TickerScore] = {}
 
@@ -216,7 +224,7 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                 ticker=ticker,
                 quantity=quantity,
                 buy_price=Decimal(str(buy_price)),
-                buy_date=datetime.now(),
+                buy_date=utc_now(),
                 target_sell_date=target_sell_date,
                 holding_days=holding_days,
                 reason=reason,
@@ -241,7 +249,7 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                 .values(
                     status='sold',
                     sold_price=Decimal(str(sold_price)),
-                    sold_at=datetime.now(),
+                    sold_at=utc_now(),
                     pnl=Decimal(str(pnl))
                 )
             )
@@ -251,7 +259,7 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
 
     async def _check_and_sell_expired(self) -> List[str]:
         """检查并卖出到期持仓"""
-        today = datetime.now()
+        today = utc_now()
         sold_tickers = []
 
         # 从数据库获取所有未平仓持仓
@@ -368,8 +376,8 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
             reason=reason,
             chain=chain,
             score=score,
-            min_days=TRADING_CONFIG["min_holding_days"],
-            max_days=TRADING_CONFIG["max_holding_days"]
+            min_days=self.trading_config["min_holding_days"],
+            max_days=self.trading_config["max_holding_days"]
         )
 
         try:
@@ -381,16 +389,16 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
             json_match = re.search(r'\{[\s\S]*\}', response.content)
             if json_match:
                 result = json.loads(json_match.group())
-                days = result.get("holding_days", TRADING_CONFIG["default_holding_days"])
+                days = result.get("holding_days", self.trading_config["default_holding_days"])
                 # 限制范围
-                days = max(TRADING_CONFIG["min_holding_days"], 
-                          min(TRADING_CONFIG["max_holding_days"], days))
+                days = max(self.trading_config["min_holding_days"], 
+                          min(self.trading_config["max_holding_days"], days))
                 logger.info(f"LLM 决定 {ticker} 持仓 {days} 天: {result.get('reasoning', '')[:50]}")
                 return days
         except Exception as e:
             logger.warning(f"LLM 决定持仓时间失败: {e}")
 
-        return TRADING_CONFIG["default_holding_days"]
+        return self.trading_config["default_holding_days"]
 
     def _update_scores(self, news: Dict, analysis: Dict, date: datetime):
         """更新评分表"""
@@ -418,18 +426,18 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                 continue
             seen_direct.add(ticker)
             raw = abs(item.get("relevance", 8))
-            score = min(SCORING_CONFIG["direct_max_score"], 
-                       max(SCORING_CONFIG["direct_min_score"], raw))
+            score = min(self.scoring_config["direct_max_score"], 
+                       max(self.scoring_config["direct_min_score"], raw))
             add_score(ticker, score, "direct_positive", item.get("reason", ""))
 
         # 间接受益 - 这是我们要买的
         for item in analysis.get("indirect_benefits", []):
             ticker = item.get("ticker", "").upper()
             confidence = abs(item.get("confidence", 0))
-            if not ticker or confidence < SCORING_CONFIG["min_confidence"] or ticker in seen_indirect:
+            if not ticker or confidence < self.scoring_config["min_confidence"] or ticker in seen_indirect:
                 continue
             seen_indirect.add(ticker)
-            score = confidence * SCORING_CONFIG["indirect_multiplier"]
+            score = confidence * self.scoring_config["indirect_multiplier"]
             add_score(ticker, score, "indirect_positive", 
                      item.get("reason", ""), item.get("chain", ""))
 
@@ -437,16 +445,16 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         for item in analysis.get("indirect_negatives", []):
             ticker = item.get("ticker", "").upper()
             confidence = abs(item.get("confidence", 0))
-            if not ticker or confidence < SCORING_CONFIG["min_confidence"] or ticker in seen_indirect:
+            if not ticker or confidence < self.scoring_config["min_confidence"] or ticker in seen_indirect:
                 continue
             seen_indirect.add(ticker)
-            score = -confidence * SCORING_CONFIG["indirect_multiplier"]
+            score = -confidence * self.scoring_config["indirect_multiplier"]
             add_score(ticker, score, "indirect_negative",
                      item.get("reason", ""), item.get("chain", ""))
 
     def _clean_old_scores(self, current_date: datetime):
         """清理过期评分"""
-        cutoff = current_date - timedelta(days=SCORING_CONFIG["score_window_days"])
+        cutoff = current_date - timedelta(days=self.scoring_config["score_window_days"])
 
         for ticker in list(self.ticker_scores.keys()):
             ts = self.ticker_scores[ticker]
@@ -473,9 +481,11 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
 
     # ==================== 主流程 ====================
 
-    async def run_workflow(self, trigger_reason: str = "scheduled", **kwargs) -> TradingDecision:
+    async def run_workflow(self, initial_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """执行认知套利工作流"""
-        current_date = datetime.now()
+        self.workflow_id = self._generate_workflow_id()
+        self.start_time = utc_now()
+        current_date = utc_now()
 
         await self.message_manager.send_message("🧠 认知套利分析开始", "info")
 
@@ -487,12 +497,23 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
             )
 
         # 2. 获取组合
+        def _make_result(decision: TradingDecision, success: bool = True) -> Dict[str, Any]:
+            execution_time = (utc_now() - self.start_time).total_seconds()
+            self.update_stats(success)
+            return {
+                "success": success,
+                "decision": decision,
+                "execution_time": execution_time,
+                "workflow_type": "cognitive_arbitrage",
+                "workflow_id": self.workflow_id,
+            }
+
         portfolio = await self.get_portfolio()
         if not portfolio:
-            return TradingDecision(
+            return _make_result(TradingDecision(
                 action=TradingAction.HOLD, symbol="N/A",
                 reasoning="无法获取组合信息", confidence=Decimal("0.0")
-            )
+            ), success=False)
 
         # 3. 获取新闻
         try:
@@ -508,10 +529,10 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
             ]
         except Exception as e:
             logger.error(f"获取新闻失败: {e}")
-            return TradingDecision(
+            return _make_result(TradingDecision(
                 action=TradingAction.HOLD, symbol="N/A",
                 reasoning=f"获取新闻失败: {e}", confidence=Decimal("0.0")
-            )
+            ), success=False)
 
         # 4. 分析新闻
         news_to_analyze = [n for n in news_list if n["id"] not in self.analyzed_news_ids]
@@ -540,13 +561,13 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         self._clean_old_scores(current_date)
 
         # 6. 获取候选股票
-        top_tickers = self._get_top_indirect_tickers(TRADING_CONFIG["top_k"] * 2)
+        top_tickers = self._get_top_indirect_tickers(self.trading_config["top_k"] * 2)
 
         if not top_tickers:
-            return TradingDecision(
+            return _make_result(TradingDecision(
                 action=TradingAction.HOLD, symbol="N/A",
                 reasoning="没有发现间接受益机会", confidence=Decimal("0.0")
-            )
+            ))
 
         # 7. 筛选要买入的
         held_symbols = [p.symbol for p in portfolio.positions if p.quantity > 0]
@@ -557,21 +578,21 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         to_buy = []
         for ticker, score, records in top_tickers:
             if ticker not in held_symbols and ticker not in tracked_symbols:
-                if current_count + len(to_buy) < TRADING_CONFIG["max_positions"]:
+                if current_count + len(to_buy) < self.trading_config["max_positions"]:
                     to_buy.append((ticker, score, records))
-                    if len(to_buy) >= TRADING_CONFIG["top_k"]:
+                    if len(to_buy) >= self.trading_config["top_k"]:
                         break
 
         if not to_buy:
             await self.message_manager.send_message("📭 没有新的买入机会", "info")
-            return TradingDecision(
+            return _make_result(TradingDecision(
                 action=TradingAction.HOLD, symbol="N/A",
                 reasoning="候选股票都已持有或仓位已满", confidence=Decimal("0.5")
-            )
+            ))
 
         # 8. 执行买入
         total_equity = float(portfolio.equity)
-        position_value = total_equity * TRADING_CONFIG["position_size_pct"]
+        position_value = total_equity * self.trading_config["position_size_pct"]
 
         orders_placed = []
         for ticker, score, records in to_buy:
@@ -604,7 +625,7 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
 
                 if order_id:
                     # 记录持仓到数据库
-                    target_sell_date = datetime.now() + timedelta(days=holding_days)
+                    target_sell_date = utc_now() + timedelta(days=holding_days)
 
                     await self._add_position(
                         ticker=ticker,
@@ -634,14 +655,14 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         # 9. 返回结果
         if orders_placed:
             best = orders_placed[0]
-            return TradingDecision(
+            return _make_result(TradingDecision(
                 action=TradingAction.BUY, symbol=best[0],
                 quantity=Decimal(best[1]), price=Decimal(str(best[2])),
                 reasoning=f"买入 {len(orders_placed)} 只: {[t[0] for t in orders_placed]}",
                 confidence=Decimal(str(min(0.9, best[3] / 20)))
-            )
+            ))
 
-        return TradingDecision(
+        return _make_result(TradingDecision(
             action=TradingAction.HOLD, symbol="N/A",
             reasoning="无法执行买入", confidence=Decimal("0.0")
-        )
+        ), success=False)

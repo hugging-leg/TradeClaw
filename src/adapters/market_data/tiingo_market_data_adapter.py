@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 
 from src.interfaces.market_data_api import MarketDataAPI
 from src.interfaces.factory import register_market_data
+from src.utils.timezone import utc_now, to_trading_tz, get_trading_timezone
+from src.utils.time_utils import is_market_open as check_market_open
 from config import settings
 
 logger = get_logger(__name__)
@@ -201,28 +203,21 @@ class TiingoMarketDataAdapter(MarketDataAPI):
     async def get_market_status(self) -> Dict[str, Any]:
         """Get current market status"""
         try:
-            # Tiingo doesn't have a market status endpoint, so we'll provide a basic implementation
-            now = datetime.now()
-            weekday = now.weekday()  # 0=Monday, 6=Sunday
-            
-            # Basic market hours (9:30 AM - 4:00 PM ET, Monday-Friday)
-            market_open_time = now.replace(hour=9, minute=30, second=0, microsecond=0)
-            market_close_time = now.replace(hour=16, minute=0, second=0, microsecond=0)
-            
-            is_market_day = weekday < 5  # Monday-Friday
-            is_market_hours = market_open_time <= now <= market_close_time
-            is_open = is_market_day and is_market_hours
+            # Use exchange_calendars for accurate market status (handles holidays)
+            is_open = check_market_open()
+            now_trading = to_trading_tz(utc_now())
+            tz_name = str(get_trading_timezone())
             
             return {
                 'is_open': is_open,
                 'market_hours': {
-                    'open': '09:30',
-                    'close': '16:00',
-                    'timezone': 'US/Eastern'
+                    'open': settings.rebalance_time,
+                    'close': settings.eod_analysis_time.split(':')[0] + ':00',
+                    'timezone': tz_name
                 },
-                'current_time': now.isoformat(),
-                'next_open': None,  # Would need more complex logic
-                'next_close': None   # Would need more complex logic
+                'current_time': now_trading.isoformat(),
+                'next_open': None,
+                'next_close': None
             }
             
         except Exception as e:

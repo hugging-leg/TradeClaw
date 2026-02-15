@@ -14,8 +14,10 @@
 import asyncio
 from src.utils.logging_config import get_logger
 from typing import Dict, List, Any, Optional
-from datetime import datetime
 from decimal import Decimal
+
+from src.utils.timezone import utc_now
+from config import settings
 
 from src.interfaces.factory import get_realtime_data_api
 from src.interfaces.realtime_data_api import RealtimeTrade, RealtimeNews
@@ -34,13 +36,13 @@ class PriceTracker:
         self.current_price = initial_price
         self.high_price = initial_price
         self.low_price = initial_price
-        self.last_update = datetime.now()
+        self.last_update = utc_now()
 
     def update(self, price: Decimal):
         self.current_price = price
         self.high_price = max(self.high_price, price)
         self.low_price = min(self.low_price, price)
-        self.last_update = datetime.now()
+        self.last_update = utc_now()
 
     def get_change_percentage(self) -> Decimal:
         if self.initial_price == 0:
@@ -185,8 +187,7 @@ class RealtimeMarketMonitor:
     - 触发 workflow 分析
     """
 
-    # 主要市场 ETF（用于获取广泛的市场新闻覆盖）
-    MARKET_ETFS = ["SPY", "QQQ", "IWM"]
+    # 主要市场 ETF（用于获取广泛的市场新闻覆盖，从配置读取）
 
     def __init__(
         self,
@@ -194,8 +195,6 @@ class RealtimeMarketMonitor:
         price_change_threshold: float = None,
         volatility_threshold: float = None
     ):
-        from config import settings
-
         self.trading_system = trading_system
 
         # 使用工厂模式获取实时数据适配器
@@ -257,7 +256,7 @@ class RealtimeMarketMonitor:
 
             # 2. 新闻监控：持仓 + 主要 ETF（获取市场广泛覆盖）
             # Finnhub WebSocket 需要指定 symbol，所以订阅持仓 + 主要 ETF
-            news_symbols = set(position_symbols) | set(self.MARKET_ETFS)
+            news_symbols = set(position_symbols) | set(settings.get_market_etfs())
             await self._subscribe_news(list(news_symbols))
 
             self.monitor_task = asyncio.create_task(self.adapter.start())

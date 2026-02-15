@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 from src.interfaces.news_api import NewsAPI, NewsProvider
 from src.interfaces.factory import register_news
 from src.models.trading_models import NewsItem
+from src.utils.timezone import utc_now
 from config import settings
 
 
@@ -65,9 +66,9 @@ class TiingoNewsAdapter(NewsAPI):
         try:
             # Default to last 24 hours if no date range provided
             if not start_date:
-                start_date = datetime.now() - timedelta(days=1)
+                start_date = utc_now() - timedelta(days=1)
             if not end_date:
-                end_date = datetime.now()
+                end_date = utc_now()
             
             params = {
                 'startDate': start_date.strftime('%Y-%m-%d'),
@@ -173,8 +174,8 @@ class TiingoNewsAdapter(NewsAPI):
                 'q': query,
                 'limit': limit,
                 'sortBy': 'publishedDate',
-                'startDate': (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d'),
-                'endDate': datetime.now().strftime('%Y-%m-%d')
+                'startDate': (utc_now() - timedelta(days=7)).strftime('%Y-%m-%d'),
+                'endDate': utc_now().strftime('%Y-%m-%d')
             }
             
             response = requests.get(
@@ -267,9 +268,9 @@ class TiingoNewsAdapter(NewsAPI):
                 try:
                     published_at = datetime.fromisoformat(published_date.replace('Z', '+00:00'))
                 except ValueError:
-                    published_at = datetime.now()
+                    published_at = utc_now()
             else:
-                published_at = datetime.now()
+                published_at = utc_now()
             
             news_item = NewsItem(
                 title=item.get('title', 'No Title'),

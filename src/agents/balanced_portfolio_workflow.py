@@ -37,6 +37,7 @@ from src.models.trading_models import (
     Order, Portfolio, TradingDecision, OrderSide, OrderType, 
     TimeInForce, TradingAction, Position
 )
+from src.utils.timezone import utc_now
 
 logger = get_logger(__name__)
 
@@ -77,14 +78,6 @@ class BalancedPortfolioWorkflow(WorkflowBase):
     - 重新平衡阈值：±3%（即15%-21%范围内为正常）
     """
     
-    # 策略参数
-    TARGET_POSITIONS = 5  # 目标持仓数量
-    TARGET_PERCENTAGE = Decimal('18')  # 目标百分比 (约18%)
-    REBALANCE_THRESHOLD = Decimal('3')  # 重新平衡阈值 (±3%)
-    MIN_PERCENTAGE = TARGET_PERCENTAGE - REBALANCE_THRESHOLD  # 15%
-    MAX_PERCENTAGE = TARGET_PERCENTAGE + REBALANCE_THRESHOLD  # 21%
-    MAX_POSITIONS = 6  # 最大持仓数
-    
     def __init__(self, 
                  broker_api: BrokerAPI = None,
                  market_data_api: MarketDataAPI = None,
@@ -92,6 +85,14 @@ class BalancedPortfolioWorkflow(WorkflowBase):
                  message_manager: MessageManager = None):
         """初始化均衡组合工作流"""
         super().__init__(broker_api, market_data_api, news_api, message_manager)
+        
+        # 策略参数（从配置读取）
+        self.TARGET_POSITIONS = settings.balanced_target_positions
+        self.TARGET_PERCENTAGE = Decimal(str(settings.balanced_target_percentage))
+        self.REBALANCE_THRESHOLD = Decimal(str(settings.balanced_rebalance_threshold))
+        self.MIN_PERCENTAGE = self.TARGET_PERCENTAGE - self.REBALANCE_THRESHOLD
+        self.MAX_PERCENTAGE = self.TARGET_PERCENTAGE + self.REBALANCE_THRESHOLD
+        self.MAX_POSITIONS = settings.balanced_max_positions
         
         self.llm = create_llm_client()
         self.last_rebalance_time = None
@@ -114,7 +115,7 @@ class BalancedPortfolioWorkflow(WorkflowBase):
         """
         try:
             self.workflow_id = self._generate_workflow_id()
-            self.start_time = datetime.now()
+            self.start_time = utc_now()
             
             context = initial_context or {}
             trigger = context.get("trigger", "manual")
@@ -147,7 +148,7 @@ class BalancedPortfolioWorkflow(WorkflowBase):
                 )
             
             # 4. 更新历史记录
-            self.last_rebalance_time = datetime.now()
+            self.last_rebalance_time = utc_now()
             self.rebalance_history.append({
                 "timestamp": self.last_rebalance_time.isoformat(),
                 "trigger": trigger,
@@ -157,7 +158,7 @@ class BalancedPortfolioWorkflow(WorkflowBase):
             })
             
             # 计算执行时间
-            self.end_time = datetime.now()
+            self.end_time = utc_now()
             execution_time = (self.end_time - self.start_time).total_seconds()
             
             await self.send_workflow_complete_notification("均衡组合分析", execution_time)
