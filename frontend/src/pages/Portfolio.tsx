@@ -4,6 +4,7 @@ import {
   Area,
   BarChart,
   Bar,
+  Cell,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -31,12 +32,12 @@ export default function Portfolio() {
   const [range, setRange] = useState<TimeRange>('30d');
 
   useEffect(() => {
-    fetchPortfolio().then(setPortfolio);
+    fetchPortfolio().then(setPortfolio).catch(() => {});
   }, []);
 
   useEffect(() => {
     const days = range === '7d' ? 7 : range === '30d' ? 30 : 90;
-    fetchPortfolioHistory(days).then(setSnapshots);
+    fetchPortfolioHistory(days).then(setSnapshots).catch(() => {});
   }, [range]);
 
   if (!portfolio) {
@@ -47,15 +48,19 @@ export default function Portfolio() {
     );
   }
 
-  const equityData = snapshots.map((s) => ({
-    date: new Date(s.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    value: s.total_value,
-  }));
+  const equityData = snapshots
+    .filter((s) => s.equity != null)
+    .map((s) => ({
+      date: formatDate(s.timestamp),
+      value: s.equity!,
+    }));
 
-  const pnlData = snapshots.map((s) => ({
-    date: new Date(s.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    pnl: s.day_pnl,
-  }));
+  const pnlData = snapshots
+    .filter((s) => s.profit_loss != null)
+    .map((s) => ({
+      date: formatDate(s.timestamp),
+      pnl: s.profit_loss!,
+    }));
 
   const treemapData = portfolio.positions.map((p, i) => ({
     name: p.symbol,
@@ -125,52 +130,65 @@ export default function Portfolio() {
             }
           />
           <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={equityData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#6366f1" stopOpacity={0.3} />
-                    <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
-                <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#71717a' }} axisLine={{ stroke: '#1e1e2e' }} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: '#71717a' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#12121a', border: '1px solid #1e1e2e', borderRadius: '8px', fontSize: '12px', color: '#f0f0f5' }}
-                  formatter={(value: number | undefined) => [formatCurrency(value ?? 0), 'Equity']}
-                />
-                <Area type="monotone" dataKey="value" stroke="#6366f1" strokeWidth={2} fill="url(#eqGrad)" />
-              </AreaChart>
-            </ResponsiveContainer>
+            {equityData.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted">
+                No equity history available
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={equityData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="eqGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#6366f1" stopOpacity={0.3} />
+                      <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#71717a' }} axisLine={{ stroke: '#1e1e2e' }} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#71717a' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#12121a', border: '1px solid #2a2a3e', borderRadius: '8px', fontSize: '12px', color: '#f0f0f5' }}
+                    labelStyle={{ color: '#a0a0b0' }}
+                    itemStyle={{ color: '#e0e0e8' }}
+                    formatter={(value: number | undefined) => [formatCurrency(value ?? 0), 'Equity']}
+                  />
+                  <Area type="monotone" dataKey="value" stroke="#6366f1" strokeWidth={2} fill="url(#eqGrad)" />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </Card>
 
         <Card>
           <CardHeader title="Daily P&L" subtitle="Profit/Loss by day" />
           <div className="h-[260px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={pnlData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
-                <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#71717a' }} axisLine={{ stroke: '#1e1e2e' }} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: '#71717a' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `$${v.toFixed(0)}`} />
-                <Tooltip
-                  contentStyle={{ backgroundColor: '#12121a', border: '1px solid #1e1e2e', borderRadius: '8px', fontSize: '12px', color: '#f0f0f5' }}
-                  formatter={(value: number | undefined) => [formatCurrency(value ?? 0), 'P&L']}
-                />
-                <Bar
-                  dataKey="pnl"
-                  radius={[4, 4, 0, 0]}
-                  fill="#6366f1"
-                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  shape={(props: any) => {
-                    const { x, y, width, height, payload } = props;
-                    const fill = payload.pnl >= 0 ? '#22c55e' : '#ef4444';
-                    return <rect x={x} y={y} width={width} height={height} rx={3} fill={fill} />;
-                  }}
-                />
-              </BarChart>
-            </ResponsiveContainer>
+            {pnlData.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted">
+                No P&L history available
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={pnlData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
+                  <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#71717a' }} axisLine={{ stroke: '#1e1e2e' }} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#71717a' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `$${v.toFixed(0)}`} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: '#12121a', border: '1px solid #2a2a3e', borderRadius: '8px', fontSize: '12px', color: '#f0f0f5' }}
+                    labelStyle={{ color: '#a0a0b0' }}
+                    itemStyle={{ color: '#e0e0e8' }}
+                    formatter={(value: number | undefined) => [formatCurrency(value ?? 0), 'P&L']}
+                  />
+                  <Bar dataKey="pnl">
+                    {pnlData.map((entry, idx) => (
+                      <Cell
+                        key={idx}
+                        fill={entry.pnl >= 0 ? '#22c55e' : '#ef4444'}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </Card>
       </div>
@@ -186,31 +204,75 @@ export default function Portfolio() {
                 data={treemapData}
                 dataKey="size"
                 nameKey="name"
-                stroke="#0a0a0f"
+                stroke="none"
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 content={(props: any) => {
-                  const { x, y, width, height, name } = props;
-                  const fill = props.fill || TREEMAP_COLORS[props.index % TREEMAP_COLORS.length];
+                  const { x, y, width, height, name, index } = props;
+                  const fill = props.fill || TREEMAP_COLORS[index % TREEMAP_COLORS.length];
+                  const pnl = treemapData[index]?.pnl ?? 0;
+                  const pnlColor = pnl >= 0 ? '#86efac' : '#fca5a5';
                   return (
-                  <g>
-                    <rect x={x} y={y} width={width} height={height} fill={fill} rx={4} opacity={0.85} />
-                    {width > 40 && height > 25 && (
-                      <text
-                        x={x + width / 2}
-                        y={y + height / 2}
-                        textAnchor="middle"
-                        dominantBaseline="central"
-                        fill="#fff"
-                        fontSize={12}
-                        fontWeight={600}
-                      >
-                        {name}
-                      </text>
-                    )}
-                  </g>
+                    <g>
+                      <rect
+                        x={x + 1}
+                        y={y + 1}
+                        width={Math.max(width - 2, 0)}
+                        height={Math.max(height - 2, 0)}
+                        fill={fill}
+                        rx={6}
+                        opacity={0.9}
+                      />
+                      {width > 50 && height > 35 && (
+                        <>
+                          <text
+                            x={x + width / 2}
+                            y={y + height / 2 - 7}
+                            textAnchor="middle"
+                            dominantBaseline="central"
+                            fill="#fff"
+                            fontSize={13}
+                            fontWeight={700}
+                          >
+                            {name}
+                          </text>
+                          <text
+                            x={x + width / 2}
+                            y={y + height / 2 + 10}
+                            textAnchor="middle"
+                            dominantBaseline="central"
+                            fill={pnlColor}
+                            fontSize={10}
+                            fontWeight={500}
+                          >
+                            {pnl >= 0 ? '+' : ''}{(pnl * 100).toFixed(1)}%
+                          </text>
+                        </>
+                      )}
+                      {width > 30 && width <= 50 && height > 20 && (
+                        <text
+                          x={x + width / 2}
+                          y={y + height / 2}
+                          textAnchor="middle"
+                          dominantBaseline="central"
+                          fill="#fff"
+                          fontSize={10}
+                          fontWeight={600}
+                        >
+                          {name}
+                        </text>
+                      )}
+                    </g>
                   );
                 }}
-              />
+              >
+                <Tooltip
+                  contentStyle={{ backgroundColor: '#12121a', border: '1px solid #2a2a3e', borderRadius: '8px', fontSize: '12px', color: '#f0f0f5' }}
+                  labelStyle={{ color: '#a0a0b0' }}
+                  itemStyle={{ color: '#e0e0e8' }}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  formatter={(value: any) => [formatCurrency(Number(value) || 0), 'Market Value']}
+                />
+              </Treemap>
             </ResponsiveContainer>
           </div>
         </Card>

@@ -52,16 +52,36 @@ class WorkflowBase(ABC):
         self.is_running = False
         self.current_portfolio: Optional[Portfolio] = None
 
-        # 统计
-        self.stats = {
+        # 统计（启动时从 DB 恢复，见 load_stats_from_db）
+        self.stats: Dict[str, Any] = {
             'total_runs': 0,
             'successful_runs': 0,
             'failed_runs': 0,
             'last_run': None,
-            'last_error': None
+            'last_error': None,
         }
 
         logger.info(f"Initialized {self.__class__.__name__}")
+
+    async def load_stats_from_db(self) -> None:
+        """
+        从 analysis_history 表恢复历史统计。
+
+        应在系统启动后（DB 已初始化）调用一次。
+        如果 DB 不可用则静默跳过，stats 保持全 0。
+        """
+        try:
+            from src.db.repository import TradingRepository
+            db_stats = await TradingRepository.get_workflow_stats()
+            self.stats.update(db_stats)
+            logger.info(
+                "Loaded workflow stats from DB: total=%d success=%d failed=%d",
+                db_stats["total_runs"],
+                db_stats["successful_runs"],
+                db_stats["failed_runs"],
+            )
+        except Exception as e:
+            logger.warning("Failed to load workflow stats from DB: %s", e)
 
     @abstractmethod
     async def run_workflow(

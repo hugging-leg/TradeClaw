@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
+import { useToast } from '@/components/ui/Toast';
 import {
   fetchDecisions,
   fetchAnalyses,
@@ -76,10 +77,13 @@ const STEP_TYPE_META: Record<string, { label: string; color: string; icon: typeo
 // ========== Config field rendering helpers ==========
 
 /** Fields that should be rendered as textarea instead of input */
-const TEXTAREA_FIELDS = new Set(['system_prompt']);
+const TEXTAREA_FIELDS = new Set(['system_prompt', 'news_analysis_prompt', 'holding_decision_prompt']);
 
 /** Fields that are read-only (shown but not editable) */
 const READONLY_FIELDS = new Set(['workflow_type', 'name']);
+
+/** Fields that should be hidden when null (not applicable for this workflow) */
+const HIDE_WHEN_NULL = new Set(['system_prompt']);
 
 /** Detect field type for rendering */
 function detectFieldType(key: string, value: unknown): 'textarea' | 'number' | 'array' | 'boolean' | 'text' {
@@ -365,10 +369,12 @@ function ConfigEditor({
     await onSave(updates);
   };
 
-  // Separate config keys into groups
+  // Separate config keys into groups, hide null fields that are not applicable
   const allKeys = Object.keys(config);
   const readonlyKeys = allKeys.filter((k) => READONLY_FIELDS.has(k));
-  const editableKeys = allKeys.filter((k) => !READONLY_FIELDS.has(k));
+  const editableKeys = allKeys.filter(
+    (k) => !READONLY_FIELDS.has(k) && !(HIDE_WHEN_NULL.has(k) && config[k] == null)
+  );
 
   return (
     <div className="space-y-6">
@@ -584,6 +590,7 @@ function WorkflowSwitcher({
 // ========== Main Agent Page ==========
 
 export default function Agent() {
+  const { toast } = useToast();
   const [decisions, setDecisions] = useState<TradingDecision[]>([]);
   const [analyses, setAnalyses] = useState<AnalysisHistory[]>([]);
   const [messages, setMessages] = useState<AgentMessage[]>([]);
@@ -617,17 +624,52 @@ export default function Agent() {
       setExecutions(e);
       setActive(aw);
       setConfig(cfg);
+    }).catch(() => {
+      toast('Failed to load agent data', 'error');
     });
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     loadAll();
   }, [loadAll]);
 
+  // Poll active workflow status while running (every 2s)
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (active?.is_running) {
+      pollingRef.current = setInterval(async () => {
+        try {
+          const aw = await fetchActiveWorkflow();
+          setActive(aw);
+          // If no longer running, reload everything
+          if (!aw.is_running) {
+            loadAll();
+          }
+        } catch { /* ignore polling errors */ }
+      }, 2000);
+    } else if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
+  }, [active?.is_running, loadAll]);
+
   const handleTriggerAnalysis = async () => {
     setTriggering(true);
-    await triggerAnalysis();
-    setTriggering(false);
+    try {
+      await triggerAnalysis();
+      toast('Analysis triggered successfully', 'success');
+      // Refresh active status to start polling
+      const aw = await fetchActiveWorkflow();
+      setActive(aw);
+    } catch {
+      toast('Failed to trigger analysis', 'error');
+    } finally {
+      setTriggering(false);
+    }
   };
 
   const handleToggleTool = async (name: string) => {
@@ -640,10 +682,12 @@ export default function Agent() {
     );
     try {
       await toggleAgentTool(name, newEnabled);
+      toast(`Tool "${name}" ${newEnabled ? 'enabled' : 'disabled'}`, 'success');
     } catch {
       setTools((prev) =>
         prev.map((t) => (t.name === name ? { ...t, enabled: !newEnabled } : t))
       );
+      toast(`Failed to toggle tool "${name}"`, 'error');
     }
   };
 
@@ -651,7 +695,6 @@ export default function Agent() {
     setSwitching(true);
     try {
       await switchWorkflow(type);
-      // Reload active workflow, config, and tools after switch
       const [aw, cfg, t] = await Promise.all([
         fetchActiveWorkflow(),
         fetchAgentConfig(),
@@ -660,8 +703,9 @@ export default function Agent() {
       setActive(aw);
       setConfig(cfg);
       setTools(t);
-    } catch (err) {
-      console.error('Failed to switch workflow:', err);
+      toast(`Switched to ${aw.workflow_type || type}`, 'success');
+    } catch {
+      toast('Failed to switch workflow', 'error');
     } finally {
       setSwitching(false);
     }
@@ -672,8 +716,9 @@ export default function Agent() {
     try {
       const result = await updateAgentConfig(updates);
       setConfig(result.config);
-    } catch (err) {
-      console.error('Failed to update config:', err);
+      toast(`Updated ${Object.keys(updates).length} config field(s)`, 'success');
+    } catch {
+      toast('Failed to update configuration', 'error');
     } finally {
       setSaving(false);
     }
@@ -706,13 +751,28 @@ export default function Agent() {
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Agent</h1>
           <p className="mt-1 text-sm text-muted">AI workflow management, tools, and execution history</p>
         </div>
-        <Button
-          icon={<Play className="h-4 w-4" />}
-          loading={triggering}
-          onClick={handleTriggerAnalysis}
-        >
-          Trigger Analysis
-        </Button>
+        <div className="flex items-center gap-3">
+          {active?.is_running && (
+            <div className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5">
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
+                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-accent" />
+              </span>
+              <span className="text-sm font-medium text-accent-light">Running</span>
+              {(active.pending_triggers ?? 0) > 0 && (
+                <Badge variant="warning">{active.pending_triggers} queued</Badge>
+              )}
+            </div>
+          )}
+          <Button
+            icon={<Play className="h-4 w-4" />}
+            loading={triggering}
+            disabled={active?.is_running}
+            onClick={handleTriggerAnalysis}
+          >
+            {active?.is_running ? 'Workflow Running' : 'Trigger Analysis'}
+          </Button>
+        </div>
       </div>
 
       {/* Active Workflow & Switcher */}

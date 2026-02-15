@@ -176,6 +176,10 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         self.llm = create_llm_client()
         self.news_limit = news_limit
 
+        # Prompt 模板（实例属性，可通过 get_config/update_config 编辑）
+        self.news_analysis_prompt = NEWS_ANALYSIS_PROMPT
+        self.holding_decision_prompt = HOLDING_DECISION_PROMPT
+
         # 从配置读取策略参数
         self.scoring_config = _get_scoring_config()
         self.trading_config = _get_trading_config()
@@ -192,7 +196,11 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
 
     def get_config(self) -> Dict[str, Any]:
         config = super().get_config()
+        # CA 没有单一 system_prompt，用两个 prompt 模板替代
+        config["system_prompt"] = None  # 标记为不适用
         config.update({
+            "news_analysis_prompt": self.news_analysis_prompt,
+            "holding_decision_prompt": self.holding_decision_prompt,
             "llm_model": settings.llm_model,
             "news_limit": self.news_limit,
             # 评分配置
@@ -212,6 +220,10 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         return config
 
     def update_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
+        if "news_analysis_prompt" in updates:
+            self.news_analysis_prompt = updates["news_analysis_prompt"]
+        if "holding_decision_prompt" in updates:
+            self.holding_decision_prompt = updates["holding_decision_prompt"]
         if "news_limit" in updates:
             self.news_limit = updates["news_limit"]
         if "llm_model" in updates:
@@ -224,9 +236,9 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
             "ca_top_k", "ca_default_holding_days", "ca_min_holding_days",
             "ca_max_holding_days", "ca_position_size_pct", "ca_max_positions",
         ]
-        for field in ca_fields:
-            if field in updates:
-                setattr(settings, field, updates[field])
+        for fld in ca_fields:
+            if fld in updates:
+                setattr(settings, fld, updates[fld])
 
         # 刷新本地缓存
         self.scoring_config = _get_scoring_config()
@@ -351,6 +363,12 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                     order_id = await self.broker_api.submit_order(order)
 
                     if order_id:
+                        await _persist_order(order, str(order_id))
+                        await _persist_decision(
+                            symbol=pos.ticker, action="sell",
+                            quantity=Decimal(actual_qty),
+                            reasoning=f"持仓到期卖出, 持仓{pos.holding_days}天, PnL: ${pnl:+,.2f}",
+                        )
                         sold_tickers.append(pos.ticker)
                         await self._close_position(pos.ticker, current_price, pnl)
 
@@ -400,7 +418,7 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
             response = await asyncio.get_running_loop().run_in_executor(
                 None,
                 lambda: self.llm.invoke([
-                    SystemMessage(content=NEWS_ANALYSIS_PROMPT),
+                    SystemMessage(content=self.news_analysis_prompt),
                     HumanMessage(content=user_prompt)
                 ])
             )
@@ -419,7 +437,7 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         self, ticker: str, reason: str, chain: str, score: float
     ) -> int:
         """让 LLM 决定持仓时间"""
-        prompt = HOLDING_DECISION_PROMPT.format(
+        prompt = self.holding_decision_prompt.format(
             ticker=ticker,
             reason=reason,
             chain=chain,

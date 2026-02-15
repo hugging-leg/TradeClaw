@@ -1,32 +1,50 @@
 """
-组合 & 持仓 API
+组合 & 持仓 API — 直接从 Broker 获取，保证数据一致性
 """
 
 from fastapi import APIRouter, Depends, Query
 
 from src.api.deps import get_trading_system
 from src.trading_system import TradingSystem
-from src.db.repository import TradingRepository
 
 router = APIRouter()
+
+# Alpaca period 映射
+_DAYS_TO_PERIOD = {
+    7: "1W",
+    30: "1M",
+    90: "3M",
+    180: "6M",
+    365: "1A",
+}
+
+
+def _days_to_period(days: int) -> str:
+    """将天数转换为 Alpaca period 字符串"""
+    for threshold, period in sorted(_DAYS_TO_PERIOD.items()):
+        if days <= threshold:
+            return period
+    return "1A"
 
 
 @router.get("/portfolio")
 async def get_portfolio(ts: TradingSystem = Depends(get_trading_system)):
     """获取当前组合（实时，来自 Broker）"""
     portfolio = await ts.get_portfolio()
-    # Portfolio 是 pydantic model / dataclass，转 dict
     return _portfolio_to_dict(portfolio)
 
 
 @router.get("/portfolio/history")
 async def get_portfolio_history(
     days: int = Query(default=30, ge=1, le=365),
-    limit: int = Query(default=100, ge=1, le=1000),
+    ts: TradingSystem = Depends(get_trading_system),
 ):
-    """获取组合历史快照（来自 DB）"""
-    snapshots = await TradingRepository.get_portfolio_history(days=days, limit=limit)
-    return [s.to_dict() for s in snapshots]
+    """获取组合历史（直接从 Broker API 查询）"""
+    period = _days_to_period(days)
+    history = await ts.broker_api.get_portfolio_history(
+        period=period, timeframe="1D"
+    )
+    return history
 
 
 def _portfolio_to_dict(portfolio) -> dict:

@@ -33,7 +33,8 @@ async def get_active_workflow(ts: TradingSystem = Depends(get_trading_system)):
     return {
         "workflow_type": wf_type,
         "name": meta.get("description", wf_type),
-        "is_running": wf.is_running,
+        "is_running": wf.is_running or ts._workflow_lock.locked(),
+        "pending_triggers": len(ts._pending_triggers),
         "stats": wf.stats,
     }
 

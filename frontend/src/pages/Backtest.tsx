@@ -172,11 +172,13 @@ export default function Backtest() {
                   <Tooltip
                     contentStyle={{
                       backgroundColor: '#12121a',
-                      border: '1px solid #1e1e2e',
+                      border: '1px solid #2a2a3e',
                       borderRadius: '8px',
                       fontSize: '12px',
                       color: '#f0f0f5',
                     }}
+                    labelStyle={{ color: '#a0a0b0' }}
+                    itemStyle={{ color: '#e0e0e8' }}
                     formatter={(value: number | undefined) => [formatCurrency(value ?? 0), 'Equity']}
                   />
                   <Area

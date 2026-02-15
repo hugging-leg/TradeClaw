@@ -6,6 +6,18 @@
 
 import { api } from './client';
 
+// ========== Auth ==========
+
+export async function fetchAuthStatus(): Promise<{ auth_enabled: boolean }> {
+  return api.get<{ auth_enabled: boolean }>('/auth/status');
+}
+
+export async function login(username: string, password: string): Promise<{ access_token: string; expires_in: number }> {
+  return api.post<{ access_token: string; expires_in: number }>('/auth/login', { username, password });
+}
+
+// ========== Data API ==========
+
 import type {
   Portfolio,
   PortfolioSnapshot,

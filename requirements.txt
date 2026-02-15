@@ -39,6 +39,10 @@ alembic>=1.13.0
 aiosqlite>=0.20.0  # SQLite 异步驱动
 asyncpg>=0.29.0    # PostgreSQL 异步驱动
 
+# Authentication
+python-jose[cryptography]>=3.3.0
+bcrypt>=4.0.0
+
 # Utilities
 python-multipart>=0.0.9
 aiofiles>=23.2.0

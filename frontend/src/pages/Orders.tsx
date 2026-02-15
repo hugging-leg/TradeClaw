@@ -27,10 +27,10 @@ export default function Orders() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetchOrders().then((data) => {
-      setOrders(data);
-      setLoading(false);
-    });
+    fetchOrders()
+      .then((data) => setOrders(data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   const filtered = orders.filter((o) => {

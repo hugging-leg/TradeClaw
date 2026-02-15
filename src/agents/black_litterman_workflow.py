@@ -260,7 +260,7 @@ class BlackLittermanWorkflow(WorkflowBase):
 
         prices_df = pd.DataFrame(prices_dict)
         prices_df = prices_df.dropna(axis=1, how='all')
-        prices_df = prices_df.fillna(method='ffill').fillna(method='bfill')
+        prices_df = prices_df.ffill().bfill()
 
         self._cached_prices = prices_df
         return prices_df

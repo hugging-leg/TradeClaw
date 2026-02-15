@@ -418,6 +418,52 @@ class AlpacaBrokerAdapter(BrokerAPI):
             }
         }
 
+    @broker_retry(max_attempts=3)
+    async def get_portfolio_history(
+        self,
+        period: str = "1M",
+        timeframe: str = "1D",
+    ) -> List[Dict[str, Any]]:
+        """
+        Get historical portfolio equity/PnL from Alpaca.
+
+        Args:
+            period: "1D", "1W", "1M", "3M", "1A", etc.
+            timeframe: "1Min", "5Min", "15Min", "1H", "1D"
+        """
+        try:
+            from alpaca.trading.requests import GetPortfolioHistoryRequest
+
+            request = GetPortfolioHistoryRequest(
+                period=period,
+                timeframe=timeframe,
+            )
+            history = await self._run_sync(
+                self.trading_client.get_portfolio_history,
+                request,
+            )
+
+            # history.timestamp is a list of epoch ints, equity/profit_loss are parallel lists
+            result: List[Dict[str, Any]] = []
+            timestamps = history.timestamp or []
+            equities = history.equity or []
+            pnls = history.profit_loss or []
+            pnl_pcts = history.profit_loss_pct or []
+
+            for i, ts in enumerate(timestamps):
+                result.append({
+                    "timestamp": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+                    "equity": float(equities[i]) if i < len(equities) and equities[i] is not None else None,
+                    "profit_loss": float(pnls[i]) if i < len(pnls) and pnls[i] is not None else None,
+                    "profit_loss_pct": float(pnl_pcts[i]) if i < len(pnl_pcts) and pnl_pcts[i] is not None else None,
+                })
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to get portfolio history: {e}")
+            return []
+
     # ========== Helper methods for type conversion ==========
 
     @staticmethod

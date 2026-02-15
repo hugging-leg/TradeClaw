@@ -141,6 +141,9 @@ class TradingSystem(SchedulerMixin):
             # Daily stats
             await self._initialize_daily_stats()
 
+            # 从 DB 恢复 workflow 历史统计
+            await self.trading_workflow.load_stats_from_db()
+
             # APScheduler
             self._start_scheduler()
             self._register_scheduled_jobs()
@@ -480,8 +483,12 @@ class TradingSystem(SchedulerMixin):
         context: Optional[Dict[str, Any]] = None,
     ) -> None:
         """执行一次 workflow（不含锁，由调用方保证互斥）"""
+        success = False
+        error_msg: Optional[str] = None
+        start_time = utc_now()
         try:
             logger.info("Starting workflow execution: %s", trigger)
+            self.trading_workflow.is_running = True
 
             ctx = dict(context) if context else {}
             ctx.setdefault("trigger", trigger)
@@ -489,10 +496,20 @@ class TradingSystem(SchedulerMixin):
 
             await self.trading_workflow.run_workflow(ctx)
 
+            success = True
             logger.info("Workflow execution completed: %s", trigger)
 
         except Exception as e:
+            error_msg = str(e)
             logger.error("Workflow execution failed (%s): %s", trigger, e, exc_info=True)
+        finally:
+            self.trading_workflow.is_running = False
+            self.trading_workflow.update_stats(success, error_msg)
+            elapsed = (utc_now() - start_time).total_seconds()
+            logger.info(
+                "Workflow %s finished in %.2fs. success=%s",
+                trigger, elapsed, success,
+            )
 
     async def _drain_pending_triggers(self) -> None:
         """

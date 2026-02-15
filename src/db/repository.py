@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from src.utils.timezone import utc_now
 
-from sqlalchemy import select, desc, and_
+from sqlalchemy import select, desc, and_, func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .models import (
@@ -122,6 +122,59 @@ class TradingRepository:
             query = query.limit(limit)
             result = await db.execute(query)
             return result.scalars().all()
+
+    @staticmethod
+    async def get_workflow_stats(analysis_type: Optional[str] = None) -> Dict[str, Any]:
+        """
+        从 analysis_history 聚合 workflow 运行统计。
+
+        返回:
+            {
+                "total_runs": int,
+                "successful_runs": int,
+                "failed_runs": int,
+                "last_run": str | None,       # ISO 8601
+                "last_error": str | None,
+            }
+        """
+        async with get_db() as db:
+            base = select(
+                sa_func.count(AnalysisHistory.id).label("total"),
+                sa_func.count(
+                    sa_func.nullif(AnalysisHistory.success, False)
+                ).label("success"),
+                sa_func.max(AnalysisHistory.created_at).label("last_run"),
+            )
+            if analysis_type:
+                base = base.where(AnalysisHistory.analysis_type == analysis_type)
+
+            row = (await db.execute(base)).one()
+            total = row.total or 0
+            success = row.success or 0
+            failed = total - success
+            last_run = row.last_run.isoformat() if row.last_run else None
+
+            # 获取最近一次失败的 error_message
+            last_error: Optional[str] = None
+            if failed > 0:
+                err_q = (
+                    select(AnalysisHistory.error_message)
+                    .where(AnalysisHistory.success == False)  # noqa: E712
+                    .order_by(desc(AnalysisHistory.created_at))
+                    .limit(1)
+                )
+                if analysis_type:
+                    err_q = err_q.where(AnalysisHistory.analysis_type == analysis_type)
+                err_row = (await db.execute(err_q)).scalar_one_or_none()
+                last_error = err_row
+
+            return {
+                "total_runs": total,
+                "successful_runs": success,
+                "failed_runs": failed,
+                "last_run": last_run,
+                "last_error": last_error,
+            }
 
     # ========== 订单记录 ==========
 

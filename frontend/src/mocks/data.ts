@@ -126,23 +126,17 @@ export const mockPortfolioSnapshots: PortfolioSnapshot[] = Array.from(
   (_, i) => {
     const dayIndex = 29 - i;
     const baseValue = 120000;
-    // Simulate a generally upward trend with noise
     const trend = dayIndex * 280;
     const noise = Math.sin(dayIndex * 0.8) * 1500 + Math.cos(dayIndex * 1.3) * 800;
-    const totalValue = baseValue + trend + noise;
-    const cash = 75000 + Math.sin(dayIndex * 0.5) * 5000;
-    const positionsValue = totalValue - cash;
-    const dayPnl = (Math.random() - 0.4) * 2000;
+    const equity = baseValue + trend + noise;
+    const pnl = equity - baseValue;
+    const pnlPct = pnl / baseValue;
 
     return {
-      id: `snap-${dayIndex}`,
-      total_value: Math.round(totalValue * 100) / 100,
-      cash: Math.round(cash * 100) / 100,
-      positions_value: Math.round(positionsValue * 100) / 100,
-      day_pnl: Math.round(dayPnl * 100) / 100,
-      total_pnl: Math.round((totalValue - baseValue) * 100) / 100,
-      positions: null,
-      created_at: daysAgo(dayIndex),
+      timestamp: daysAgo(dayIndex),
+      equity: Math.round(equity * 100) / 100,
+      profit_loss: Math.round(pnl * 100) / 100,
+      profit_loss_pct: Math.round(pnlPct * 10000) / 10000,
     };
   }
 );

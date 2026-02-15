@@ -150,4 +150,22 @@ class BrokerAPI(ABC):
         Returns:
             Dictionary containing provider information, capabilities, etc.
         """
-        pass 
+        pass
+
+    async def get_portfolio_history(
+        self,
+        period: str = "1M",
+        timeframe: str = "1D",
+    ) -> List[Dict[str, Any]]:
+        """
+        Get historical portfolio equity/PnL data.
+
+        Args:
+            period: History period (e.g. "1D", "1W", "1M", "3M", "1A")
+            timeframe: Data resolution (e.g. "1Min", "5Min", "15Min", "1H", "1D")
+
+        Returns:
+            List of dicts with keys: timestamp, equity, profit_loss, profit_loss_pct
+            Returns empty list if not supported or operation fails.
+        """
+        return []

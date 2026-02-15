@@ -1,4 +1,4 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { cn } from '@/utils/cn';
 import {
   LayoutDashboard,
@@ -9,8 +9,10 @@ import {
   Settings,
   FlaskConical,
   Activity,
+  LogOut,
 } from 'lucide-react';
 import { StatusDot } from '@/components/ui/StatusDot';
+import { useAuthStore } from '@/stores/auth';
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -23,6 +25,14 @@ const navItems = [
 ];
 
 export function Layout() {
+  const navigate = useNavigate();
+  const { authRequired, clearToken } = useAuthStore();
+
+  const handleLogout = () => {
+    clearToken();
+    navigate('/login', { replace: true });
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-background">
       {/* Sidebar */}
@@ -59,6 +69,15 @@ export function Layout() {
         <div className="border-t border-border px-4 py-3">
           <div className="flex items-center justify-between">
             <StatusDot status="online" label="System Online" />
+            {authRequired && (
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted transition-colors hover:bg-sidebar-hover hover:text-foreground"
+                title="Logout"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         </div>
       </aside>

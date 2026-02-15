@@ -1,5 +1,5 @@
 """
-订单 API
+订单 API — 直接从 Broker 获取，保证数据一致性
 """
 
 from fastapi import APIRouter, Depends, Query
@@ -7,22 +7,19 @@ from typing import Optional
 
 from src.api.deps import get_trading_system
 from src.trading_system import TradingSystem
-from src.db.repository import TradingRepository
 
 router = APIRouter()
 
 
 @router.get("/orders")
 async def get_orders(
-    status: Optional[str] = Query(default=None, description="Filter by status"),
-    symbol: Optional[str] = Query(default=None, description="Filter by symbol"),
-    limit: int = Query(default=50, ge=1, le=500),
+    status: Optional[str] = Query(default=None, description="Filter by status: open, closed, all"),
+    ts: TradingSystem = Depends(get_trading_system),
 ):
-    """获取订单列表（来自 DB）"""
-    records = await TradingRepository.get_orders(
-        status=status, symbol=symbol, limit=limit
-    )
-    return [r.to_dict() for r in records]
+    """获取订单列表（直接从 Broker API 查询）"""
+    broker_status = status if status and status != "all" else None
+    orders = await ts.broker_api.get_orders(status=broker_status)
+    return [_order_to_dict(o) for o in orders]
 
 
 @router.get("/orders/active")

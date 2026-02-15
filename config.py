@@ -140,6 +140,14 @@ class Settings(BaseSettings):
     api_port: int = 8000
     api_cors_origins: str = "http://localhost:5173,http://localhost:3000"
 
+    # === 鉴权配置 ===
+    # 用户名 + bcrypt 哈希密码。初始密码通过 scripts/hash_password.py 生成
+    auth_username: str = "admin"
+    auth_password_hash: str = ""  # 空 = 鉴权关闭（开发模式）
+    jwt_secret_key: str = "CHANGE-ME-TO-A-RANDOM-STRING"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 1440  # 24 小时
+
     # === 环境配置 ===
     environment: str = "development"
     log_level: str = "INFO"

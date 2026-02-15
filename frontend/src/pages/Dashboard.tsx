@@ -16,17 +16,18 @@ import {
   Wallet,
   TrendingUp,
   BarChart3,
-  ArrowUpRight,
-  ArrowDownRight,
+  CheckCircle,
+  XCircle,
+  Clock,
 } from 'lucide-react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { StatCard } from '@/components/ui/StatCard';
 import { Badge } from '@/components/ui/Badge';
 import { StatusDot } from '@/components/ui/StatusDot';
-import { fetchPortfolio, fetchPortfolioHistory, fetchSystemStatus, fetchDecisions } from '@/api';
-import { formatCurrency, formatPercent, formatRelative } from '@/utils/format';
+import { fetchPortfolio, fetchPortfolioHistory, fetchSystemStatus, fetchAnalyses } from '@/api';
+import { formatCurrency, formatPercent, formatRelative, formatDate } from '@/utils/format';
 import { cn } from '@/utils/cn';
-import type { Portfolio, PortfolioSnapshot, SystemStatus, TradingDecision } from '@/types';
+import type { Portfolio, PortfolioSnapshot, SystemStatus, AnalysisHistory } from '@/types';
 
 const CHART_COLORS = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#3b82f6', '#8b5cf6'];
 
@@ -34,20 +35,14 @@ export default function Dashboard() {
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [snapshots, setSnapshots] = useState<PortfolioSnapshot[]>([]);
   const [status, setStatus] = useState<SystemStatus | null>(null);
-  const [decisions, setDecisions] = useState<TradingDecision[]>([]);
+  const [analyses, setAnalyses] = useState<AnalysisHistory[]>([]);
 
   useEffect(() => {
-    Promise.all([
-      fetchPortfolio(),
-      fetchPortfolioHistory(30),
-      fetchSystemStatus(),
-      fetchDecisions(5),
-    ]).then(([p, s, st, d]) => {
-      setPortfolio(p);
-      setSnapshots(s);
-      setStatus(st);
-      setDecisions(d);
-    });
+    // 各请求独立 catch，避免一个失败导致全部丢失
+    fetchPortfolio().then(setPortfolio).catch(() => {});
+    fetchPortfolioHistory(30).then(setSnapshots).catch(() => {});
+    fetchSystemStatus().then(setStatus).catch(() => {});
+    fetchAnalyses(5).then(setAnalyses).catch(() => {});
   }, []);
 
   if (!portfolio || !status) {
@@ -66,10 +61,12 @@ export default function Dashboard() {
     ? ((portfolio.day_pnl / (portfolio.equity - portfolio.day_pnl)) * 100)
     : 0;
 
-  const chartData = snapshots.map((s) => ({
-    date: new Date(s.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    value: s.total_value,
-  }));
+  const chartData = snapshots
+    .filter((s) => s.equity != null)
+    .map((s) => ({
+      date: formatDate(s.timestamp),
+      value: s.equity!,
+    }));
 
   const pieData = portfolio.positions.map((p) => ({
     name: p.symbol,
@@ -133,46 +130,54 @@ export default function Dashboard() {
         <Card className="col-span-2">
           <CardHeader title="Portfolio Value" subtitle="Last 30 days" />
           <div className="h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="#6366f1" stopOpacity={0.3} />
-                    <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
-                <XAxis
-                  dataKey="date"
-                  tick={{ fontSize: 11, fill: '#71717a' }}
-                  axisLine={{ stroke: '#1e1e2e' }}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={{ fontSize: 11, fill: '#71717a' }}
-                  axisLine={false}
-                  tickLine={false}
-                  tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`}
-                />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#12121a',
-                    border: '1px solid #1e1e2e',
-                    borderRadius: '8px',
-                    fontSize: '12px',
-                    color: '#f0f0f5',
-                  }}
-                  formatter={(value: number | undefined) => [formatCurrency(value ?? 0), 'Value']}
-                />
-                <Area
-                  type="monotone"
-                  dataKey="value"
-                  stroke="#6366f1"
-                  strokeWidth={2}
-                  fill="url(#colorValue)"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+            {chartData.length === 0 ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted">
+                No portfolio history data available
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={chartData} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#6366f1" stopOpacity={0.3} />
+                      <stop offset="100%" stopColor="#6366f1" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 11, fill: '#71717a' }}
+                    axisLine={{ stroke: '#1e1e2e' }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: '#71717a' }}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#12121a',
+                      border: '1px solid #2a2a3e',
+                      borderRadius: '8px',
+                      fontSize: '12px',
+                      color: '#f0f0f5',
+                    }}
+                    labelStyle={{ color: '#a0a0b0' }}
+                    itemStyle={{ color: '#e0e0e8' }}
+                    formatter={(value: number | undefined) => [formatCurrency(value ?? 0), 'Value']}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="value"
+                    stroke="#6366f1"
+                    strokeWidth={2}
+                    fill="url(#colorValue)"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            )}
           </div>
         </Card>
 
@@ -199,12 +204,17 @@ export default function Dashboard() {
                 <Tooltip
                   contentStyle={{
                     backgroundColor: '#12121a',
-                    border: '1px solid #1e1e2e',
+                    border: '1px solid #2a2a3e',
                     borderRadius: '8px',
                     fontSize: '12px',
                     color: '#f0f0f5',
                   }}
-                  formatter={(value: number | undefined) => [formatCurrency(value ?? 0), '']}
+                  itemStyle={{ color: '#e0e0e8' }}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  formatter={(value: any, _name: any, entry: any) => {
+                    const label = entry?.payload?.name ?? '';
+                    return [formatCurrency(Number(value) || 0), label];
+                  }}
                 />
               </PieChart>
             </ResponsiveContainer>
@@ -226,51 +236,65 @@ export default function Dashboard() {
 
       {/* Bottom Row */}
       <div className="grid grid-cols-2 gap-4">
-        {/* Recent Decisions */}
+        {/* Recent Analyses */}
         <Card>
-          <CardHeader title="Recent Decisions" subtitle="AI trading decisions" />
+          <CardHeader title="Recent Analyses" subtitle="AI workflow executions" />
           <div className="space-y-3">
-            {decisions.map((d) => (
-              <div
-                key={d.id}
-                className="flex items-start gap-3 rounded-lg border border-border p-3 transition-colors hover:border-border-hover"
-              >
+            {analyses.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted">No analyses yet</p>
+            ) : (
+              analyses.map((a) => (
                 <div
-                  className={cn(
-                    'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
-                    d.action === 'buy' && 'bg-profit-bg',
-                    d.action === 'sell' && 'bg-loss-bg',
-                    d.action === 'hold' && 'bg-info-bg'
-                  )}
+                  key={a.id}
+                  className="flex items-start gap-3 rounded-lg border border-border p-3 transition-colors hover:border-border-hover"
                 >
-                  {d.action === 'buy' && <ArrowUpRight className="h-3.5 w-3.5 text-profit" />}
-                  {d.action === 'sell' && <ArrowDownRight className="h-3.5 w-3.5 text-loss" />}
-                  {d.action === 'hold' && <BarChart3 className="h-3.5 w-3.5 text-info" />}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-foreground">{d.symbol}</span>
-                    <Badge
-                      variant={d.action === 'buy' ? 'profit' : d.action === 'sell' ? 'loss' : 'info'}
-                    >
-                      {d.action.toUpperCase()}
-                    </Badge>
-                    <span className="ml-auto text-xs text-muted">{formatRelative(d.created_at)}</span>
-                  </div>
-                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{d.reasoning}</p>
-                  <div className="mt-1.5 flex items-center gap-3">
-                    <span className="text-xs text-muted">
-                      Confidence: <span className="text-foreground">{(d.confidence * 100).toFixed(0)}%</span>
-                    </span>
-                    {d.quantity && (
-                      <span className="text-xs text-muted">
-                        Qty: <span className="text-foreground">{d.quantity}</span>
-                      </span>
+                  <div
+                    className={cn(
+                      'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg',
+                      a.success ? 'bg-profit-bg' : 'bg-loss-bg'
+                    )}
+                  >
+                    {a.success ? (
+                      <CheckCircle className="h-3.5 w-3.5 text-profit" />
+                    ) : (
+                      <XCircle className="h-3.5 w-3.5 text-loss" />
                     )}
                   </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-semibold text-foreground capitalize">
+                        {a.trigger.replace(/_/g, ' ')}
+                      </span>
+                      <Badge variant={a.success ? 'profit' : 'loss'}>
+                        {a.success ? 'SUCCESS' : 'FAILED'}
+                      </Badge>
+                      <span className="ml-auto text-xs text-muted">{formatRelative(a.created_at)}</span>
+                    </div>
+                    {a.output_response && (
+                      <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                        {a.output_response.slice(0, 200)}
+                      </p>
+                    )}
+                    {a.error_message && (
+                      <p className="mt-1 line-clamp-2 text-xs text-loss">{a.error_message}</p>
+                    )}
+                    <div className="mt-1.5 flex items-center gap-3">
+                      {a.tool_calls && a.tool_calls.length > 0 && (
+                        <span className="text-xs text-muted">
+                          Tools: <span className="text-foreground">{a.tool_calls.length}</span>
+                        </span>
+                      )}
+                      {a.execution_time_seconds != null && (
+                        <span className="flex items-center gap-1 text-xs text-muted">
+                          <Clock className="h-3 w-3" />
+                          <span className="text-foreground">{a.execution_time_seconds.toFixed(1)}s</span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </Card>
 

@@ -1,7 +1,10 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Layout } from '@/components/Layout';
+import { AuthGuard } from '@/components/AuthGuard';
+import { ToastProvider } from '@/components/ui/Toast';
 import { lazy, Suspense } from 'react';
 
+const Login = lazy(() => import('@/pages/Login'));
 const Dashboard = lazy(() => import('@/pages/Dashboard'));
 const Portfolio = lazy(() => import('@/pages/Portfolio'));
 const Orders = lazy(() => import('@/pages/Orders'));
@@ -20,67 +23,82 @@ function PageLoader() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route element={<Layout />}>
+    <ToastProvider>
+      <BrowserRouter>
+        <Routes>
+          {/* Public route */}
           <Route
-            index
+            path="login"
             element={
               <Suspense fallback={<PageLoader />}>
-                <Dashboard />
+                <Login />
               </Suspense>
             }
           />
-          <Route
-            path="portfolio"
-            element={
-              <Suspense fallback={<PageLoader />}>
-                <Portfolio />
-              </Suspense>
-            }
-          />
-          <Route
-            path="orders"
-            element={
-              <Suspense fallback={<PageLoader />}>
-                <Orders />
-              </Suspense>
-            }
-          />
-          <Route
-            path="agent"
-            element={
-              <Suspense fallback={<PageLoader />}>
-                <Agent />
-              </Suspense>
-            }
-          />
-          <Route
-            path="scheduler"
-            element={
-              <Suspense fallback={<PageLoader />}>
-                <Scheduler />
-              </Suspense>
-            }
-          />
-          <Route
-            path="backtest"
-            element={
-              <Suspense fallback={<PageLoader />}>
-                <Backtest />
-              </Suspense>
-            }
-          />
-          <Route
-            path="settings"
-            element={
-              <Suspense fallback={<PageLoader />}>
-                <Settings />
-              </Suspense>
-            }
-          />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+
+          {/* Protected routes */}
+          <Route element={<AuthGuard />}>
+            <Route element={<Layout />}>
+              <Route
+                index
+                element={
+                  <Suspense fallback={<PageLoader />}>
+                    <Dashboard />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="portfolio"
+                element={
+                  <Suspense fallback={<PageLoader />}>
+                    <Portfolio />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="orders"
+                element={
+                  <Suspense fallback={<PageLoader />}>
+                    <Orders />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="agent"
+                element={
+                  <Suspense fallback={<PageLoader />}>
+                    <Agent />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="scheduler"
+                element={
+                  <Suspense fallback={<PageLoader />}>
+                    <Scheduler />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="backtest"
+                element={
+                  <Suspense fallback={<PageLoader />}>
+                    <Backtest />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="settings"
+                element={
+                  <Suspense fallback={<PageLoader />}>
+                    <Settings />
+                  </Suspense>
+                }
+              />
+            </Route>
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </ToastProvider>
   );
 }

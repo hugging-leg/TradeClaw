@@ -25,14 +25,10 @@ export interface Portfolio {
 }
 
 export interface PortfolioSnapshot {
-  id: string;
-  total_value: number;
-  cash: number;
-  positions_value: number;
-  day_pnl: number;
-  total_pnl: number;
-  positions: Record<string, unknown>[] | null;
-  created_at: string;
+  timestamp: string;
+  equity: number | null;
+  profit_loss: number | null;
+  profit_loss_pct: number | null;
 }
 
 // ========== Orders ==========
@@ -254,6 +250,7 @@ export interface ActiveWorkflow {
   workflow_type: string;
   name: string;
   is_running: boolean;
+  pending_triggers: number;
   stats: Record<string, unknown>;
 }
 
