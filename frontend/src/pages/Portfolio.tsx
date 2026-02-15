@@ -80,7 +80,7 @@ export default function Portfolio() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <StatCard
           label="Total Equity"
           value={formatCurrency(portfolio.equity)}
@@ -110,7 +110,7 @@ export default function Portfolio() {
       </div>
 
       {/* Equity Curve + Day P&L */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader
             title="Equity Curve"
@@ -194,7 +194,7 @@ export default function Portfolio() {
       </div>
 
       {/* Treemap + Table */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* Treemap */}
         <Card>
           <CardHeader title="Position Map" subtitle="Sized by market value" />
@@ -278,7 +278,7 @@ export default function Portfolio() {
         </Card>
 
         {/* Positions Table */}
-        <Card className="col-span-2">
+        <Card className="lg:col-span-2">
           <CardHeader title="All Positions" subtitle={`${portfolio.positions.length} holdings`} />
           <div className="overflow-x-auto">
             <table className="w-full">

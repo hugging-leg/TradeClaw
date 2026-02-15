@@ -45,9 +45,9 @@ RUN mkdir -p /app/user_data/logs && \
     chown -R trader:trader /app
 USER trader
 
-# 健康检查 — 使用 API 端点
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -sf http://localhost:8000/api/settings > /dev/null || exit 1
+# 健康检查 — 使用公开端点（不需要鉴权）
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=30s \
+    CMD curl -sf http://localhost:8000/api/auth/status > /dev/null || exit 1
 
 EXPOSE 8000
 

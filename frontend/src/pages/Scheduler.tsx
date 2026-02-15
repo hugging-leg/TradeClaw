@@ -104,8 +104,8 @@ function AddJobDialog({ open, onClose, onSubmit }: AddJobDialogProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="w-full max-w-lg rounded-2xl border border-border bg-card p-6 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 backdrop-blur-sm sm:items-center">
+      <div className="max-h-[90vh] w-full overflow-y-auto rounded-t-2xl border border-border bg-card p-5 shadow-2xl sm:max-w-lg sm:rounded-2xl sm:p-6">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-bold text-foreground">Add Scheduled Job</h2>
           <button onClick={onClose} className="rounded-lg p-1.5 text-muted hover:bg-card-hover hover:text-foreground">
@@ -495,7 +495,7 @@ export default function Scheduler() {
   return (
     <div className="animate-fade-in space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Scheduler & Triggers</h1>
           <p className="mt-1 text-sm text-muted">Manage scheduled tasks, event triggers, and risk controls</p>
@@ -521,7 +521,7 @@ export default function Scheduler() {
 
       {/* System Status */}
       {status && (
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <Card className="flex items-center gap-3 !p-4">
             <StatusDot status={status.is_running ? 'online' : 'offline'} />
             <div>
@@ -671,7 +671,7 @@ export default function Scheduler() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         {/* Execution History */}
         <Card>
           <CardHeader title="Execution History" subtitle="Recent job runs" />

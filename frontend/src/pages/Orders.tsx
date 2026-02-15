@@ -1,15 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { StatCard } from '@/components/ui/StatCard';
-import { fetchOrders } from '@/api';
+import { useToast } from '@/components/ui/Toast';
+import { fetchOrders, cancelOrder } from '@/api';
 import { formatCurrency, formatDateTime, formatRelative } from '@/utils/format';
 import { cn } from '@/utils/cn';
-import { ClipboardList, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { ClipboardList, CheckCircle, XCircle, Clock, Ban } from 'lucide-react';
 import type { Order, OrderStatus } from '@/types';
 
 type FilterTab = 'all' | 'active' | 'filled' | 'cancelled';
+
+const ACTIVE_STATUSES: OrderStatus[] = ['pending', 'submitted', 'partial'];
 
 const statusBadgeVariant: Record<OrderStatus, 'profit' | 'loss' | 'warning' | 'info' | 'muted'> = {
   pending: 'warning',
@@ -21,28 +24,52 @@ const statusBadgeVariant: Record<OrderStatus, 'profit' | 'loss' | 'warning' | 'i
   expired: 'muted',
 };
 
+function isActive(status: OrderStatus): boolean {
+  return ACTIVE_STATUSES.includes(status);
+}
+
 export default function Orders() {
+  const { toast } = useToast();
   const [orders, setOrders] = useState<Order[]>([]);
   const [filter, setFilter] = useState<FilterTab>('all');
   const [loading, setLoading] = useState(true);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadOrders = useCallback(() => {
     fetchOrders()
       .then((data) => setOrders(data))
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    loadOrders();
+  }, [loadOrders]);
+
+  const handleCancel = async (orderId: string, symbol: string) => {
+    setCancellingId(orderId);
+    try {
+      await cancelOrder(orderId);
+      toast(`Order for ${symbol} cancelled`, 'success');
+      // Refresh orders list
+      loadOrders();
+    } catch {
+      toast(`Failed to cancel order for ${symbol}`, 'error');
+    } finally {
+      setCancellingId(null);
+    }
+  };
+
   const filtered = orders.filter((o) => {
     if (filter === 'all') return true;
-    if (filter === 'active') return ['pending', 'submitted', 'partial'].includes(o.status);
+    if (filter === 'active') return isActive(o.status);
     if (filter === 'filled') return o.status === 'filled';
     if (filter === 'cancelled') return ['cancelled', 'rejected', 'expired'].includes(o.status);
     return true;
   });
 
   const filledOrders = orders.filter((o) => o.status === 'filled');
-  const activeOrders = orders.filter((o) => ['pending', 'submitted', 'partial'].includes(o.status));
+  const activeOrders = orders.filter((o) => isActive(o.status));
   const totalFilled = filledOrders.reduce((sum, o) => sum + (o.filled_price ?? 0) * o.filled_quantity, 0);
 
   if (loading) {
@@ -62,7 +89,7 @@ export default function Orders() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <StatCard
           label="Total Orders"
           value={String(orders.length)}
@@ -120,12 +147,13 @@ export default function Orders() {
                 <th className="pb-3 text-xs font-medium text-muted">Status</th>
                 <th className="pb-3 text-xs font-medium text-muted">TIF</th>
                 <th className="pb-3 text-right text-xs font-medium text-muted">Created</th>
+                <th className="pb-3 text-center text-xs font-medium text-muted">Action</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="py-12 text-center text-sm text-muted">
+                  <td colSpan={11} className="py-12 text-center text-sm text-muted">
                     No orders found
                   </td>
                 </tr>
@@ -161,6 +189,26 @@ export default function Orders() {
                     <td className="py-3 text-right text-xs text-muted">
                       <span title={formatDateTime(order.created_at)}>{formatRelative(order.created_at)}</span>
                     </td>
+                    <td className="py-3 text-center">
+                      {isActive(order.status) ? (
+                        <button
+                          onClick={() => handleCancel(order.id, order.symbol)}
+                          disabled={cancellingId === order.id}
+                          className={cn(
+                            'inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors',
+                            cancellingId === order.id
+                              ? 'cursor-not-allowed text-muted'
+                              : 'text-loss hover:bg-loss-bg',
+                          )}
+                          title="Cancel order"
+                        >
+                          <Ban className="h-3 w-3" />
+                          {cancellingId === order.id ? 'Cancelling…' : 'Cancel'}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-muted">—</span>
+                      )}
+                    </td>
                   </tr>
                 ))
               )}
@@ -169,7 +217,7 @@ export default function Orders() {
         </div>
       </Card>
 
-      {/* Order Details — Expandable in future */}
+      {/* Active Orders */}
       {activeOrders.length > 0 && (
         <Card>
           <CardHeader title="Active Orders" subtitle="Pending execution" />
@@ -178,7 +226,7 @@ export default function Orders() {
               <div
                 key={order.id}
                 className={cn(
-                  'flex items-center justify-between rounded-lg border border-border p-4 transition-colors hover:border-border-hover'
+                  'flex flex-col gap-3 rounded-lg border border-border p-4 transition-colors hover:border-border-hover sm:flex-row sm:items-center sm:justify-between'
                 )}
               >
                 <div className="flex items-center gap-4">
@@ -197,6 +245,15 @@ export default function Orders() {
                     {order.status}
                   </Badge>
                   <span className="text-xs text-muted">{formatRelative(order.created_at)}</span>
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    icon={<Ban className="h-3.5 w-3.5" />}
+                    loading={cancellingId === order.id}
+                    onClick={() => handleCancel(order.id, order.symbol)}
+                  >
+                    Cancel
+                  </Button>
                 </div>
               </div>
             ))}

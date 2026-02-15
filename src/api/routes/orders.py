@@ -2,7 +2,7 @@
 订单 API — 直接从 Broker 获取，保证数据一致性
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
 
 from src.api.deps import get_trading_system
@@ -27,6 +27,18 @@ async def get_active_orders(ts: TradingSystem = Depends(get_trading_system)):
     """获取活跃订单（实时，来自 Broker）"""
     orders = await ts.get_active_orders()
     return [_order_to_dict(o) for o in orders]
+
+
+@router.delete("/orders/{order_id}")
+async def cancel_order(
+    order_id: str,
+    ts: TradingSystem = Depends(get_trading_system),
+):
+    """取消指定订单（调用 Broker API）"""
+    success = await ts.broker_api.cancel_order(order_id)
+    if not success:
+        raise HTTPException(status_code=400, detail=f"Failed to cancel order {order_id}")
+    return {"success": True, "order_id": order_id, "message": "Order cancelled"}
 
 
 def _order_to_dict(order) -> dict:

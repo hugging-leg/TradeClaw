@@ -746,12 +746,12 @@ export default function Agent() {
   return (
     <div className="animate-fade-in space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Agent</h1>
           <p className="mt-1 text-sm text-muted">AI workflow management, tools, and execution history</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           {active?.is_running && (
             <div className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5">
               <span className="relative flex h-2.5 w-2.5">
@@ -784,7 +784,7 @@ export default function Agent() {
       />
 
       {/* Tab Switcher */}
-      <div className="flex gap-1 overflow-x-auto border-b border-border pb-0">
+      <div className="-mx-4 flex gap-1 overflow-x-auto border-b border-border px-4 pb-0 md:mx-0 md:px-0">
         {([
           { key: 'config', label: 'Config', icon: Settings2 },
           { key: 'execution', label: 'Execution', icon: Zap },
@@ -873,7 +873,7 @@ export default function Agent() {
               </span>
             </div>
           </div>
-          <div className="flex gap-1.5">
+          <div className="flex flex-wrap gap-1.5">
             {toolCategories.map((cat) => {
               const count = cat === 'all' ? tools.length : tools.filter((t) => t.category === cat).length;
               return (
@@ -893,7 +893,7 @@ export default function Agent() {
               );
             })}
           </div>
-          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
             {filteredTools.map((tool) => (
               <ToolCard key={tool.name} tool={tool} onToggle={handleToggleTool} />
             ))}

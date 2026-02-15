@@ -40,7 +40,7 @@ export default function Backtest() {
   return (
     <div className="animate-fade-in space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Backtest</h1>
           <p className="mt-1 text-sm text-muted">Test strategies against historical data</p>
@@ -54,7 +54,7 @@ export default function Backtest() {
       {/* Backtest Config Form (placeholder) */}
       <Card>
         <CardHeader title="Configure Backtest" subtitle="Set parameters for a new backtest run" />
-        <div className="grid grid-cols-4 gap-4">
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
           <div>
             <label className="mb-1.5 block text-xs font-medium text-muted">Start Date</label>
             <input
@@ -104,7 +104,7 @@ export default function Backtest() {
       {selected && (
         <>
           {/* Stats */}
-          <div className="grid grid-cols-5 gap-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5 lg:gap-4">
             <StatCard
               label="Total Return"
               value={formatPercent(selected.total_return)}
@@ -196,7 +196,7 @@ export default function Backtest() {
           {/* Backtest Info */}
           <Card>
             <CardHeader title="Backtest Configuration" />
-            <div className="grid grid-cols-3 gap-4 text-sm">
+            <div className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-3">
               <div>
                 <span className="text-muted">Period</span>
                 <div className="mt-1 text-foreground">

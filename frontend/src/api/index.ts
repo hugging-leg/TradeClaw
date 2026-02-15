@@ -61,6 +61,10 @@ export async function fetchActiveOrders(): Promise<Order[]> {
   return api.get<Order[]>('/orders/active');
 }
 
+export async function cancelOrder(orderId: string): Promise<{ success: boolean; order_id: string; message: string }> {
+  return api.delete<{ success: boolean; order_id: string; message: string }>(`/orders/${orderId}`);
+}
+
 // ========== Agent ==========
 
 export async function fetchDecisions(limit = 20): Promise<TradingDecision[]> {

@@ -310,7 +310,7 @@ function SettingRow({
   };
 
   return (
-    <div className="flex items-center justify-between border-b border-border/50 py-3 last:border-0">
+    <div className="flex flex-col gap-2 border-b border-border/50 py-3 last:border-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-sm text-foreground">
           {field.label}
@@ -321,7 +321,7 @@ function SettingRow({
         {field.description && <div className="mt-0.5 text-xs text-muted">{field.description}</div>}
       </div>
 
-      <div className="ml-4 shrink-0">
+      <div className="shrink-0 sm:ml-4">
         {isEditable ? (
           renderInput()
         ) : typeof value === 'boolean' ? (
@@ -399,7 +399,7 @@ export default function Settings() {
   return (
     <div className="animate-fade-in space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
           <p className="mt-1 text-sm text-muted">
@@ -408,7 +408,7 @@ export default function Settings() {
         </div>
         {editedCount > 0 && (
           <div className="flex items-center gap-3">
-            <span className="text-xs text-muted">{editedCount} field(s) modified</span>
+            <span className="hidden text-xs text-muted sm:inline">{editedCount} field(s) modified</span>
             <Button variant="secondary" icon={<RotateCcw className="h-4 w-4" />} onClick={handleReset}>
               Reset
             </Button>
@@ -419,9 +419,38 @@ export default function Settings() {
         )}
       </div>
 
+      {/* Mobile: horizontal scrollable tabs */}
+      <div className="-mx-4 overflow-x-auto px-4 md:hidden">
+        <div className="flex gap-1.5 pb-2">
+          {tabs.map(({ key, label, icon: Icon }) => {
+            const tabEdits = FIELD_GROUPS[key].fields.filter((fd) => fd.key in draft).length;
+            return (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={cn(
+                  'flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors',
+                  activeTab === key
+                    ? 'bg-accent/10 text-accent-light'
+                    : 'bg-card text-muted hover:text-foreground',
+                )}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+                {tabEdits > 0 && (
+                  <span className="rounded-full bg-accent/20 px-1 py-0.5 text-[10px] font-bold text-accent-light">
+                    {tabEdits}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="flex gap-6">
-        {/* Sidebar Tabs */}
-        <div className="w-48 shrink-0 space-y-1">
+        {/* Desktop Sidebar Tabs */}
+        <div className="hidden w-48 shrink-0 space-y-1 md:block">
           {tabs.map(({ key, label, icon: Icon }) => {
             const tabEdits = FIELD_GROUPS[key].fields.filter((fd) => fd.key in draft).length;
             return (
@@ -448,7 +477,7 @@ export default function Settings() {
         </div>
 
         {/* Content */}
-        <div className="flex-1">
+        <div className="min-w-0 flex-1">
           <Card>
             <CardHeader title={group.title} subtitle={group.subtitle} />
             {group.fields.map((field) => (

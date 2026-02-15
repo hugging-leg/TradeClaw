@@ -79,7 +79,7 @@ export default function Dashboard() {
   return (
     <div className="animate-fade-in space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Dashboard</h1>
           <p className="mt-1 text-sm text-muted">Portfolio overview and system status</p>
@@ -96,7 +96,7 @@ export default function Dashboard() {
       </div>
 
       {/* Stat Cards */}
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">
         <StatCard
           label="Total Equity"
           value={formatCurrency(portfolio.equity)}
@@ -125,9 +125,9 @@ export default function Dashboard() {
       </div>
 
       {/* Charts Row */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         {/* Equity Curve */}
-        <Card className="col-span-2">
+        <Card className="lg:col-span-2">
           <CardHeader title="Portfolio Value" subtitle="Last 30 days" />
           <div className="h-[280px]">
             {chartData.length === 0 ? (
@@ -235,7 +235,7 @@ export default function Dashboard() {
       </div>
 
       {/* Bottom Row */}
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Recent Analyses */}
         <Card>
           <CardHeader title="Recent Analyses" subtitle="AI workflow executions" />
