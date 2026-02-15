@@ -58,9 +58,11 @@ _WRITE_ONLY_FIELDS = frozenset({
     "telegram_bot_token",
 })
 
-# 绝不可通过 API 读写的字段
+# 绝不可通过 API 修改的字段（可读但不可写）
+# 修改这些值要么无效（服务已绑定端口）、要么有安全风险
 _FORBIDDEN_FIELDS = frozenset({
     "database_url", "data_dir",
+    "api_host", "api_port",  # 修改后 uvicorn 仍监听旧地址，会导致断连
     "auth_username", "auth_password_hash",
     "jwt_secret_key", "jwt_algorithm", "jwt_expire_minutes",
 })

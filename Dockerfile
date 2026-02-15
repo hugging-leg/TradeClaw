@@ -47,8 +47,8 @@ USER trader
 
 # 健康检查 — 使用 API 端点
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-    CMD curl -sf http://localhost:${API_PORT:-8000}/api/settings > /dev/null || exit 1
+    CMD curl -sf http://localhost:8000/api/settings > /dev/null || exit 1
 
-EXPOSE ${API_PORT:-8000}
+EXPOSE 8000
 
 CMD ["python", "main.py"]

@@ -10,11 +10,11 @@ services:
       - DATA_DIR=/app/user_data
       - ENVIRONMENT=production
     ports:
-      - "${API_PORT:-8000}:${API_PORT:-8000}"
+      - "8000:8000"
     volumes:
       - ./user_data:/app/user_data
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:${API_PORT:-8000}/api/settings"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/api/settings"]
       interval: 30s
       timeout: 10s
       retries: 3
