@@ -19,3 +19,11 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+      
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
+    depends_on:
+      - trading-agent

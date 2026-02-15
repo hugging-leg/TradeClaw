@@ -43,7 +43,7 @@ from src.models.trading_models import (
     TradingDecision, TradingAction, Order, OrderSide, OrderType, TimeInForce
 )
 from src.utils.llm_utils import create_llm_client
-from src.utils.timezone import utc_now
+from src.utils.timezone import utc_now, ensure_utc
 
 logger = get_logger(__name__)
 
@@ -326,7 +326,9 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         positions = await self._get_open_positions()
 
         for pos in positions:
-            if today >= pos.target_sell_date:
+            # SQLite 读出的 datetime 可能是 naive 的，需要统一为 UTC aware
+            sell_date = ensure_utc(pos.target_sell_date)
+            if today >= sell_date:
                 logger.info(f"持仓到期，准备卖出: {pos.ticker}")
 
                 try:
@@ -363,12 +365,6 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                     order_id = await self.broker_api.submit_order(order)
 
                     if order_id:
-                        await _persist_order(order, str(order_id))
-                        await _persist_decision(
-                            symbol=pos.ticker, action="sell",
-                            quantity=Decimal(actual_qty),
-                            reasoning=f"持仓到期卖出, 持仓{pos.holding_days}天, PnL: ${pnl:+,.2f}",
-                        )
                         sold_tickers.append(pos.ticker)
                         await self._close_position(pos.ticker, current_price, pnl)
 
