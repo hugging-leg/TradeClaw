@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     # === 数据库配置 ===
     database_url: Optional[str] = None  # SQLite (默认) 或 PostgreSQL
     # LangGraph Memory 持久化 (PostgreSQL)
-    # 配置后 checkpointer + store 将使用 Postgres，否则降级为内存模式
+    # 必须配置，否则启动时报错（不支持内存模式降级）
     postgres_uri: Optional[str] = None
 
     # === 交易参数 ===
