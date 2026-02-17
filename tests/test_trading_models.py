@@ -5,7 +5,7 @@ Unit tests for trading models.
 import pytest
 from decimal import Decimal
 from datetime import datetime, timezone
-from src.models.trading_models import (
+from agent_trader.models.trading_models import (
     Order, OrderStatus, OrderType, OrderSide, TimeInForce,
     Position, PositionSide, Portfolio, TradingDecision, TradingAction,
     NewsItem, TradingEvent

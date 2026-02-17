@@ -69,6 +69,9 @@ function AddJobDialog({ open, onClose, onSubmit }: AddJobDialogProps) {
   const [cronMinute, setCronMinute] = useState(35);
   const [cronDow, setCronDow] = useState('mon-fri');
   const [intervalMinutes, setIntervalMinutes] = useState(30);
+  const [onceMode, setOnceMode] = useState<'datetime' | 'delay'>('delay');
+  const [onceDatetime, setOnceDatetime] = useState('');
+  const [onceDelayMinutes, setOnceDelayMinutes] = useState(30);
   const [requireTradingDay, setRequireTradingDay] = useState(true);
   const [requireMarketOpen, setRequireMarketOpen] = useState(false);
   const [eventType, setEventType] = useState('trigger_workflow');
@@ -86,6 +89,11 @@ function AddJobDialog({ open, onClose, onSubmit }: AddJobDialogProps) {
       cron_minute: triggerType === 'cron' ? cronMinute : undefined,
       cron_day_of_week: triggerType === 'cron' ? cronDow : undefined,
       interval_minutes: triggerType === 'interval' ? intervalMinutes : undefined,
+      once_mode: triggerType === 'once' ? onceMode : undefined,
+      once_datetime: triggerType === 'once' && onceMode === 'datetime'
+        ? new Date(onceDatetime).toISOString() // Convert local datetime-local to UTC ISO string
+        : undefined,
+      once_delay_minutes: triggerType === 'once' && onceMode === 'delay' ? onceDelayMinutes : undefined,
       require_trading_day: requireTradingDay,
       require_market_open: requireMarketOpen,
       event_type: eventType,
@@ -98,6 +106,9 @@ function AddJobDialog({ open, onClose, onSubmit }: AddJobDialogProps) {
     setCronMinute(35);
     setCronDow('mon-fri');
     setIntervalMinutes(30);
+    setOnceMode('delay');
+    setOnceDatetime('');
+    setOnceDelayMinutes(30);
     setRequireTradingDay(true);
     setRequireMarketOpen(false);
     setEventType('trigger_workflow');
@@ -130,19 +141,23 @@ function AddJobDialog({ open, onClose, onSubmit }: AddJobDialogProps) {
           <div>
             <label className="mb-1.5 block text-sm font-medium text-foreground">Trigger Type</label>
             <div className="flex gap-2">
-              {(['cron', 'interval'] as const).map((t) => (
+              {([
+                { key: 'cron' as const, label: '⏰ Cron (Fixed Time)' },
+                { key: 'interval' as const, label: '🔄 Interval (Repeating)' },
+                { key: 'once' as const, label: '🎯 Once (One-time)' },
+              ]).map(({ key, label }) => (
                 <button
-                  key={t}
+                  key={key}
                   type="button"
-                  onClick={() => setTriggerType(t)}
+                  onClick={() => setTriggerType(key)}
                   className={cn(
                     'flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors',
-                    triggerType === t
+                    triggerType === key
                       ? 'border-accent bg-accent/10 text-accent-light'
                       : 'border-border bg-background text-muted hover:text-foreground'
                   )}
                 >
-                  {t === 'cron' ? '⏰ Cron (Fixed Time)' : '🔄 Interval (Repeating)'}
+                  {label}
                 </button>
               ))}
             </div>
@@ -217,6 +232,77 @@ function AddJobDialog({ open, onClose, onSubmit }: AddJobDialogProps) {
                   <span> ({Math.floor(intervalMinutes / 60)}h {intervalMinutes % 60}m)</span>
                 )}
               </p>
+            </div>
+          )}
+
+          {/* Once (Date) Fields */}
+          {triggerType === 'once' && (
+            <div className="space-y-3 rounded-lg border border-border/50 bg-background p-4">
+              {/* Mode selector */}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOnceMode('delay')}
+                  className={cn(
+                    'flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                    onceMode === 'delay'
+                      ? 'border-accent bg-accent/10 text-accent-light'
+                      : 'border-border bg-card text-muted hover:text-foreground'
+                  )}
+                >
+                  ⏱️ Delay
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOnceMode('datetime')}
+                  className={cn(
+                    'flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-colors',
+                    onceMode === 'datetime'
+                      ? 'border-accent bg-accent/10 text-accent-light'
+                      : 'border-border bg-card text-muted hover:text-foreground'
+                  )}
+                >
+                  📅 Specific Time
+                </button>
+              </div>
+
+              {onceMode === 'delay' ? (
+                <div>
+                  <label className="mb-1 block text-xs text-muted">Delay (minutes from now)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10080}
+                    value={onceDelayMinutes}
+                    onChange={(e) => setOnceDelayMinutes(parseInt(e.target.value))}
+                    className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-accent focus:outline-none"
+                  />
+                  <p className="mt-2 text-xs text-muted">
+                    Preview: Runs in <span className="font-semibold text-foreground">
+                      {onceDelayMinutes >= 60
+                        ? `${Math.floor(onceDelayMinutes / 60)}h ${onceDelayMinutes % 60}m`
+                        : `${onceDelayMinutes} minutes`}
+                    </span> from now
+                  </p>
+                </div>
+              ) : (
+                <div>
+                  <label className="mb-1 block text-xs text-muted">Date & Time</label>
+                  <input
+                    type="datetime-local"
+                    value={onceDatetime}
+                    onChange={(e) => setOnceDatetime(e.target.value)}
+                    className="w-full rounded-lg border border-border bg-card px-3 py-2 text-sm text-foreground focus:border-accent focus:outline-none"
+                  />
+                  {onceDatetime && (
+                    <p className="mt-2 text-xs text-muted">
+                      Preview: Runs at <span className="font-semibold text-foreground">
+                        {new Date(onceDatetime).toLocaleString()}
+                      </span>
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

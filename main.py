@@ -6,13 +6,13 @@ from pathlib import Path
 
 import uvicorn
 
-from src.trading_system import TradingSystem
-from src.interfaces.factory import get_news_api
-from src.utils.logging_config import setup_logging as setup_structlog, get_logger
-from src.api.app import create_app
-from src.api.deps import set_trading_system
-from src.api.routes.backtest import set_backtest_runner
-from src.services.backtest_runner import BacktestRunner
+from agent_trader.trading_system import TradingSystem
+from agent_trader.interfaces.factory import get_news_api
+from agent_trader.utils.logging_config import setup_logging as setup_structlog, get_logger
+from agent_trader.api.app import create_app
+from agent_trader.api.deps import set_trading_system
+from agent_trader.api.routes.backtest import set_backtest_runner
+from agent_trader.services.backtest_runner import BacktestRunner
 from config import settings
 
 

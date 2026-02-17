@@ -339,8 +339,8 @@ REBALANCE_COOLDOWN_SECONDS=3600  # 冷却期 (秒)
 ### 添加新的 Workflow
 
 ```python
-from src.agents.workflow_factory import register_workflow
-from src.agents.workflow_base import WorkflowBase
+from agent_trader.agents.workflow_factory import register_workflow
+from agent_trader.agents.workflow_base import WorkflowBase
 
 @register_workflow("my_workflow", description="My custom workflow")
 class MyWorkflow(WorkflowBase):
@@ -352,8 +352,8 @@ class MyWorkflow(WorkflowBase):
 ### 添加新的适配器
 
 ```python
-from src.interfaces.factory import register_broker
-from src.interfaces.broker_api import BrokerAPI
+from agent_trader.interfaces.factory import register_broker
+from agent_trader.interfaces.broker_api import BrokerAPI
 
 @register_broker("my_broker")
 class MyBrokerAdapter(BrokerAPI):

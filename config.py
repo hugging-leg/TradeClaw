@@ -65,8 +65,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = "test_token"
     telegram_chat_id: str = "test_chat_id"
 
-    # === 数据库配置 (SQLite, 存储在 user_data/) ===
-    database_url: Optional[str] = None
+    # === 数据库配置 ===
+    database_url: Optional[str] = None  # SQLite (默认) 或 PostgreSQL
+    # LangGraph Memory 持久化 (PostgreSQL)
+    # 配置后 checkpointer + store 将使用 Postgres，否则降级为内存模式
+    postgres_uri: Optional[str] = None
 
     # === 交易参数 ===
     paper_trading: bool = True
@@ -121,19 +124,6 @@ class Settings(BaseSettings):
     bl_base_variance: float = 0.05
     bl_min_weight: float = 0.01
     bl_default_universe: str = "SPY,QQQ,IWM,AAPL,MSFT,GOOGL,NVDA,AMD,META,GLD,TLT,XLF,XLE"
-
-    # === 认知套利配置 ===
-    ca_direct_min_score: int = 7
-    ca_direct_max_score: int = 10
-    ca_indirect_multiplier: float = 1.5
-    ca_min_confidence: int = 3
-    ca_score_window_days: int = 7
-    ca_top_k: int = 3
-    ca_default_holding_days: int = 7
-    ca_min_holding_days: int = 3
-    ca_max_holding_days: int = 14
-    ca_position_size_pct: float = 0.10
-    ca_max_positions: int = 5
 
     # === API 配置 ===
     api_host: str = "0.0.0.0"

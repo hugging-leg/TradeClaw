@@ -587,6 +587,7 @@ export const mockWorkflows: Record<string, WorkflowInfo> = {
     features: ['Market analysis', 'News sentiment', 'Portfolio optimization', 'Auto-rebalancing'],
     best_for: 'General purpose portfolio management',
     deprecated: false,
+    builtin: true,
   },
   balanced_portfolio: {
     name: 'Balanced Portfolio',
@@ -595,6 +596,7 @@ export const mockWorkflows: Record<string, WorkflowInfo> = {
     features: ['Equal weighting', 'Threshold rebalancing', 'Position sizing'],
     best_for: 'Simple, diversified portfolios',
     deprecated: false,
+    builtin: true,
   },
   black_litterman: {
     name: 'Black-Litterman',
@@ -603,6 +605,7 @@ export const mockWorkflows: Record<string, WorkflowInfo> = {
     features: ['BL optimization', 'LLM views', 'Risk-adjusted allocation'],
     best_for: 'Quantitative portfolio optimization',
     deprecated: false,
+    builtin: true,
   },
   cognitive_arbitrage: {
     name: 'Cognitive Arbitrage',
@@ -611,6 +614,7 @@ export const mockWorkflows: Record<string, WorkflowInfo> = {
     features: ['News scoring', 'Event detection', 'Short-term trading'],
     best_for: 'News-driven short-term opportunities',
     deprecated: false,
+    builtin: true,
   },
   tool_calling: {
     name: 'Tool Calling',
@@ -619,6 +623,7 @@ export const mockWorkflows: Record<string, WorkflowInfo> = {
     features: ['Direct tool access', 'Flexible prompting'],
     best_for: 'Custom analysis tasks',
     deprecated: false,
+    builtin: true,
   },
   sequential: {
     name: 'Sequential',

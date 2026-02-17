@@ -148,6 +148,7 @@ export interface WorkflowInfo {
   features: string[];
   best_for: string;
   deprecated: boolean;
+  builtin: boolean;
 }
 
 // ========== Agent Tools ==========
@@ -174,7 +175,7 @@ export type ExecutionStepStatus = 'pending' | 'running' | 'completed' | 'failed'
 
 export interface ExecutionStep {
   id: string;
-  type: 'tool_call' | 'llm_thinking' | 'decision' | 'notification';
+  type: string;
   name: string;
   status: ExecutionStepStatus;
   input?: string;
@@ -197,7 +198,7 @@ export interface WorkflowExecution {
 
 // ========== Scheduler CRUD ==========
 
-export type TriggerType = 'cron' | 'interval';
+export type TriggerType = 'cron' | 'interval' | 'once';
 
 export interface JobFormData {
   id: string;
@@ -210,12 +211,27 @@ export interface JobFormData {
   // interval fields
   interval_minutes?: number;
   interval_hours?: number;
+  // once (date) fields
+  once_datetime?: string;  // ISO 8601 datetime string
+  once_delay_minutes?: number;
+  once_mode?: 'datetime' | 'delay';
   // conditions
   require_trading_day: boolean;
   require_market_open: boolean;
   // action
   event_type: string;
   event_data?: Record<string, unknown>;
+}
+
+export interface QueuedMessage {
+  index: number;
+  text: string;
+  preview: string;
+}
+
+export interface ChatQueueResponse {
+  queue_size: number;
+  messages: QueuedMessage[];
 }
 
 // ========== Rule Triggers ==========
@@ -251,7 +267,14 @@ export interface ActiveWorkflow {
   name: string;
   is_running: boolean;
   pending_triggers: number;
+  chat_queue_size: number;
   stats: Record<string, unknown>;
+}
+
+export interface ChatResponse {
+  status: 'queued' | 'triggered';
+  message: string;
+  queue_size: number;
 }
 
 // ========== Settings ==========

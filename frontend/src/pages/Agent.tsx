@@ -8,6 +8,7 @@ import {
   fetchAnalyses,
   fetchAgentMessages,
   fetchWorkflows,
+  reloadWorkflows,
   fetchAgentTools,
   fetchWorkflowExecutions,
   fetchActiveWorkflow,
@@ -16,7 +17,12 @@ import {
   switchWorkflow,
   triggerAnalysis,
   toggleAgentTool,
+  sendAgentChat,
+  fetchChatQueue,
+  cancelQueuedMessage,
+  clearChatQueue,
 } from '@/api';
+import { useLiveExecution } from '@/api/useAgentEvents';
 import { formatCurrency, formatRelative, formatDuration } from '@/utils/format';
 import { cn } from '@/utils/cn';
 import {
@@ -45,6 +51,11 @@ import {
   Save,
   RotateCcw,
   Shuffle,
+  RefreshCw,
+  Package,
+  Puzzle,
+  X,
+  Trash2,
 } from 'lucide-react';
 import type {
   TradingDecision,
@@ -56,6 +67,7 @@ import type {
   ActiveWorkflow,
   WorkflowExecution,
   ExecutionStep,
+  QueuedMessage,
 } from '@/types';
 
 type Tab = 'execution' | 'tools' | 'config' | 'decisions' | 'analyses' | 'messages';
@@ -68,16 +80,20 @@ const TOOL_CATEGORY_META: Record<string, { label: string; color: string; icon: t
 };
 
 const STEP_TYPE_META: Record<string, { label: string; color: string; icon: typeof Brain }> = {
-  llm_thinking: { label: 'LLM Thinking', color: 'text-purple-400', icon: Brain },
-  tool_call: { label: 'Tool Call', color: 'text-blue-400', icon: Wrench },
+  llm_thinking: { label: 'Thinking', color: 'text-purple-400', icon: Brain },
+  tool_call: { label: 'Tool', color: 'text-blue-400', icon: Wrench },
   decision: { label: 'Decision', color: 'text-emerald-400', icon: Zap },
-  notification: { label: 'Notification', color: 'text-amber-400', icon: Send },
+  notification: { label: 'Info', color: 'text-amber-400', icon: Send },
+  user_message: { label: 'User', color: 'text-sky-400', icon: User },
 };
+
+/** Fallback for unknown step types — 不硬编码 workflow-specific 类型 */
+const DEFAULT_STEP_META = { label: 'Step', color: 'text-cyan-400', icon: Zap };
 
 // ========== Config field rendering helpers ==========
 
 /** Fields that should be rendered as textarea instead of input */
-const TEXTAREA_FIELDS = new Set(['system_prompt', 'news_analysis_prompt', 'holding_decision_prompt']);
+const TEXTAREA_FIELDS = new Set(['system_prompt']);
 
 /** Fields that are read-only (shown but not editable) */
 const READONLY_FIELDS = new Set(['workflow_type', 'name']);
@@ -106,10 +122,31 @@ function fieldLabel(key: string): string {
 
 // ========== Sub-components ==========
 
-function ExecutionStepItem({ step, isLast }: { step: ExecutionStep; isLast: boolean }) {
+function ExecutionStepItem({
+  step,
+  isLast,
+  streamingText,
+}: {
+  step: ExecutionStep;
+  isLast: boolean;
+  /** 实时 LLM token 流（仅 running 的 llm_thinking step 有值） */
+  streamingText?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
-  const meta = STEP_TYPE_META[step.type] || STEP_TYPE_META.tool_call;
+  const meta = STEP_TYPE_META[step.type] || DEFAULT_STEP_META;
   const Icon = meta.icon;
+  const streamRef = useRef<HTMLDivElement>(null);
+
+  // 自动展开正在运行的步骤
+  const isRunning = step.status === 'running';
+  const hasStreaming = !!streamingText;
+
+  // 自动滚动到底部（streaming 时）
+  useEffect(() => {
+    if (hasStreaming && streamRef.current) {
+      streamRef.current.scrollTop = streamRef.current.scrollHeight;
+    }
+  }, [streamingText, hasStreaming]);
 
   const statusColor = {
     pending: 'border-gray-600 bg-gray-800',
@@ -119,14 +156,18 @@ function ExecutionStepItem({ step, isLast }: { step: ExecutionStep; isLast: bool
     skipped: 'border-gray-600 bg-gray-800/50',
   }[step.status];
 
+  const showDetails = expanded || isRunning;
+
   return (
     <div className="flex gap-3">
       <div className="flex flex-col items-center">
         <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2', statusColor)}>
-          {step.status === 'running' ? (
+          {isRunning ? (
             <Loader2 className={cn('h-4 w-4 animate-spin', meta.color)} />
           ) : step.status === 'failed' ? (
             <XCircle className="h-4 w-4 text-red-400" />
+          ) : step.status === 'pending' ? (
+            <Clock className="h-4 w-4 text-gray-400" />
           ) : (
             <Icon className={cn('h-4 w-4', meta.color)} />
           )}
@@ -138,18 +179,39 @@ function ExecutionStepItem({ step, isLast }: { step: ExecutionStep; isLast: bool
           onClick={() => setExpanded(!expanded)}
           className="flex w-full items-center gap-2 text-left"
         >
-          {expanded ? (
+          {showDetails ? (
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted" />
           ) : (
             <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted" />
           )}
           <span className="text-sm font-medium text-foreground">{step.name}</span>
-          <Badge variant="muted">{meta.label}</Badge>
+          <Badge variant="muted">
+            {STEP_TYPE_META[step.type]
+              ? meta.label
+              : step.type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+          </Badge>
           {step.duration_ms !== undefined && (
             <span className="ml-auto text-xs text-muted">{step.duration_ms}ms</span>
           )}
+          {isRunning && !step.duration_ms && (
+            <span className="ml-auto text-xs text-accent-light">running...</span>
+          )}
         </button>
-        {expanded && (
+
+        {/* LLM Streaming Text — 类似 Cursor 的实时打字机效果 */}
+        {hasStreaming && (
+          <div
+            ref={streamRef}
+            className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-accent/20 bg-gray-950/80 p-3 pl-5"
+          >
+            <pre className="whitespace-pre-wrap text-xs leading-relaxed text-muted-foreground">
+              {streamingText}
+              <span className="inline-block h-4 w-1.5 animate-pulse bg-accent-light" />
+            </pre>
+          </div>
+        )}
+
+        {showDetails && !hasStreaming && (
           <div className="mt-2 space-y-2 pl-5">
             {step.input && (
               <div className="rounded-lg bg-gray-900/50 p-3">
@@ -176,8 +238,25 @@ function ExecutionStepItem({ step, isLast }: { step: ExecutionStep; isLast: bool
   );
 }
 
-function ExecutionCard({ execution }: { execution: WorkflowExecution }) {
-  const [expanded, setExpanded] = useState(false);
+function ExecutionCard({
+  execution,
+  streamingTexts,
+  defaultExpanded,
+}: {
+  execution: WorkflowExecution;
+  /** LLM token 流式文本（step_id -> accumulated text） */
+  streamingTexts?: Record<string, string>;
+  /** 是否默认展开（live execution 默认展开） */
+  defaultExpanded?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded ?? false);
+  const isLive = execution.status === 'running';
+
+  // Live execution 自动展开
+  useEffect(() => {
+    if (isLive) setExpanded(true);
+  }, [isLive]);
+
   const statusBadge = {
     running: <Badge variant="info">Running</Badge>,
     completed: <Badge variant="profit">Completed</Badge>,
@@ -186,6 +265,7 @@ function ExecutionCard({ execution }: { execution: WorkflowExecution }) {
 
   const successSteps = execution.steps.filter((s) => s.status === 'completed').length;
   const failedSteps = execution.steps.filter((s) => s.status === 'failed').length;
+  const runningSteps = execution.steps.filter((s) => s.status === 'running').length;
 
   return (
     <Card>
@@ -218,7 +298,15 @@ function ExecutionCard({ execution }: { execution: WorkflowExecution }) {
             {execution.total_duration_ms && (
               <span>Duration: {formatDuration(execution.total_duration_ms / 1000)}</span>
             )}
-            <span>{successSteps} completed{failedSteps > 0 ? `, ${failedSteps} failed` : ''}</span>
+            {isLive ? (
+              <span>
+                {successSteps} done
+                {runningSteps > 0 ? `, ${runningSteps} running` : ''}
+                {failedSteps > 0 ? `, ${failedSteps} failed` : ''}
+              </span>
+            ) : (
+              <span>{successSteps} completed{failedSteps > 0 ? `, ${failedSteps} failed` : ''}</span>
+            )}
           </div>
         </div>
         {expanded ? (
@@ -234,8 +322,15 @@ function ExecutionCard({ execution }: { execution: WorkflowExecution }) {
               key={step.id}
               step={step}
               isLast={i === execution.steps.length - 1}
+              streamingText={streamingTexts?.[step.id]}
             />
           ))}
+          {isLive && execution.steps.length === 0 && (
+            <div className="flex items-center gap-2 py-4 text-sm text-muted">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Waiting for agent to start...
+            </div>
+          )}
         </div>
       )}
     </Card>
@@ -489,14 +584,20 @@ function WorkflowSwitcher({
   active,
   workflows,
   onSwitch,
+  onReload,
   switching,
+  reloading,
 }: {
   active: ActiveWorkflow | null;
   workflows: Record<string, WorkflowInfo>;
   onSwitch: (type: string) => void;
+  onReload: () => void;
   switching: boolean;
+  reloading: boolean;
 }) {
   const [showPicker, setShowPicker] = useState(false);
+
+  const currentWf = active?.workflow_type ? workflows[active.workflow_type] : null;
 
   return (
     <div className="space-y-4">
@@ -512,6 +613,15 @@ function WorkflowSwitcher({
                 {active?.name ?? 'Loading...'}
               </h3>
               <Badge variant="info">{active?.workflow_type ?? '—'}</Badge>
+              {currentWf?.builtin ? (
+                <Badge variant="muted">
+                  <Package className="mr-1 h-3 w-3" />Built-in
+                </Badge>
+              ) : currentWf ? (
+                <Badge variant="info">
+                  <Puzzle className="mr-1 h-3 w-3" />Custom
+                </Badge>
+              ) : null}
               {active?.is_running && <Badge variant="profit">Running</Badge>}
             </div>
             {active?.stats && (
@@ -525,14 +635,23 @@ function WorkflowSwitcher({
               </div>
             )}
           </div>
-          <Button
-            variant="secondary"
-            icon={<Shuffle className="h-4 w-4" />}
-            onClick={() => setShowPicker(!showPicker)}
-            loading={switching}
-          >
-            Switch
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              icon={<RefreshCw className={cn('h-4 w-4', reloading && 'animate-spin')} />}
+              onClick={onReload}
+              loading={reloading}
+              title="Reload external workflows"
+            />
+            <Button
+              variant="secondary"
+              icon={<Shuffle className="h-4 w-4" />}
+              onClick={() => setShowPicker(!showPicker)}
+              loading={switching}
+            >
+              Switch
+            </Button>
+          </div>
         </div>
       </Card>
 
@@ -563,6 +682,15 @@ function WorkflowSwitcher({
                     <div>
                       <div className="flex items-center gap-2">
                         <h3 className="text-sm font-semibold text-foreground">{wf.name}</h3>
+                        {wf.builtin ? (
+                          <Badge variant="muted">
+                            <Package className="mr-1 h-3 w-3" />Built-in
+                          </Badge>
+                        ) : (
+                          <Badge variant="info">
+                            <Puzzle className="mr-1 h-3 w-3" />Custom
+                          </Badge>
+                        )}
                         {isCurrent && <Badge variant="profit">Active</Badge>}
                         {wf.deprecated && <Badge variant="loss">Deprecated</Badge>}
                       </div>
@@ -587,6 +715,241 @@ function WorkflowSwitcher({
   );
 }
 
+// ========== Chat Input ==========
+
+function AgentChatInput({
+  isRunning,
+  queueSize: initialQueueSize,
+  onSend,
+}: {
+  isRunning: boolean;
+  queueSize: number;
+  onSend: (message: string) => Promise<void>;
+}) {
+  const { toast } = useToast();
+  const [message, setMessage] = useState('');
+  const [sending, setSending] = useState(false);
+  const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
+  const [showQueue, setShowQueue] = useState(false);
+  const [cancellingIndex, setCancellingIndex] = useState<number | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // 当 agent 运行时且有队列消息，定期拉取队列内容
+  const refreshQueue = useCallback(async () => {
+    try {
+      const data = await fetchChatQueue();
+      setQueuedMessages(data.messages);
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    if (isRunning && initialQueueSize > 0) {
+      refreshQueue();
+      // 每 2 秒刷新一次队列（消息被消费时更新）
+      pollRef.current = setInterval(refreshQueue, 2000);
+    } else if (!isRunning) {
+      setQueuedMessages([]);
+      setShowQueue(false);
+    }
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [isRunning, initialQueueSize, refreshQueue]);
+
+  const handleSubmit = async () => {
+    const text = message.trim();
+    if (!text || sending) return;
+    setSending(true);
+    try {
+      await onSend(text);
+      setMessage('');
+      // 发送后刷新队列
+      if (isRunning) {
+        setTimeout(refreshQueue, 300);
+      }
+      setTimeout(() => inputRef.current?.focus(), 50);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  const handleCancelMessage = async (index: number) => {
+    setCancellingIndex(index);
+    try {
+      await cancelQueuedMessage(index);
+      toast('Message cancelled', 'info');
+      await refreshQueue();
+    } catch {
+      toast('Failed to cancel message', 'error');
+    } finally {
+      setCancellingIndex(null);
+    }
+  };
+
+  const handleClearQueue = async () => {
+    setClearing(true);
+    try {
+      const result = await clearChatQueue();
+      toast(`Cleared ${result.cleared} message(s)`, 'info');
+      setQueuedMessages([]);
+      setShowQueue(false);
+    } catch {
+      toast('Failed to clear queue', 'error');
+    } finally {
+      setClearing(false);
+    }
+  };
+
+  const effectiveQueueSize = queuedMessages.length || initialQueueSize;
+
+  return (
+    <div className="sticky bottom-0 z-10 -mx-4 border-t border-border bg-background/95 px-4 py-3 backdrop-blur-sm md:-mx-6 md:px-6">
+      {/* Queued messages panel — Cursor-like queue display */}
+      {isRunning && effectiveQueueSize > 0 && (
+        <div className="mb-3">
+          <button
+            onClick={() => { setShowQueue(!showQueue); if (!showQueue) refreshQueue(); }}
+            className="flex w-full items-center gap-2 rounded-lg border border-accent/20 bg-accent/5 px-3 py-2 text-left transition-colors hover:bg-accent/10"
+          >
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+            </span>
+            <span className="flex-1 text-xs font-medium text-accent-light">
+              {effectiveQueueSize} message{effectiveQueueSize > 1 ? 's' : ''} queued
+            </span>
+            <span className="text-[10px] text-muted">
+              {showQueue ? 'click to collapse' : 'click to manage'}
+            </span>
+            {showQueue ? (
+              <ChevronDown className="h-3.5 w-3.5 text-muted" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 text-muted" />
+            )}
+          </button>
+
+          {showQueue && (
+            <div className="mt-2 space-y-1.5">
+              {queuedMessages.map((msg, i) => (
+                <div
+                  key={`${msg.index}-${msg.text.slice(0, 20)}`}
+                  className="group flex items-center gap-2 rounded-lg border border-border/50 bg-card px-3 py-2"
+                >
+                  <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[10px] font-bold text-accent-light">
+                    {i + 1}
+                  </span>
+                  <p className="min-w-0 flex-1 truncate text-xs text-foreground">{msg.preview}</p>
+                  <button
+                    onClick={() => handleCancelMessage(msg.index)}
+                    disabled={cancellingIndex === msg.index}
+                    className="shrink-0 rounded-md p-1 text-muted opacity-0 transition-all hover:bg-loss-bg hover:text-loss group-hover:opacity-100 disabled:opacity-50"
+                    title="Cancel this message"
+                  >
+                    {cancellingIndex === msg.index ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <X className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                </div>
+              ))}
+              {queuedMessages.length > 1 && (
+                <button
+                  onClick={handleClearQueue}
+                  disabled={clearing}
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-border py-1.5 text-xs text-muted transition-colors hover:border-loss/30 hover:text-loss"
+                >
+                  {clearing ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3 w-3" />
+                  )}
+                  Clear all queued messages
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Status indicator */}
+      <div className="mb-2 flex items-center gap-2 text-xs text-muted">
+        {isRunning ? (
+          <>
+            <span className="relative flex h-2 w-2">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
+              <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
+            </span>
+            <span className="text-accent-light">Agent running</span>
+            <span className="text-muted">— new messages will be queued</span>
+          </>
+        ) : (
+          <>
+            <span className="h-2 w-2 rounded-full bg-muted/40" />
+            <span>Agent idle — send a message to start a new analysis</span>
+          </>
+        )}
+      </div>
+
+      {/* Input area */}
+      <div className="flex items-end gap-2">
+        <div className="relative flex-1">
+          <textarea
+            ref={inputRef}
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={isRunning ? 'Add instructions for the agent...' : 'Ask the agent to analyze, trade, or explain...'}
+            rows={1}
+            className={cn(
+              'w-full resize-none rounded-xl border bg-card px-4 py-2.5 pr-12 text-sm text-foreground',
+              'placeholder:text-muted/60',
+              'focus:border-accent/50 focus:outline-none focus:ring-2 focus:ring-accent/20',
+              'transition-colors',
+              'max-h-32 min-h-[40px]',
+              'border-border',
+            )}
+            style={{
+              height: 'auto',
+              minHeight: '40px',
+            }}
+            onInput={(e) => {
+              const target = e.target as HTMLTextAreaElement;
+              target.style.height = 'auto';
+              target.style.height = Math.min(target.scrollHeight, 128) + 'px';
+            }}
+          />
+        </div>
+        <button
+          onClick={handleSubmit}
+          disabled={!message.trim() || sending}
+          className={cn(
+            'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl transition-all',
+            message.trim() && !sending
+              ? 'bg-accent text-white hover:bg-accent-light shadow-sm'
+              : 'bg-card-hover text-muted cursor-not-allowed',
+          )}
+        >
+          {sending ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Send className="h-4 w-4" />
+          )}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ========== Main Agent Page ==========
 
 export default function Agent() {
@@ -603,6 +966,7 @@ export default function Agent() {
   const [triggering, setTriggering] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reloading, setReloading] = useState(false);
   const [toolFilter, setToolFilter] = useState<string>('all');
 
   const loadAll = useCallback(() => {
@@ -633,21 +997,35 @@ export default function Agent() {
     loadAll();
   }, [loadAll]);
 
-  // Poll active workflow status while running (every 2s)
+  // SSE — 实时 workflow 事件（类似 Cursor Plan 的实时展示）
+  const { liveExecution, streamingTexts } = useLiveExecution(() => {
+    // workflow 完成后刷新数据
+    loadAll();
+  });
+
+  // 当 live execution 开始时，同步 active.is_running 并自动切到 execution tab
+  useEffect(() => {
+    if (liveExecution) {
+      setActive((prev) => prev ? { ...prev, is_running: true } : prev);
+      setTab('execution');
+    }
+  }, [liveExecution]);
+
+  // Fallback polling（SSE 断开时仍可工作）
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (active?.is_running) {
+    if (active?.is_running && !liveExecution) {
+      // 仅在没有 live SSE 数据时 polling
       pollingRef.current = setInterval(async () => {
         try {
           const aw = await fetchActiveWorkflow();
           setActive(aw);
-          // If no longer running, reload everything
           if (!aw.is_running) {
             loadAll();
           }
         } catch { /* ignore polling errors */ }
-      }, 2000);
+      }, 3000);
     } else if (pollingRef.current) {
       clearInterval(pollingRef.current);
       pollingRef.current = null;
@@ -655,7 +1033,7 @@ export default function Agent() {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
-  }, [active?.is_running, loadAll]);
+  }, [active?.is_running, liveExecution, loadAll]);
 
   const handleTriggerAnalysis = async () => {
     setTriggering(true);
@@ -669,6 +1047,23 @@ export default function Agent() {
       toast('Failed to trigger analysis', 'error');
     } finally {
       setTriggering(false);
+    }
+  };
+
+  const handleSendChat = async (message: string) => {
+    try {
+      const result = await sendAgentChat(message);
+      if (result.status === 'queued') {
+        toast(`Message queued (position: ${result.queue_size})`, 'info');
+        // 更新 active 中的 queue_size
+        setActive((prev) => prev ? { ...prev, chat_queue_size: result.queue_size } : prev);
+      } else {
+        toast('New analysis started', 'success');
+        const aw = await fetchActiveWorkflow();
+        setActive(aw);
+      }
+    } catch {
+      toast('Failed to send message', 'error');
     }
   };
 
@@ -708,6 +1103,27 @@ export default function Agent() {
       toast('Failed to switch workflow', 'error');
     } finally {
       setSwitching(false);
+    }
+  };
+
+  const handleReloadWorkflows = async () => {
+    setReloading(true);
+    try {
+      const result = await reloadWorkflows();
+      setWorkflows(result.workflows);
+      const parts: string[] = [];
+      if (result.loaded.length > 0) parts.push(`Loaded: ${result.loaded.join(', ')}`);
+      if (result.removed.length > 0) parts.push(`Removed: ${result.removed.join(', ')}`);
+      toast(
+        parts.length > 0
+          ? `Workflows reloaded — ${parts.join('; ')}`
+          : `Workflows reloaded — ${result.total} total (no changes)`,
+        'success',
+      );
+    } catch {
+      toast('Failed to reload workflows', 'error');
+    } finally {
+      setReloading(false);
     }
   };
 
@@ -780,7 +1196,9 @@ export default function Agent() {
         active={active}
         workflows={workflows}
         onSwitch={handleSwitchWorkflow}
+        onReload={handleReloadWorkflows}
         switching={switching}
+        reloading={reloading}
       />
 
       {/* Tab Switcher */}
@@ -845,7 +1263,19 @@ export default function Agent() {
               {executions.length} execution{executions.length !== 1 ? 's' : ''}
             </div>
           </div>
-          {executions.length === 0 ? (
+
+          {/* Live execution (SSE) — 置顶显示，类似 Cursor Plan */}
+          {liveExecution && (
+            <div className="rounded-xl border-2 border-accent/40 bg-accent/5">
+              <ExecutionCard
+                execution={liveExecution}
+                streamingTexts={streamingTexts}
+                defaultExpanded
+              />
+            </div>
+          )}
+
+          {executions.length === 0 && !liveExecution ? (
             <Card>
               <div className="flex flex-col items-center py-12 text-center">
                 <Zap className="mb-3 h-10 w-10 text-muted" />
@@ -1056,6 +1486,13 @@ export default function Agent() {
           </div>
         </Card>
       )}
+
+      {/* Chat Input — 固定在底部 */}
+      <AgentChatInput
+        isRunning={!!(active?.is_running || liveExecution)}
+        queueSize={active?.chat_queue_size ?? 0}
+        onSend={handleSendChat}
+      />
     </div>
   );
 }

@@ -38,6 +38,8 @@ import type {
   WorkflowExecution,
   RuleTrigger,
   JobFormData,
+  ChatResponse,
+  ChatQueueResponse,
 } from '@/types';
 
 // ========== Portfolio ==========
@@ -106,12 +108,39 @@ export async function fetchWorkflows(): Promise<Record<string, WorkflowInfo>> {
   return api.get<Record<string, WorkflowInfo>>('/agent/workflows');
 }
 
+export async function reloadWorkflows(): Promise<{
+  loaded: string[];
+  removed: string[];
+  total: number;
+  workflows: Record<string, WorkflowInfo>;
+}> {
+  return api.post('/agent/workflows/reload', {});
+}
+
 export async function fetchActiveWorkflow(): Promise<ActiveWorkflow> {
   return api.get<ActiveWorkflow>('/agent/active');
 }
 
 export async function switchWorkflow(workflowType: string): Promise<{ success: boolean; message: string; workflow_type: string }> {
   return api.post('/agent/switch', { workflow_type: workflowType });
+}
+
+// ========== Agent Chat ==========
+
+export async function sendAgentChat(message: string): Promise<ChatResponse> {
+  return api.post<ChatResponse>('/agent/chat', { message });
+}
+
+export async function fetchChatQueue(): Promise<ChatQueueResponse> {
+  return api.get<ChatQueueResponse>('/agent/chat/queue');
+}
+
+export async function cancelQueuedMessage(index: number): Promise<{ success: boolean; removed: string; queue_size: number }> {
+  return api.delete(`/agent/chat/queue/${index}`);
+}
+
+export async function clearChatQueue(): Promise<{ success: boolean; cleared: number; queue_size: number }> {
+  return api.delete('/agent/chat/queue');
 }
 
 // ========== Agent Config ==========
@@ -188,6 +217,14 @@ export async function createSchedulerJob(job: JobFormData): Promise<SchedulerJob
       event_type: job.event_type,
       event_data: job.event_data,
     });
+  } else if (job.trigger_type === 'once') {
+    return api.post<SchedulerJob>('/scheduler/jobs/date', {
+      job_id: job.id,
+      run_at: job.once_mode === 'datetime' ? job.once_datetime : undefined,
+      delay_minutes: job.once_mode === 'delay' ? job.once_delay_minutes : undefined,
+      require_trading_day: job.require_trading_day,
+      trigger_name: job.event_type === 'trigger_workflow' ? 'scheduled_once' : job.event_type,
+    });
   } else {
     return api.post<SchedulerJob>('/scheduler/jobs/interval', {
       job_id: job.id,
@@ -239,20 +276,56 @@ export async function runBacktest(config: unknown): Promise<BacktestResult> {
 
 /**
  * 将 AnalysisHistory DB 记录映射为前端 WorkflowExecution 格式
+ *
+ * DB 中存储了 tool_calls（工具名称列表）和 output_response（LLM 回复文本），
+ * 这里将它们还原为 ExecutionStep 列表，以便在 ExecutionCard 中展示。
  */
 function _analysisToExecution(a: AnalysisHistory): WorkflowExecution {
+  const steps: WorkflowExecution['steps'] = [];
+
+  // Tool call steps
+  if (a.tool_calls?.length) {
+    for (let i = 0; i < a.tool_calls.length; i++) {
+      steps.push({
+        id: `${a.id}-tool-${i}`,
+        type: 'tool_call',
+        name: a.tool_calls[i],
+        status: 'completed',
+        timestamp: a.created_at,
+      });
+    }
+  }
+
+  // LLM thinking step（从 output_response 还原）
+  if (a.output_response) {
+    steps.push({
+      id: `${a.id}-thinking`,
+      type: 'llm_thinking',
+      name: 'Agent 思考结果',
+      status: a.success ? 'completed' : 'failed',
+      output: a.output_response,
+      timestamp: a.created_at,
+    });
+  }
+
+  // Error step
+  if (!a.success && a.error_message) {
+    steps.push({
+      id: `${a.id}-error`,
+      type: 'notification',
+      name: 'Error',
+      status: 'failed',
+      error: a.error_message,
+      timestamp: a.created_at,
+    });
+  }
+
   return {
     id: a.id,
     workflow_type: a.analysis_type ?? a.trigger,
     trigger: a.trigger,
     status: a.success ? 'completed' : 'failed',
-    steps: (a.tool_calls ?? []).map((tc, i) => ({
-      id: `${a.id}-step-${i}`,
-      type: 'tool_call' as const,
-      name: tc,
-      status: 'completed' as const,
-      timestamp: a.created_at,
-    })),
+    steps,
     started_at: a.created_at,
     completed_at: a.created_at,
     total_duration_ms: a.execution_time_seconds ? a.execution_time_seconds * 1000 : undefined,

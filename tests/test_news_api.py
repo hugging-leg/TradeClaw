@@ -6,10 +6,10 @@ import pytest
 from unittest.mock import Mock, patch, AsyncMock
 from datetime import datetime, timezone
 
-from src.interfaces.news_api import NewsAPI, NewsProvider
-from src.interfaces.factory import get_news_api
-from src.adapters.news.tiingo_news_adapter import TiingoNewsAdapter
-from src.models.trading_models import NewsItem
+from agent_trader.interfaces.news_api import NewsAPI, NewsProvider
+from agent_trader.interfaces.factory import get_news_api
+from agent_trader.adapters.news.tiingo_news_adapter import TiingoNewsAdapter
+from agent_trader.models.trading_models import NewsItem
 from config import Settings
 
 

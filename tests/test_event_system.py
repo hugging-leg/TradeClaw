@@ -14,8 +14,8 @@ import asyncio
 from datetime import datetime, timedelta
 import pytz
 
-from src.events.event_system import EventSystem
-from src.models.trading_models import TradingEvent
+from agent_trader.events.event_system import EventSystem
+from agent_trader.models.trading_models import TradingEvent
 
 
 class TestEventSystem:

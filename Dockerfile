@@ -33,8 +33,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 应用代码
-COPY src/ src/
-COPY main.py config.py ./
+COPY agent_trader/ agent_trader/
+COPY main.py config.py pyproject.toml ./
 
 # 前端静态文件（从 Stage 1 拷贝）
 COPY --from=frontend-builder /build/dist /app/frontend/dist

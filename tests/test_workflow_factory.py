@@ -11,10 +11,10 @@ Tests workflow creation and configuration including:
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 
-from src.agents.workflow_factory import WorkflowFactory
-from src.agents.llm_portfolio_agent import LLMPortfolioAgent
-from src.agents.sequential_workflow import SequentialWorkflow
-from src.agents.tool_calling_workflow import ToolCallingWorkflow
+from agent_trader.agents.workflow_factory import WorkflowFactory
+from agent_trader.agents.llm_portfolio_agent import LLMPortfolioAgent
+from agent_trader.agents.sequential_workflow import SequentialWorkflow
+from agent_trader.agents.tool_calling_workflow import ToolCallingWorkflow
 from config import settings
 
 

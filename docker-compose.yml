@@ -1,4 +1,20 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: trading-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-trading}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-trading}
+      POSTGRES_DB: ${POSTGRES_DB:-trading_memory}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-trading}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   trading-agent:
     image: brerudike/trading-agent
     container_name: llm-trading-agent
@@ -9,10 +25,14 @@ services:
     environment:
       - DATA_DIR=/app/user_data
       - ENVIRONMENT=production
+      - POSTGRES_URI=postgresql+psycopg://${POSTGRES_USER:-trading}:${POSTGRES_PASSWORD:-trading}@postgres:5432/${POSTGRES_DB:-trading_memory}
     ports:
       - "8000:8000"
     volumes:
       - ./user_data:/app/user_data
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/api/auth/status"]
       interval: 30s
@@ -27,3 +47,6 @@ services:
     command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
     depends_on:
       - trading-agent
+
+volumes:
+  pgdata:

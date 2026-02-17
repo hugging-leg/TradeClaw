@@ -15,6 +15,7 @@ cvxpy>=1.4.0           # 凸优化求解器 (pypfopt 依赖)
 langgraph>=0.2.0
 langchain>=0.2.0
 langchain-openai>=0.1.0
+langgraph-checkpoint-postgres>=2.0.0  # PostgreSQL checkpointer + store
 # langchain-deepseek>=0.1.0  # 可选：DeepSeek 模型支持
 
 # ========== Web Framework ==========
@@ -26,7 +27,7 @@ python-multipart>=0.0.9  # FastAPI 表单解析
 sqlalchemy>=2.0.0
 alembic>=1.13.0
 aiosqlite>=0.20.0  # SQLite 异步驱动
-asyncpg>=0.29.0    # PostgreSQL 异步驱动 (可选)
+psycopg[binary,pool]>=3.1.0  # PostgreSQL 驱动 (langgraph-checkpoint-postgres 依赖)
 
 # ========== Authentication ==========
 python-jose[cryptography]>=3.3.0
