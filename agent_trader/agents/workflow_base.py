@@ -99,10 +99,14 @@ class WorkflowBase(ABC):
     """
     Trading Workflow 基类
 
-    对于 Agent-based workflow（使用了 _init_agent 的），子类只需实现：
-    - _get_system_prompt(): 返回 system prompt 字符串
-    - _build_prompt(context): 构建给 Agent 的 user message（含记忆召回等）
-    - _post_agent(agent_result, context): 可选，Agent 执行完后的额外操作
+    配置管理：
+    - 子类 override _default_config() 声明所有可编辑参数（含 system_prompt）
+    - 运行时参数统一存储在 self._config 中
+    - get_config() / update_config() 由基类统一实现，子类通常不需要 override
+
+    对于 Agent-based workflow（使用了 _init_agent 的），子类只需：
+    - 在 _default_config() 中声明 system_prompt
+    - 实现 run_workflow()
 
     execute() 模板方法自动处理：
     - 通知（开始/完成）
@@ -116,6 +120,30 @@ class WorkflowBase(ABC):
 
     对于非 Agent workflow，可以 override run_workflow() 自定义全流程。
     """
+
+    # ------------------------------------------------------------------
+    # 配置声明 — 子类 override 此方法声明所有可编辑参数
+    # ------------------------------------------------------------------
+
+    def _default_config(self) -> Dict[str, Any]:
+        """
+        返回该 workflow 所有可编辑参数的默认值。
+
+        子类 override 此方法，声明自身特有的配置项（含 system_prompt）。
+
+        约定：
+        - "system_prompt" (str): Agent 的 system prompt
+        - 其他 key 由子类自由定义（数值、字符串、列表均可）
+        - 基类不在此声明任何字段
+        - 全局共享配置（llm_model 等）由 get_config/update_config 额外处理
+
+        get_config() 会自动将 _config 中的所有 key 暴露给前端；
+        update_config() 会自动按原始类型做类型转换并写回 _config。
+        子类通常不需要 override get_config / update_config。
+        """
+        return {}
+
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -138,6 +166,9 @@ class WorkflowBase(ABC):
         self.checkpointer = checkpointer
         self.store = store
 
+        # 可编辑配置（子类通过 _default_config 声明，运行时通过 update_config 修改）
+        self._config: Dict[str, Any] = self._default_config()
+
         # 状态
         self.is_running = False
         self.current_portfolio: Optional[Portfolio] = None
@@ -159,7 +190,6 @@ class WorkflowBase(ABC):
         self.agent = None
         self.tool_registry = None
         self.tools: List = []
-        self.system_prompt: Optional[str] = None
         self.session_id: str = "default"
 
         # Workflow run 状态
@@ -392,11 +422,20 @@ class WorkflowBase(ABC):
 
     # ========== LLM / Agent 初始化（子类按需调用） ==========
 
+    def _get_effective_system_prompt(self) -> str:
+        """
+        返回实际传给 Agent 的 system prompt。
+
+        默认直接返回 _config["system_prompt"]。
+        子类可 override 此方法来动态拼接额外上下文（如资产池列表）。
+        """
+        return self._config.get("system_prompt", "")
+
     def _init_agent(self, session_id: str = "default") -> None:
         """
         初始化 LLM + Tools + Agent。
 
-        前提：子类已设置 self.system_prompt（通过 _get_system_prompt()）。
+        前提：子类已在 _default_config() 中声明 system_prompt。
         """
         from langchain.agents import create_agent
         from agent_trader.utils.llm_utils import create_llm_client
@@ -416,13 +455,13 @@ class WorkflowBase(ABC):
         self.agent = create_agent(
             self.llm,
             self.tools,
-            system_prompt=self.system_prompt,
+            system_prompt=self._get_effective_system_prompt(),
             checkpointer=self.checkpointer,
             store=self.store,
         )
 
     def rebuild_agent(self) -> None:
-        """重建 Agent（tool 启用/禁用变更后，或 system_prompt 更新后调用）。"""
+        """重建 Agent（tool 启用/禁用变更后，或配置更新后调用）。"""
         if self.tool_registry is None or self.llm is None:
             return
 
@@ -432,7 +471,7 @@ class WorkflowBase(ABC):
         self.agent = create_agent(
             self.llm,
             self.tools,
-            system_prompt=self.system_prompt,
+            system_prompt=self._get_effective_system_prompt(),
             checkpointer=self.checkpointer,
             store=self.store,
         )
@@ -915,43 +954,125 @@ class WorkflowBase(ABC):
         return meta.get('type', self.__class__.__name__.lower())
 
     # ========== 配置管理 ==========
+    #
+    # 子类只需 override _default_config() 声明可编辑参数及默认值。
+    # get_config() / update_config() 由基类统一实现，子类通常不需要 override。
+    #
+    # _config 中的 key 会全部暴露给前端编辑器。
+    # 全局共享配置（llm_model, llm_recursion_limit）不属于 _config，
+    # 由基类在 get_config / update_config 中额外处理。
+
+    # 需要 rebuild agent 的 _config key（修改后自动触发 rebuild_agent）
+    _REBUILD_KEYS = frozenset({"system_prompt"})
 
     def get_config(self) -> Dict[str, Any]:
         """
-        获取该 workflow 的可编辑配置。
+        返回前端可见的完整配置。
 
-        基类提供通用 Agent 配置（llm_model, llm_recursion_limit）。
-        子类通过 super().get_config() 继承，再追加自身特有配置。
+        结构：
+        - workflow_type / name: 只读元数据
+        - _config 中的所有 key: 可编辑
+        - llm_base_url / llm_api_key / llm_model / llm_recursion_limit: 全局共享的 LLM 配置
         """
         from config import settings as _s
         meta = getattr(self, '_workflow_metadata', {})
-        config: Dict[str, Any] = {
+
+        result: Dict[str, Any] = {
             "workflow_type": self.get_workflow_type(),
             "name": meta.get("description", self.get_workflow_type()),
-            "system_prompt": self.system_prompt,
         }
-        # Agent 通用配置（仅当 workflow 使用了 Agent 时才展示）
+        # workflow 自身配置
+        result.update(self._config)
+        # 全局 LLM 配置（仅当 workflow 使用了 Agent 时才展示）
         if self.agent is not None:
-            config["llm_model"] = _s.llm_model
-            config["llm_recursion_limit"] = _s.llm_recursion_limit
-        return config
+            result["llm_base_url"] = _s.llm_base_url
+            # API key 遮蔽：只显示前4位和后4位，中间用 * 代替
+            key = _s.llm_api_key or ""
+            result["llm_api_key"] = (
+                f"{key[:4]}{'*' * max(0, len(key) - 8)}{key[-4:]}"
+                if len(key) > 8 else "*" * len(key)
+            )
+            result["llm_model"] = _s.llm_model
+            result["llm_recursion_limit"] = _s.llm_recursion_limit
+        return result
 
     def update_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """更新该 workflow 的配置（运行时）"""
+        """
+        运行时更新配置。
+
+        自动处理：
+        - _config 中已有的 key：按原始类型做类型转换后写入
+        - llm_base_url / llm_api_key / llm_model：更新全局 settings + 重建 LLM 客户端
+        - llm_recursion_limit：更新全局 settings
+        - 涉及 _REBUILD_KEYS 或 LLM 连接参数变更时自动 rebuild_agent
+        """
         from config import settings as _s
 
-        if "system_prompt" in updates and updates["system_prompt"] is not None:
-            self.system_prompt = updates["system_prompt"]
-            self.rebuild_agent()
-            logger.info("Agent rebuilt after system_prompt update")
+        need_rebuild = False
+        need_llm_rebuild = False
 
-        # Agent 通用配置
+        # 1. 更新 _config 中的字段（按原始类型做转换）
+        for key, new_val in updates.items():
+            if key in self._config:
+                original = self._config[key]
+                self._config[key] = self._coerce_type(new_val, original)
+                if key in self._REBUILD_KEYS:
+                    need_rebuild = True
+                logger.info(f"Config updated: {key}")
+
+        # 2. 全局 LLM 配置
+        if "llm_base_url" in updates:
+            new_url = str(updates["llm_base_url"]).strip()
+            if new_url and new_url != _s.llm_base_url:
+                _s.llm_base_url = new_url
+                need_llm_rebuild = True
+                logger.info(f"LLM base URL updated: {new_url}")
+
+        if "llm_api_key" in updates:
+            new_key = str(updates["llm_api_key"]).strip()
+            # 忽略空值和遮蔽值（包含连续 * 的值）
+            if new_key and "***" not in new_key and new_key != _s.llm_api_key:
+                _s.llm_api_key = new_key
+                need_llm_rebuild = True
+                logger.info("LLM API key updated")
+
         if "llm_model" in updates:
-            _s.llm_model = updates["llm_model"]
+            new_model = str(updates["llm_model"]).strip()
+            if new_model and new_model != _s.llm_model:
+                _s.llm_model = new_model
+                need_llm_rebuild = True
+                logger.info(f"LLM model updated: {new_model}")
+
+        if need_llm_rebuild and self.llm is not None:
+            from agent_trader.utils.llm_utils import create_llm_client
+            self.llm = create_llm_client()
+            logger.info(f"LLM client rebuilt: model={_s.llm_model}, base_url={_s.llm_base_url}")
+            need_rebuild = True
+
         if "llm_recursion_limit" in updates:
-            _s.llm_recursion_limit = updates["llm_recursion_limit"]
+            _s.llm_recursion_limit = int(updates["llm_recursion_limit"])
+
+        if need_rebuild:
+            self.rebuild_agent()
 
         return self.get_config()
+
+    @staticmethod
+    def _coerce_type(new_val: Any, original: Any) -> Any:
+        """将前端传来的值转换为与原始值相同的类型。"""
+        if original is None or new_val is None:
+            return new_val
+        if isinstance(original, bool):
+            if isinstance(new_val, str):
+                return new_val.lower() in ("true", "1", "yes")
+            return bool(new_val)
+        if isinstance(original, int):
+            return int(new_val)
+        if isinstance(original, float):
+            return float(new_val)
+        if isinstance(original, list) and isinstance(new_val, str):
+            return [s.strip() for s in new_val.split(",") if s.strip()]
+        return new_val
 
     # ========== 通用工具方法 ==========
 

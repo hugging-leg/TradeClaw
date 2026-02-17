@@ -46,61 +46,13 @@ except ImportError:
     logger.warning("pyportfolioopt 未安装。运行: pip install pyportfolioopt cvxpy")
 
 
-@register_workflow(
-    "black_litterman",
-    description="Black-Litterman 量化组合优化",
-    features=["📊 Black-Litterman 模型", "LLM 生成观点", "均值-方差优化"],
-    best_for="量化 + AI 结合的科学配置"
-)
-class BlackLittermanWorkflow(WorkflowBase):
-    """Black-Litterman 组合优化 Workflow"""
-
-    def __init__(self, **kwargs):
-        universe = kwargs.pop("universe", None)
-        risk_aversion = kwargs.pop("risk_aversion", None)
-        session_id = kwargs.pop("session_id", "bl_agent")
-
-        super().__init__(**kwargs)
-
-        if not PYPFOPT_AVAILABLE:
-            raise ImportError(
-                "pypfopt 未安装。请运行: pip install pypfopt cvxpy"
-            )
-
-        self.universe = universe or settings.get_bl_default_universe()
-        self.risk_aversion = risk_aversion if risk_aversion is not None else settings.bl_risk_aversion
-
-        # BL 观点状态（供 analysis_tools 中的 generate_investment_views 写入）
-        self._current_views: Dict[str, float] = {}
-        self._current_confidences: Dict[str, float] = {}
-        self._current_reasoning: str = ""
-
-        # System prompt
-        self.system_prompt = self._get_system_prompt()
-
-        # 初始化 LLM + Tools + Agent（基类方法）
-        self._init_agent(session_id=session_id)
-
-        # 缓存
-        self._cached_prices: Optional[pd.DataFrame] = None
-        self._cached_cov: Optional[pd.DataFrame] = None
-        self._last_optimization: Optional[Dict] = None
-
-        logger.info(
-            f"Black-Litterman Workflow 已初始化 "
-            f"(资产池: {len(self.universe)} 个, 风险厌恶: {self.risk_aversion})"
-        )
-
-    def _get_system_prompt(self) -> str:
-        return f"""你是一位专业的量化投资分析师，负责为 Black-Litterman 模型提供投资观点。
+BL_SYSTEM_PROMPT = """\
+你是一位专业的量化投资分析师，负责为 Black-Litterman 模型提供投资观点。
 
 ## 你的任务
 1. 分析市场新闻、宏观经济数据和个股信息
 2. 对资产池中的股票/ETF 形成投资观点
 3. 为每个观点提供置信度评估
-
-## 资产池
-{', '.join(self.universe)}
 
 ## 观点格式
 - 观点表示为预期超额收益率（相对于市场）
@@ -116,27 +68,72 @@ class BlackLittermanWorkflow(WorkflowBase):
 - 只对你有明确观点的资产发表意见，不必覆盖所有资产
 
 ## 输出
-使用 generate_investment_views 工具输出你的观点
-"""
+使用 generate_investment_views 工具输出你的观点"""
 
-    # ========== 配置管理 ==========
 
-    def get_config(self) -> Dict[str, Any]:
-        config = super().get_config()
-        # 用户可调的 BL 参数
-        config.update({
-            "bl_risk_aversion": self.risk_aversion,
-            "bl_default_universe": self.universe,
-        })
-        return config
+@register_workflow(
+    "black_litterman",
+    description="Black-Litterman 量化组合优化",
+    features=["📊 Black-Litterman 模型", "LLM 生成观点", "均值-方差优化"],
+    best_for="量化 + AI 结合的科学配置"
+)
+class BlackLittermanWorkflow(WorkflowBase):
+    """Black-Litterman 组合优化 Workflow"""
 
-    def update_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
-        if "bl_risk_aversion" in updates:
-            self.risk_aversion = updates["bl_risk_aversion"]
-        if "bl_default_universe" in updates:
-            self.universe = updates["bl_default_universe"]
+    # 修改 bl_default_universe 时也需要 rebuild agent（因为 effective prompt 会变）
+    _REBUILD_KEYS = frozenset({"system_prompt", "bl_default_universe"})
 
-        return super().update_config(updates)
+    def _default_config(self) -> Dict[str, Any]:
+        return {
+            "system_prompt": BL_SYSTEM_PROMPT,
+            "bl_risk_aversion": settings.bl_risk_aversion,
+            "bl_default_universe": settings.get_bl_default_universe(),
+        }
+
+    def _get_effective_system_prompt(self) -> str:
+        """system_prompt + 资产池列表，运行时拼接。"""
+        prompt = self._config.get("system_prompt", "")
+        universe = self._config.get("bl_default_universe", [])
+        if universe:
+            prompt += f"\n\n## 资产池\n{', '.join(universe)}"
+        return prompt
+
+    def __init__(self, **kwargs):
+        universe = kwargs.pop("universe", None)
+        risk_aversion = kwargs.pop("risk_aversion", None)
+        session_id = kwargs.pop("session_id", "bl_agent")
+
+        super().__init__(**kwargs)
+
+        if not PYPFOPT_AVAILABLE:
+            raise ImportError(
+                "pypfopt 未安装。请运行: pip install pypfopt cvxpy"
+            )
+
+        # 如果通过 kwargs 传入了自定义值，覆盖 _config 中的默认值
+        if universe:
+            self._config["bl_default_universe"] = universe
+        if risk_aversion is not None:
+            self._config["bl_risk_aversion"] = risk_aversion
+
+        # BL 观点状态（供 analysis_tools 中的 generate_investment_views 写入）
+        self._current_views: Dict[str, float] = {}
+        self._current_confidences: Dict[str, float] = {}
+        self._current_reasoning: str = ""
+
+        # 初始化 LLM + Tools + Agent（基类方法）
+        self._init_agent(session_id=session_id)
+
+        # 缓存
+        self._cached_prices: Optional[pd.DataFrame] = None
+        self._cached_cov: Optional[pd.DataFrame] = None
+        self._last_optimization: Optional[Dict] = None
+
+        logger.info(
+            f"Black-Litterman Workflow 已初始化 "
+            f"(资产池: {len(self._config['bl_default_universe'])} 个, "
+            f"风险厌恶: {self._config['bl_risk_aversion']})"
+        )
 
     # ========== BL 模型核心逻辑 ==========
 
@@ -148,7 +145,7 @@ class BlackLittermanWorkflow(WorkflowBase):
         end_date = utc_now()
         start_date = end_date - timedelta(days=days + 30)
 
-        for symbol in self.universe:
+        for symbol in self._config["bl_default_universe"]:
             try:
                 data = await self.market_data_api.get_eod_prices(
                     symbol=symbol,
@@ -197,7 +194,7 @@ class BlackLittermanWorkflow(WorkflowBase):
 
         prior = market_implied_prior_returns(
             market_caps=mkt_weights,
-            risk_aversion=self.risk_aversion,
+            risk_aversion=self._config["bl_risk_aversion"],
             cov_matrix=cov_matrix
         )
 

@@ -56,6 +56,7 @@ import {
   Puzzle,
   X,
   Trash2,
+  EyeOff,
 } from 'lucide-react';
 import type {
   TradingDecision,
@@ -95,6 +96,9 @@ const DEFAULT_STEP_META = { label: 'Step', color: 'text-cyan-400', icon: Zap };
 /** Fields that should be rendered as textarea instead of input */
 const TEXTAREA_FIELDS = new Set(['system_prompt']);
 
+/** Fields that should be rendered as password input */
+const PASSWORD_FIELDS = new Set(['llm_api_key']);
+
 /** Fields that are read-only (shown but not editable) */
 const READONLY_FIELDS = new Set(['workflow_type', 'name']);
 
@@ -102,8 +106,9 @@ const READONLY_FIELDS = new Set(['workflow_type', 'name']);
 const HIDE_WHEN_NULL = new Set(['system_prompt']);
 
 /** Detect field type for rendering */
-function detectFieldType(key: string, value: unknown): 'textarea' | 'number' | 'array' | 'boolean' | 'text' {
+function detectFieldType(key: string, value: unknown): 'textarea' | 'number' | 'array' | 'boolean' | 'password' | 'text' {
   if (TEXTAREA_FIELDS.has(key)) return 'textarea';
+  if (PASSWORD_FIELDS.has(key)) return 'password';
   if (typeof value === 'number') return 'number';
   if (typeof value === 'boolean') return 'boolean';
   if (Array.isArray(value)) return 'array';
@@ -118,6 +123,30 @@ function fieldLabel(key: string): string {
     .replace(/\bLlm\b/, 'LLM')
     .replace(/\bBl\b/, 'BL')
     .replace(/\bCa\b/, 'CA');
+}
+
+/** Password field with show/hide toggle */
+function PasswordField({ value, onChange }: { value: unknown; onChange: (v: string) => void }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div className="flex items-center gap-1.5">
+      <input
+        type={show ? 'text' : 'password'}
+        value={value != null ? String(value) : ''}
+        placeholder="Enter new value to update…"
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full max-w-sm rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+      />
+      <button
+        type="button"
+        onClick={() => setShow((p) => !p)}
+        className="rounded p-1.5 text-muted hover:text-foreground transition-colors"
+        title={show ? 'Hide' : 'Show'}
+      >
+        {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+      </button>
+    </div>
+  );
 }
 
 // ========== Sub-components ==========
@@ -537,6 +566,8 @@ function ConfigEditor({
                   placeholder="Comma-separated values"
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
                 />
+              ) : type === 'password' ? (
+                <PasswordField value={value} onChange={(v) => handleChange(key, v)} />
               ) : (
                 <input
                   type="text"

@@ -34,72 +34,12 @@ from agent_trader.utils.timezone import utc_now, ensure_utc, format_for_display
 
 logger = get_logger(__name__)
 
-
 # ============================================================
-# 认知套利 Workflow
+# 默认 System Prompt
 # ============================================================
 
-@register_workflow(
-    "cognitive_arbitrage",
-    description="认知套利/二阶动量策略",
-    features=["📰 LLM 分析新闻", "🔗 识别间接受益", "⏱️ 自动持仓管理", "🤖 分析与执行分离"],
-    best_for="利用新闻传导时间差的套利机会"
-)
-class CognitiveArbitrageWorkflow(WorkflowBase):
-    """
-    认知套利 Agent — 分析与执行分离
-
-    流程：
-    1. [代码] 自动卖出到期持仓
-    2. [LLM]  使用通用 tools 分析新闻、查看持仓，输出结构化买入信号
-    3. [代码] 解析买入信号 → 校验 → 执行交易 → 记录 DB
-    """
-
-    # 可配置参数
-    MAX_CA_POSITIONS = 5          # 最大同时持有 CA 持仓数
-    POSITION_SIZE_PCT = 0.10      # 每笔 CA 仓位占总资产的比例
-    MIN_CONFIDENCE = 5.0          # 最低置信度阈值
-    MIN_HOLDING_DAYS = 3          # 最短持仓天数
-    MAX_HOLDING_DAYS = 30         # 最长持仓天数
-
-    def __init__(self, **kwargs):
-        session_id = kwargs.pop("session_id", "cognitive_arbitrage")
-        super().__init__(**kwargs)
-
-        self.system_prompt = self._get_system_prompt()
-
-        # 初始化 LLM + 通用 Tools + Agent（基类方法）
-        # 不注册 CA 专用 tools — 交易执行由代码驱动
-        self._init_agent(session_id=session_id)
-
-        logger.info("认知套利 Agent 已初始化（分析与执行分离模式）")
-
-    def get_editable_config(self) -> Dict[str, Any]:
-        """返回可在前端编辑的配置"""
-        return {
-            "max_ca_positions": self.MAX_CA_POSITIONS,
-            "position_size_pct": self.POSITION_SIZE_PCT,
-            "min_confidence": self.MIN_CONFIDENCE,
-            "min_holding_days": self.MIN_HOLDING_DAYS,
-            "max_holding_days": self.MAX_HOLDING_DAYS,
-        }
-
-    def update_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
-        """更新配置"""
-        if "max_ca_positions" in updates:
-            self.MAX_CA_POSITIONS = int(updates["max_ca_positions"])
-        if "position_size_pct" in updates:
-            self.POSITION_SIZE_PCT = float(updates["position_size_pct"])
-        if "min_confidence" in updates:
-            self.MIN_CONFIDENCE = float(updates["min_confidence"])
-        if "min_holding_days" in updates:
-            self.MIN_HOLDING_DAYS = int(updates["min_holding_days"])
-        if "max_holding_days" in updates:
-            self.MAX_HOLDING_DAYS = int(updates["max_holding_days"])
-        return self.get_editable_config()
-
-    def _get_system_prompt(self) -> str:
-        return """你是一位专业的认知套利分析师，专注于利用新闻传导的时间差发现套利机会。
+_CA_DEFAULT_SYSTEM_PROMPT = """\
+你是一位专业的认知套利分析师，专注于利用新闻传导的时间差发现套利机会。
 
 ## 核心策略：认知套利 / 二阶动量
 - 当重大新闻发生时，直接受益的股票会被市场迅速发现并涨过
@@ -149,6 +89,46 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
 - 到期持仓的卖出由系统自动处理，你不需要关心
 - 专注于发现高质量的间接受益机会
 """
+
+# ============================================================
+# 认知套利 Workflow
+# ============================================================
+
+@register_workflow(
+    "cognitive_arbitrage",
+    description="认知套利/二阶动量策略",
+    features=["📰 LLM 分析新闻", "🔗 识别间接受益", "⏱️ 自动持仓管理", "🤖 分析与执行分离"],
+    best_for="利用新闻传导时间差的套利机会"
+)
+class CognitiveArbitrageWorkflow(WorkflowBase):
+    """
+    认知套利 Agent — 分析与执行分离
+
+    流程：
+    1. [代码] 自动卖出到期持仓
+    2. [LLM]  使用通用 tools 分析新闻、查看持仓，输出结构化买入信号
+    3. [代码] 解析买入信号 → 校验 → 执行交易 → 记录 DB
+    """
+
+    def _default_config(self) -> Dict[str, Any]:
+        return {
+            "system_prompt": _CA_DEFAULT_SYSTEM_PROMPT,
+            "max_ca_positions": 5,          # 最大同时持有 CA 持仓数
+            "position_size_pct": 0.10,      # 每笔 CA 仓位占总资产的比例
+            "min_confidence": 5.0,          # 最低置信度阈值 (1-10)
+            "min_holding_days": 3,          # 最短持仓天数
+            "max_holding_days": 30,         # 最长持仓天数
+        }
+
+    def __init__(self, **kwargs):
+        session_id = kwargs.pop("session_id", "cognitive_arbitrage")
+        super().__init__(**kwargs)
+
+        # 初始化 LLM + 通用 Tools + Agent（基类方法）
+        # 不注册 CA 专用 tools — 交易执行由代码驱动
+        self._init_agent(session_id=session_id)
+
+        logger.info("认知套利 Agent 已初始化（分析与执行分离模式）")
 
     # ========== Workflow 执行 ==========
 
@@ -484,12 +464,12 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                 continue
 
             confidence = float(sig.get("confidence", 0))
-            if confidence < self.MIN_CONFIDENCE:
-                logger.info(f"跳过 {ticker}: 置信度 {confidence} < {self.MIN_CONFIDENCE}")
+            if confidence < self._config["min_confidence"]:
+                logger.info(f"跳过 {ticker}: 置信度 {confidence} < {self._config['min_confidence']}")
                 continue
 
             holding_days = int(sig.get("holding_days", 10))
-            holding_days = max(self.MIN_HOLDING_DAYS, min(self.MAX_HOLDING_DAYS, holding_days))
+            holding_days = max(self._config["min_holding_days"], min(self._config["max_holding_days"], holding_days))
 
             valid.append({
                 "ticker": ticker,
@@ -557,11 +537,11 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                 ticker = sig["ticker"]
 
                 # 检查持仓上限
-                if open_count >= self.MAX_CA_POSITIONS:
-                    logger.info(f"跳过 {ticker}: CA 持仓已达上限 {self.MAX_CA_POSITIONS}")
+                if open_count >= self._config["max_ca_positions"]:
+                    logger.info(f"跳过 {ticker}: CA 持仓已达上限 {self._config['max_ca_positions']}")
                     results.append({
                         "ticker": ticker, "success": False,
-                        "reason": f"CA 持仓已达上限 ({self.MAX_CA_POSITIONS})",
+                        "reason": f"CA 持仓已达上限 ({self._config['max_ca_positions']})",
                     })
                     continue
 
@@ -599,7 +579,7 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                     continue
 
                 # 计算仓位
-                position_value = float(portfolio.equity) * self.POSITION_SIZE_PCT
+                position_value = float(portfolio.equity) * self._config["position_size_pct"]
                 quantity = int(position_value / price)
                 if quantity <= 0:
                     results.append({
@@ -756,14 +736,14 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                         f"还剩{days_left}天, 置信度{p.score}/10"
                     )
                 ca_positions_context = f"""
-**当前 CA 持仓 ({len(positions)}/{self.MAX_CA_POSITIONS})：**
+**当前 CA 持仓 ({len(positions)}/{self._config["max_ca_positions"]})：**
 {chr(10).join(pos_lines)}
 
 ---
 """
             else:
                 ca_positions_context = f"""
-**当前无 CA 持仓 (0/{self.MAX_CA_POSITIONS})**
+**当前无 CA 持仓 (0/{self._config["max_ca_positions"]})**
 
 ---
 """

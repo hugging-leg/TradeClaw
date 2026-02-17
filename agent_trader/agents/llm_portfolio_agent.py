@@ -19,30 +19,8 @@ from agent_trader.agents.workflow_factory import register_workflow
 
 logger = get_logger(__name__)
 
-
-@register_workflow(
-    "llm_portfolio",
-    description="完全由 LLM 驱动的投资组合管理",
-    features=["🆕 无硬编码规则", "ReAct Agent", "多工具协作", "可解释决策"],
-    best_for="🌟 智能自适应组合管理（推荐）"
-)
-class LLMPortfolioAgent(WorkflowBase):
-    """LLM 驱动的投资组合管理 Agent"""
-
-    def __init__(self, **kwargs):
-        session_id = kwargs.pop("session_id", "trading_agent")
-        super().__init__(**kwargs)
-
-        # System prompt
-        self.system_prompt = self._get_system_prompt()
-
-        # 初始化 LLM + Tools + Agent（基类方法）
-        self._init_agent(session_id=session_id)
-
-        logger.info("LLM Portfolio Agent 已初始化")
-
-    def _get_system_prompt(self) -> str:
-        return """你是一位专业的私募投资组合经理，负责管理美股以及ETF投资组合，争取达到sharpe ratio 3以上。
+_LLM_PORTFOLIO_DEFAULT_SYSTEM_PROMPT = """\
+你是一位专业的私募投资组合经理，负责管理美股以及ETF投资组合，争取达到sharpe ratio 3以上。
 
 ## 你的职责
 1. 持续分析市场状况、新闻事件和组合配置
@@ -66,6 +44,30 @@ class LLMPortfolioAgent(WorkflowBase):
 - 百分比总和可以小于100%，剩余部分会自动保留为现金
 - 可以根据市场情况灵活调整现金比例，如市场不确定时可以增加现金占比
 """
+
+
+@register_workflow(
+    "llm_portfolio",
+    description="完全由 LLM 驱动的投资组合管理",
+    features=["🆕 无硬编码规则", "ReAct Agent", "多工具协作", "可解释决策"],
+    best_for="🌟 智能自适应组合管理（推荐）"
+)
+class LLMPortfolioAgent(WorkflowBase):
+    """LLM 驱动的投资组合管理 Agent"""
+
+    def _default_config(self) -> Dict[str, Any]:
+        return {
+            "system_prompt": _LLM_PORTFOLIO_DEFAULT_SYSTEM_PROMPT,
+        }
+
+    def __init__(self, **kwargs):
+        session_id = kwargs.pop("session_id", "trading_agent")
+        super().__init__(**kwargs)
+
+        # 初始化 LLM + Tools + Agent（基类方法）
+        self._init_agent(session_id=session_id)
+
+        logger.info("LLM Portfolio Agent 已初始化")
 
     # ========== Workflow 执行 ==========
 

@@ -129,16 +129,14 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
       f({ key: 'tiingo_api_key', label: 'Tiingo API Key', inputType: 'password', writeOnly: true }),
       f({ key: 'finnhub_api_key', label: 'Finnhub API Key', inputType: 'password', writeOnly: true }),
       f({ key: 'unusual_whales_api_key', label: 'Unusual Whales API Key', inputType: 'password', writeOnly: true }),
-      f({ key: 'llm_api_key', label: 'LLM API Key', description: 'Primary LLM (OpenAI-compatible)', inputType: 'password', writeOnly: true }),
       f({ key: 'news_llm_api_key', label: 'News LLM API Key', description: 'Separate key for news filtering (empty = use primary)', inputType: 'password', writeOnly: true }),
       f({ key: 'telegram_bot_token', label: 'Telegram Bot Token', inputType: 'password', writeOnly: true }),
     ],
   },
   llm: {
-    title: 'LLM Configuration',
-    subtitle: 'API endpoints and news LLM — model/agent params are in Agent page',
+    title: 'News LLM',
+    subtitle: 'Separate LLM for news filtering — primary LLM settings are on the Agent page',
     fields: [
-      f({ key: 'llm_base_url', label: 'LLM Base URL', description: 'OpenAI-compatible API base URL', inputType: 'text' }),
       f({ key: 'news_llm_base_url', label: 'News LLM Base URL', description: 'Separate LLM for news filtering (empty = use primary)', inputType: 'text' }),
       f({ key: 'news_llm_model', label: 'News LLM Model', description: 'Model for news filtering (empty = use primary)', inputType: 'text' }),
     ],
@@ -176,7 +174,7 @@ const tabs: { key: SettingsTab; label: string; icon: typeof SettingsIcon }[] = [
   { key: 'monitoring', label: 'Monitoring', icon: Database },
   { key: 'providers', label: 'Providers', icon: Globe },
   { key: 'api_keys', label: 'API Keys', icon: KeyRound },
-  { key: 'llm', label: 'LLM', icon: Bot },
+  { key: 'llm', label: 'News LLM', icon: Bot },
   { key: 'execution', label: 'Execution', icon: Crosshair },
   { key: 'infra', label: 'Infrastructure', icon: Server },
 ];
