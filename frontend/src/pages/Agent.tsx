@@ -135,7 +135,7 @@ function PasswordField({ value, onChange }: { value: unknown; onChange: (v: stri
         value={value != null ? String(value) : ''}
         placeholder="Enter new value to update…"
         onChange={(e) => onChange(e.target.value)}
-        className="w-full max-w-sm rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+        className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent sm:max-w-sm"
       />
       <button
         type="button"
@@ -300,29 +300,29 @@ function ExecutionCard({
     <Card>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-3 text-left"
+        className="flex w-full items-center gap-2.5 text-left sm:gap-3"
       >
         <div className={cn(
-          'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
+          'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl sm:h-10 sm:w-10',
           execution.status === 'completed' && 'bg-emerald-500/15',
           execution.status === 'failed' && 'bg-red-500/15',
           execution.status === 'running' && 'bg-accent/15',
         )}>
           {execution.status === 'running' ? (
-            <Loader2 className="h-5 w-5 animate-spin text-accent-light" />
+            <Loader2 className="h-4 w-4 animate-spin text-accent-light sm:h-5 sm:w-5" />
           ) : execution.status === 'completed' ? (
-            <CheckCircle className="h-5 w-5 text-emerald-400" />
+            <CheckCircle className="h-4 w-4 text-emerald-400 sm:h-5 sm:w-5" />
           ) : (
-            <XCircle className="h-5 w-5 text-red-400" />
+            <XCircle className="h-4 w-4 text-red-400 sm:h-5 sm:w-5" />
           )}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             <span className="text-sm font-semibold text-foreground">{execution.trigger}</span>
             {statusBadge}
             <Badge variant="muted">{execution.workflow_type}</Badge>
           </div>
-          <div className="mt-1 flex items-center gap-3 text-xs text-muted">
+          <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted sm:mt-1 sm:text-xs">
             <span>{formatRelative(execution.started_at)}</span>
             {execution.total_duration_ms && (
               <span>Duration: {formatDuration(execution.total_duration_ms / 1000)}</span>
@@ -339,9 +339,9 @@ function ExecutionCard({
           </div>
         </div>
         {expanded ? (
-          <ChevronDown className="h-5 w-5 shrink-0 text-muted" />
+          <ChevronDown className="h-4 w-4 shrink-0 text-muted sm:h-5 sm:w-5" />
         ) : (
-          <ChevronRight className="h-5 w-5 shrink-0 text-muted" />
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted sm:h-5 sm:w-5" />
         )}
       </button>
       {expanded && (
@@ -373,36 +373,38 @@ function ToolCard({ tool, onToggle }: { tool: AgentTool; onToggle: (name: string
 
   return (
     <Card hover className={cn(!tool.enabled && 'opacity-50')}>
-      <div className="flex items-start justify-between">
-        <div className="flex items-start gap-3">
-          <div className={cn('flex h-9 w-9 shrink-0 items-center justify-center rounded-lg', catMeta.color)}>
-            <CatIcon className="h-4 w-4" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-sm font-semibold text-foreground">{tool.name}</span>
-              <Badge variant="muted">{catMeta.label}</Badge>
+      <div className="flex items-start gap-3">
+        <div className={cn('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg sm:h-9 sm:w-9', catMeta.color)}>
+          <CatIcon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="truncate font-mono text-xs font-semibold text-foreground sm:text-sm">{tool.name}</span>
+                <Badge variant="muted">{catMeta.label}</Badge>
+              </div>
+              <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground sm:mt-1 sm:text-xs">{tool.description}</p>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">{tool.description}</p>
+            <button
+              onClick={() => onToggle(tool.name)}
+              className={cn(
+                'flex h-6 w-10 shrink-0 items-center rounded-full px-0.5 transition-colors sm:h-7 sm:w-12',
+                tool.enabled ? 'bg-accent' : 'bg-gray-700'
+              )}
+            >
+              <div
+                className={cn(
+                  'h-5 w-5 rounded-full bg-white shadow transition-transform sm:h-6 sm:w-6',
+                  tool.enabled ? 'translate-x-4 sm:translate-x-5' : 'translate-x-0'
+                )}
+              />
+            </button>
           </div>
         </div>
-        <button
-          onClick={() => onToggle(tool.name)}
-          className={cn(
-            'flex h-7 w-12 items-center rounded-full px-0.5 transition-colors',
-            tool.enabled ? 'bg-accent' : 'bg-gray-700'
-          )}
-        >
-          <div
-            className={cn(
-              'h-6 w-6 rounded-full bg-white shadow transition-transform',
-              tool.enabled ? 'translate-x-5' : 'translate-x-0'
-            )}
-          />
-        </button>
       </div>
       {tool.parameters.length > 0 && (
-        <div className="mt-3">
+        <div className="mt-2 sm:mt-3">
           <button
             onClick={() => setShowParams(!showParams)}
             className="flex items-center gap-1 text-xs text-muted hover:text-foreground"
@@ -413,13 +415,13 @@ function ToolCard({ tool, onToggle }: { tool: AgentTool; onToggle: (name: string
           {showParams && (
             <div className="mt-2 space-y-1.5">
               {tool.parameters.map((p) => (
-                <div key={p.name} className="flex items-center gap-2 rounded-md bg-gray-900/50 px-3 py-1.5 text-xs">
+                <div key={p.name} className="flex flex-wrap items-center gap-1.5 rounded-md bg-gray-900/50 px-2.5 py-1.5 text-xs sm:gap-2 sm:px-3">
                   <code className="font-medium text-foreground">{p.name}</code>
                   <Badge variant="muted">{p.type}</Badge>
                   {p.required && <Badge variant="loss">required</Badge>}
-                  <span className="text-muted-foreground">{p.description}</span>
+                  <span className="basis-full text-muted-foreground sm:basis-auto">{p.description}</span>
                   {p.default_value && (
-                    <span className="ml-auto text-muted">default: {p.default_value}</span>
+                    <span className="text-muted sm:ml-auto">default: {p.default_value}</span>
                   )}
                 </div>
               ))}
@@ -501,11 +503,11 @@ function ConfigEditor({
   );
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Readonly info */}
-      <div className="flex items-center gap-4">
+      <div className="flex flex-wrap items-center gap-3 sm:gap-4">
         {readonlyKeys.map((key) => (
-          <div key={key} className="flex items-center gap-2">
+          <div key={key} className="flex items-center gap-1.5">
             <span className="text-xs text-muted">{fieldLabel(key)}:</span>
             <Badge variant="info">{String(config[key])}</Badge>
           </div>
@@ -521,7 +523,7 @@ function ConfigEditor({
 
           return (
             <div key={key}>
-              <label className="mb-1.5 flex items-center gap-2 text-sm font-medium text-foreground">
+              <label className="mb-1.5 flex flex-wrap items-center gap-1.5 text-xs font-medium text-foreground sm:gap-2 sm:text-sm">
                 {fieldLabel(key)}
                 {isEdited && (
                   <span className="rounded bg-accent/20 px-1.5 py-0.5 text-[10px] text-accent-light">modified</span>
@@ -532,7 +534,7 @@ function ConfigEditor({
                 <textarea
                   value={value != null ? String(value) : ''}
                   onChange={(e) => handleChange(key, e.target.value)}
-                  rows={10}
+                  rows={8}
                   className="w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
                 />
               ) : type === 'number' ? (
@@ -541,7 +543,7 @@ function ConfigEditor({
                   step="any"
                   value={value != null ? String(value) : ''}
                   onChange={(e) => handleChange(key, e.target.value)}
-                  className="w-full max-w-xs rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent sm:max-w-xs"
                 />
               ) : type === 'boolean' ? (
                 <button
@@ -582,14 +584,14 @@ function ConfigEditor({
       </div>
 
       {/* Actions */}
-      <div className="flex items-center gap-3 border-t border-border pt-4">
+      <div className="flex flex-wrap items-center gap-2 border-t border-border pt-4 sm:gap-3">
         <Button
           icon={<Save className="h-4 w-4" />}
           onClick={handleSave}
           loading={saving}
           disabled={editedKeys.size === 0}
         >
-          Save Changes
+          Save
         </Button>
         <Button
           variant="secondary"
@@ -601,7 +603,8 @@ function ConfigEditor({
         </Button>
         {editedKeys.size > 0 && (
           <span className="text-xs text-muted">
-            {editedKeys.size} field{editedKeys.size > 1 ? 's' : ''} modified (runtime only, not persisted to .env)
+            {editedKeys.size} field{editedKeys.size > 1 ? 's' : ''} modified
+            <span className="hidden sm:inline"> (runtime only, not persisted to .env)</span>
           </span>
         )}
       </div>
@@ -634,39 +637,41 @@ function WorkflowSwitcher({
     <div className="space-y-4">
       {/* Current workflow */}
       <Card className="border-accent/30 bg-accent/5">
-        <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-accent/15">
-            <Bot className="h-6 w-6 text-accent-light" />
-          </div>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h3 className="text-sm font-semibold text-foreground">
-                {active?.name ?? 'Loading...'}
-              </h3>
-              <Badge variant="info">{active?.workflow_type ?? '—'}</Badge>
-              {currentWf?.builtin ? (
-                <Badge variant="muted">
-                  <Package className="mr-1 h-3 w-3" />Built-in
-                </Badge>
-              ) : currentWf ? (
-                <Badge variant="info">
-                  <Puzzle className="mr-1 h-3 w-3" />Custom
-                </Badge>
-              ) : null}
-              {active?.is_running && <Badge variant="profit">Running</Badge>}
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
+          <div className="flex items-center gap-3 sm:gap-4">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/15 sm:h-12 sm:w-12">
+              <Bot className="h-5 w-5 text-accent-light sm:h-6 sm:w-6" />
             </div>
-            {active?.stats && (
-              <div className="mt-1 flex items-center gap-3 text-xs text-muted">
-                <span>Runs: {String(active.stats.total_runs ?? 0)}</span>
-                <span>Success: {String(active.stats.successful_runs ?? 0)}</span>
-                <span>Failed: {String(active.stats.failed_runs ?? 0)}</span>
-                {active.stats.last_run != null && (
-                  <span>Last: {formatRelative(String(active.stats.last_run))}</span>
-                )}
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                <h3 className="text-sm font-semibold text-foreground">
+                  {active?.name ?? 'Loading...'}
+                </h3>
+                <Badge variant="info">{active?.workflow_type ?? '—'}</Badge>
+                {currentWf?.builtin ? (
+                  <Badge variant="muted">
+                    <Package className="mr-1 h-3 w-3" />Built-in
+                  </Badge>
+                ) : currentWf ? (
+                  <Badge variant="info">
+                    <Puzzle className="mr-1 h-3 w-3" />Custom
+                  </Badge>
+                ) : null}
+                {active?.is_running && <Badge variant="profit">Running</Badge>}
               </div>
-            )}
+              {active?.stats && (
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted">
+                  <span>Runs: {String(active.stats.total_runs ?? 0)}</span>
+                  <span>Success: {String(active.stats.successful_runs ?? 0)}</span>
+                  <span>Failed: {String(active.stats.failed_runs ?? 0)}</span>
+                  {active.stats.last_run != null && (
+                    <span>Last: {formatRelative(String(active.stats.last_run))}</span>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 self-end sm:self-center">
             <Button
               variant="ghost"
               icon={<RefreshCw className={cn('h-4 w-4', reloading && 'animate-spin')} />}
@@ -688,7 +693,7 @@ function WorkflowSwitcher({
 
       {/* Workflow picker */}
       {showPicker && (
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {Object.entries(workflows).map(([key, wf]) => {
             const isCurrent = key === active?.workflow_type;
             return (
@@ -709,24 +714,22 @@ function WorkflowSwitcher({
                     setShowPicker(false);
                   }}
                 >
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-semibold text-foreground">{wf.name}</h3>
-                        {wf.builtin ? (
-                          <Badge variant="muted">
-                            <Package className="mr-1 h-3 w-3" />Built-in
-                          </Badge>
-                        ) : (
-                          <Badge variant="info">
-                            <Puzzle className="mr-1 h-3 w-3" />Custom
-                          </Badge>
-                        )}
-                        {isCurrent && <Badge variant="profit">Active</Badge>}
-                        {wf.deprecated && <Badge variant="loss">Deprecated</Badge>}
-                      </div>
-                      <p className="mt-1 text-xs text-muted">{wf.description}</p>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <h3 className="text-sm font-semibold text-foreground">{wf.name}</h3>
+                      {wf.builtin ? (
+                        <Badge variant="muted">
+                          <Package className="mr-1 h-3 w-3" />Built-in
+                        </Badge>
+                      ) : (
+                        <Badge variant="info">
+                          <Puzzle className="mr-1 h-3 w-3" />Custom
+                        </Badge>
+                      )}
+                      {isCurrent && <Badge variant="profit">Active</Badge>}
+                      {wf.deprecated && <Badge variant="loss">Deprecated</Badge>}
                     </div>
+                    <p className="mt-1 text-xs text-muted">{wf.description}</p>
                   </div>
                   <div className="mt-3 flex flex-wrap gap-1">
                     {wf.features.slice(0, 3).map((f) => (
@@ -843,7 +846,7 @@ function AgentChatInput({
   const effectiveQueueSize = queuedMessages.length || initialQueueSize;
 
   return (
-    <div className="sticky bottom-0 z-10 -mx-4 border-t border-border bg-background/95 px-4 py-3 backdrop-blur-sm md:-mx-6 md:px-6">
+    <div className="sticky bottom-0 z-10 -mx-4 border-t border-border bg-background/95 px-3 py-2.5 backdrop-blur-sm sm:px-4 sm:py-3 md:-mx-6 md:px-6">
       {/* Queued messages panel — Cursor-like queue display */}
       {isRunning && effectiveQueueSize > 0 && (
         <div className="mb-3">
@@ -913,20 +916,23 @@ function AgentChatInput({
       )}
 
       {/* Status indicator */}
-      <div className="mb-2 flex items-center gap-2 text-xs text-muted">
+      <div className="mb-1.5 flex items-center gap-2 text-[11px] text-muted sm:mb-2 sm:text-xs">
         {isRunning ? (
           <>
-            <span className="relative flex h-2 w-2">
+            <span className="relative flex h-2 w-2 shrink-0">
               <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-accent" />
             </span>
             <span className="text-accent-light">Agent running</span>
-            <span className="text-muted">— new messages will be queued</span>
+            <span className="hidden text-muted sm:inline">— new messages will be queued</span>
           </>
         ) : (
           <>
-            <span className="h-2 w-2 rounded-full bg-muted/40" />
-            <span>Agent idle — send a message to start a new analysis</span>
+            <span className="h-2 w-2 shrink-0 rounded-full bg-muted/40" />
+            <span>
+              <span className="sm:hidden">Send a message to start analysis</span>
+              <span className="hidden sm:inline">Agent idle — send a message to start a new analysis</span>
+            </span>
           </>
         )}
       </div>
@@ -1191,21 +1197,21 @@ export default function Agent() {
   const toolCategories = ['all', 'data', 'trading', 'analysis', 'system'];
 
   return (
-    <div className="animate-fade-in space-y-6">
+    <div className="animate-fade-in space-y-4 sm:space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight text-foreground">Agent</h1>
-          <p className="mt-1 text-sm text-muted">AI workflow management, tools, and execution history</p>
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold tracking-tight text-foreground sm:text-2xl">Agent</h1>
+          <p className="mt-0.5 text-xs text-muted sm:mt-1 sm:text-sm">AI workflow management, tools, and execution history</p>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:gap-3">
           {active?.is_running && (
-            <div className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-1.5">
-              <span className="relative flex h-2.5 w-2.5">
+            <div className="flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-2.5 py-1 sm:px-3 sm:py-1.5">
+              <span className="relative flex h-2 w-2 sm:h-2.5 sm:w-2.5">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75" />
-                <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-accent" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-accent sm:h-2.5 sm:w-2.5" />
               </span>
-              <span className="text-sm font-medium text-accent-light">Running</span>
+              <span className="text-xs font-medium text-accent-light sm:text-sm">Running</span>
               {(active.pending_triggers ?? 0) > 0 && (
                 <Badge variant="warning">{active.pending_triggers} queued</Badge>
               )}
@@ -1217,7 +1223,8 @@ export default function Agent() {
             disabled={active?.is_running}
             onClick={handleTriggerAnalysis}
           >
-            {active?.is_running ? 'Workflow Running' : 'Trigger Analysis'}
+            <span className="hidden sm:inline">{active?.is_running ? 'Workflow Running' : 'Trigger Analysis'}</span>
+            <span className="sm:hidden">{active?.is_running ? 'Running' : 'Trigger'}</span>
           </Button>
         </div>
       </div>
@@ -1233,41 +1240,43 @@ export default function Agent() {
       />
 
       {/* Tab Switcher */}
-      <div className="-mx-4 flex gap-1 overflow-x-auto border-b border-border px-4 pb-0 md:mx-0 md:px-0">
-        {([
-          { key: 'config', label: 'Config', icon: Settings2 },
-          { key: 'execution', label: 'Execution', icon: Zap },
-          { key: 'tools', label: 'Tools', icon: Wrench },
-          { key: 'decisions', label: 'Decisions', icon: BarChart3 },
-          { key: 'analyses', label: 'Analyses', icon: Cpu },
-          { key: 'messages', label: 'Messages', icon: MessageSquare },
-        ] as const).map(({ key, label, icon: Icon }) => (
-          <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={cn(
-              'flex shrink-0 items-center gap-2 border-b-2 px-4 py-2.5 text-sm font-medium transition-colors',
-              tab === key
-                ? 'border-accent text-accent-light'
-                : 'border-transparent text-muted hover:text-foreground'
-            )}
-          >
-            <Icon className="h-4 w-4" />
-            {label}
-            {key === 'tools' && (
-              <span className="rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold text-accent-light">
-                {tools.filter((t) => t.enabled).length}/{tools.length}
-              </span>
-            )}
-          </button>
-        ))}
+      <div className="-mx-4 overflow-x-auto border-b border-border px-4 md:mx-0 md:px-0">
+        <div className="flex min-w-max gap-0.5 sm:gap-1">
+          {([
+            { key: 'config', label: 'Config', icon: Settings2 },
+            { key: 'execution', label: 'Execution', icon: Zap },
+            { key: 'tools', label: 'Tools', icon: Wrench },
+            { key: 'decisions', label: 'Decisions', icon: BarChart3 },
+            { key: 'analyses', label: 'Analyses', icon: Cpu },
+            { key: 'messages', label: 'Messages', icon: MessageSquare },
+          ] as const).map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={cn(
+                'flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition-colors sm:gap-2 sm:px-4 sm:py-2.5 sm:text-sm',
+                tab === key
+                  ? 'border-accent text-accent-light'
+                  : 'border-transparent text-muted hover:text-foreground'
+              )}
+            >
+              <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
+              {label}
+              {key === 'tools' && (
+                <span className="rounded-full bg-accent/15 px-1.5 py-0.5 text-[10px] font-bold text-accent-light">
+                  {tools.filter((t) => t.enabled).length}/{tools.length}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Config Tab */}
       {tab === 'config' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-foreground">Workflow Configuration</h2>
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-base font-semibold text-foreground sm:text-lg">Workflow Configuration</h2>
             <span className="text-xs text-muted">Changes are runtime-only and reset on restart</span>
           </div>
           {config ? (
@@ -1286,9 +1295,9 @@ export default function Agent() {
 
       {/* Execution Timeline Tab */}
       {tab === 'execution' && (
-        <div className="space-y-4">
+        <div className="space-y-3 sm:space-y-4">
           <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-foreground">Workflow Executions</h2>
+            <h2 className="text-base font-semibold text-foreground sm:text-lg">Workflow Executions</h2>
             <div className="flex items-center gap-2 text-xs text-muted">
               <Clock className="h-3.5 w-3.5" />
               {executions.length} execution{executions.length !== 1 ? 's' : ''}
@@ -1324,11 +1333,11 @@ export default function Agent() {
 
       {/* Tools Tab */}
       {tab === 'tools' && (
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-foreground">Agent Tools</h2>
+        <div className="space-y-3 sm:space-y-4">
+          <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-base font-semibold text-foreground sm:text-lg">Agent Tools</h2>
             <div className="flex items-center gap-2">
-              <Eye className="h-4 w-4 text-muted" />
+              <Eye className="h-3.5 w-3.5 text-muted sm:h-4 sm:w-4" />
               <span className="text-xs text-muted">
                 {tools.filter((t) => t.enabled).length} enabled / {tools.length} total
               </span>
@@ -1342,7 +1351,7 @@ export default function Agent() {
                   key={cat}
                   onClick={() => setToolFilter(cat)}
                   className={cn(
-                    'rounded-lg px-3 py-1.5 text-xs font-medium transition-colors',
+                    'rounded-lg px-2.5 py-1 text-xs font-medium transition-colors sm:px-3 sm:py-1.5',
                     toolFilter === cat
                       ? 'bg-accent text-white'
                       : 'bg-card-hover text-muted hover:text-foreground'
@@ -1354,7 +1363,7 @@ export default function Agent() {
               );
             })}
           </div>
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {filteredTools.map((tool) => (
               <ToolCard key={tool.name} tool={tool} onToggle={handleToggleTool} />
             ))}
@@ -1367,37 +1376,37 @@ export default function Agent() {
         <div className="space-y-3">
           {decisions.map((d) => (
             <Card key={d.id} hover>
-              <div className="flex items-start gap-4">
+              <div className="flex items-start gap-3 sm:gap-4">
                 <div
                   className={cn(
-                    'flex h-10 w-10 shrink-0 items-center justify-center rounded-xl',
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl sm:h-10 sm:w-10',
                     d.action === 'buy' && 'bg-profit-bg',
                     d.action === 'sell' && 'bg-loss-bg',
                     d.action === 'hold' && 'bg-info-bg'
                   )}
                 >
-                  {d.action === 'buy' && <ArrowUpRight className="h-5 w-5 text-profit" />}
-                  {d.action === 'sell' && <ArrowDownRight className="h-5 w-5 text-loss" />}
-                  {d.action === 'hold' && <BarChart3 className="h-5 w-5 text-info" />}
+                  {d.action === 'buy' && <ArrowUpRight className="h-4 w-4 text-profit sm:h-5 sm:w-5" />}
+                  {d.action === 'sell' && <ArrowDownRight className="h-4 w-4 text-loss sm:h-5 sm:w-5" />}
+                  {d.action === 'hold' && <BarChart3 className="h-4 w-4 text-info sm:h-5 sm:w-5" />}
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-base font-bold text-foreground">{d.symbol}</span>
+                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                    <span className="text-sm font-bold text-foreground sm:text-base">{d.symbol}</span>
                     <Badge variant={d.action === 'buy' ? 'profit' : d.action === 'sell' ? 'loss' : 'info'}>
                       {d.action.toUpperCase()}
                     </Badge>
                     {d.quantity && (
-                      <span className="text-sm text-muted-foreground">
+                      <span className="text-xs text-muted-foreground sm:text-sm">
                         {d.quantity} shares {d.price ? `@ ${formatCurrency(d.price)}` : ''}
                       </span>
                     )}
-                    <span className="ml-auto text-xs text-muted">{formatRelative(d.created_at)}</span>
                   </div>
-                  <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{d.reasoning}</p>
-                  <div className="mt-3 flex items-center gap-4">
+                  <span className="mt-0.5 block text-[11px] text-muted sm:hidden">{formatRelative(d.created_at)}</span>
+                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground sm:mt-2 sm:text-sm">{d.reasoning}</p>
+                  <div className="mt-2 flex flex-wrap items-center gap-3 sm:mt-3 sm:gap-4">
                     <div className="flex items-center gap-1.5">
                       <span className="text-xs text-muted">Confidence</span>
-                      <div className="h-1.5 w-20 rounded-full bg-border">
+                      <div className="h-1.5 w-16 rounded-full bg-border sm:w-20">
                         <div
                           className="h-1.5 rounded-full bg-accent"
                           style={{ width: `${d.confidence * 100}%` }}
@@ -1417,6 +1426,7 @@ export default function Agent() {
                         TP: <span className="text-profit">{formatCurrency(d.take_profit)}</span>
                       </span>
                     )}
+                    <span className="ml-auto hidden text-xs text-muted sm:inline">{formatRelative(d.created_at)}</span>
                   </div>
                 </div>
               </div>
@@ -1430,15 +1440,15 @@ export default function Agent() {
         <div className="space-y-3">
           {analyses.map((a) => (
             <Card key={a.id} hover>
-              <div className="flex items-start justify-between">
-                <div className="flex items-center gap-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-center gap-2.5 sm:gap-3">
                   {a.success ? (
-                    <CheckCircle className="h-5 w-5 text-profit" />
+                    <CheckCircle className="h-4 w-4 shrink-0 text-profit sm:h-5 sm:w-5" />
                   ) : (
-                    <XCircle className="h-5 w-5 text-loss" />
+                    <XCircle className="h-4 w-4 shrink-0 text-loss sm:h-5 sm:w-5" />
                   )}
-                  <div>
-                    <div className="flex items-center gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
                       <span className="text-sm font-semibold text-foreground">{a.trigger}</span>
                       {a.analysis_type && <Badge variant="info">{a.analysis_type}</Badge>}
                       <Badge variant={a.success ? 'profit' : 'loss'}>
@@ -1446,11 +1456,11 @@ export default function Agent() {
                       </Badge>
                     </div>
                     {a.workflow_id && (
-                      <span className="mt-0.5 text-xs text-muted">{a.workflow_id}</span>
+                      <span className="mt-0.5 block truncate text-xs text-muted">{a.workflow_id}</span>
                     )}
                   </div>
                 </div>
-                <span className="text-xs text-muted">{formatRelative(a.created_at)}</span>
+                <span className="shrink-0 pl-6 text-xs text-muted sm:pl-0">{formatRelative(a.created_at)}</span>
               </div>
               {a.output_response && (
                 <p className="mt-3 rounded-lg bg-background p-3 text-sm text-muted-foreground">
@@ -1462,7 +1472,7 @@ export default function Agent() {
                   {a.error_message}
                 </p>
               )}
-              <div className="mt-3 flex items-center gap-4">
+              <div className="mt-2 flex flex-wrap items-center gap-3 sm:mt-3 sm:gap-4">
                 {a.execution_time_seconds && (
                   <span className="text-xs text-muted">
                     Duration: <span className="text-foreground">{formatDuration(a.execution_time_seconds)}</span>
@@ -1493,23 +1503,23 @@ export default function Agent() {
             {messages.map((msg) => {
               const Icon = roleIcons[msg.role] || MessageSquare;
               return (
-                <div key={msg.id} className="flex items-start gap-3">
+                <div key={msg.id} className="flex items-start gap-2.5 sm:gap-3">
                   <div
                     className={cn(
-                      'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                      'flex h-7 w-7 shrink-0 items-center justify-center rounded-lg sm:h-8 sm:w-8',
                       roleColors[msg.role] || 'bg-border text-muted'
                     )}
                   >
-                    <Icon className="h-4 w-4" />
+                    <Icon className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-semibold uppercase text-muted-foreground">
+                    <div className="flex items-center gap-1.5 sm:gap-2">
+                      <span className="text-[11px] font-semibold uppercase text-muted-foreground sm:text-xs">
                         {msg.role}
                       </span>
-                      <span className="text-xs text-muted">{formatRelative(msg.created_at)}</span>
+                      <span className="text-[11px] text-muted sm:text-xs">{formatRelative(msg.created_at)}</span>
                     </div>
-                    <p className="mt-1 text-sm leading-relaxed text-foreground">{msg.content}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-foreground sm:mt-1 sm:text-sm">{msg.content}</p>
                   </div>
                 </div>
               );
