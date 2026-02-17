@@ -28,6 +28,7 @@ from agent_trader.api.routes import (
     settings as settings_route,
     backtest,
 )
+from agent_trader.api.routes.agent import sse_router as agent_sse_router
 
 # 前端构建产物目录
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent.parent / "frontend" / "dist"
@@ -54,6 +55,10 @@ def create_app() -> FastAPI:
 
     # 公开路由（不需要 token）
     app.include_router(auth.router, prefix=prefix, tags=["auth"])
+
+    # SSE 路由 — 独立注册，不带 require_auth 依赖
+    # EventSource 不支持 Authorization header，SSE endpoint 内部自行验证 query param token
+    app.include_router(agent_sse_router, prefix=prefix, tags=["agent"])
 
     # 受保护路由（鉴权启用时需要 Bearer token）
     protected = [

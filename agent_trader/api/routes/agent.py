@@ -18,6 +18,10 @@ from agent_trader.agents.workflow_base import event_broadcaster
 
 router = APIRouter()
 
+# SSE 独立 router — 不带 router 级别的 require_auth 依赖
+# （EventSource 不支持 Authorization header，SSE endpoint 内部自行验证 query param token）
+sse_router = APIRouter()
+
 
 # ========== Workflows ==========
 
@@ -265,8 +269,10 @@ async def get_workflow_stats(ts: TradingSystem = Depends(get_trading_system)):
 
 
 # ========== SSE — 实时事件流 ==========
+# 注意：此 endpoint 注册在 sse_router 上，不受 router 级别的 require_auth 保护。
+# 鉴权在 endpoint 内部通过 query param token 手动验证。
 
-@router.get("/agent/events")
+@sse_router.get("/agent/events")
 async def agent_events(
     request: Request,
     token: Optional[str] = Query(default=None),
