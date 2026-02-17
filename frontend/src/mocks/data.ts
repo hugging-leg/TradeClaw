@@ -632,6 +632,7 @@ export const mockWorkflows: Record<string, WorkflowInfo> = {
     features: ['Deterministic flow', 'Step-by-step analysis'],
     best_for: 'Predictable, auditable analysis',
     deprecated: false,
+    builtin: true,
   },
 };
 
