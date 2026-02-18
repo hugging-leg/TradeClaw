@@ -69,12 +69,70 @@ export async function cancelOrder(orderId: string): Promise<{ success: boolean; 
 
 // ========== Agent ==========
 
-export async function fetchDecisions(limit = 20): Promise<TradingDecision[]> {
-  return api.get<TradingDecision[]>(`/agent/decisions?limit=${limit}`);
+export interface PaginatedResponse<T> {
+  items: T[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
-export async function fetchAnalyses(limit = 20): Promise<AnalysisHistory[]> {
-  return api.get<AnalysisHistory[]>(`/agent/executions?limit=${limit}`);
+export async function fetchDecisions(limit = 20, offset = 0): Promise<PaginatedResponse<TradingDecision>> {
+  return api.get<PaginatedResponse<TradingDecision>>(`/agent/decisions?limit=${limit}&offset=${offset}`);
+}
+
+export async function fetchAnalyses(limit = 20, offset = 0): Promise<PaginatedResponse<AnalysisHistory>> {
+  return api.get<PaginatedResponse<AnalysisHistory>>(`/agent/executions?limit=${limit}&offset=${offset}`);
+}
+
+export interface ExportFilter {
+  trigger?: string;
+  workflow_id?: string;
+  backtest_id?: string;
+  date_from?: string;
+  date_to?: string;
+  symbol?: string;
+}
+
+/** Export analyses (no limit cap), with optional filters */
+export async function exportAnalyses(opts?: ExportFilter): Promise<AnalysisHistory[]> {
+  const params = new URLSearchParams();
+  if (opts?.trigger) params.set('trigger', opts.trigger);
+  if (opts?.workflow_id) params.set('workflow_id', opts.workflow_id);
+  if (opts?.backtest_id) params.set('backtest_id', opts.backtest_id);
+  if (opts?.date_from) params.set('date_from', opts.date_from);
+  if (opts?.date_to) params.set('date_to', opts.date_to);
+  const qs = params.toString();
+  return api.get<AnalysisHistory[]>(`/agent/executions/export${qs ? `?${qs}` : ''}`);
+}
+
+/** Export decisions (no limit cap), with optional filters */
+export async function exportDecisions(opts?: ExportFilter): Promise<TradingDecision[]> {
+  const params = new URLSearchParams();
+  if (opts?.symbol) params.set('symbol', opts.symbol);
+  if (opts?.date_from) params.set('date_from', opts.date_from);
+  if (opts?.date_to) params.set('date_to', opts.date_to);
+  const qs = params.toString();
+  return api.get<TradingDecision[]>(`/agent/decisions/export${qs ? `?${qs}` : ''}`);
+}
+
+/** Fetch distinct trigger values for filter UI */
+export async function fetchExecutionTriggers(): Promise<string[]> {
+  return api.get<string[]>('/agent/executions/triggers');
+}
+
+export interface BacktestSummary {
+  id: string;
+  status: string;
+  workflow_type: string;
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  created_at: string;
+}
+
+/** Fetch backtest summaries for export filter */
+export async function fetchBacktestSummaries(): Promise<BacktestSummary[]> {
+  return api.get<BacktestSummary[]>('/agent/executions/backtests');
 }
 
 export async function fetchAgentMessages(sessionId?: string): Promise<AgentMessage[]> {
@@ -189,14 +247,17 @@ export async function toggleAgentTool(toolName: string, enabled: boolean): Promi
   return api.patch<{ name: string; enabled: boolean }>(`/agent/tools/${toolName}`, { enabled });
 }
 
-export async function fetchWorkflowExecutions(): Promise<WorkflowExecution[]> {
-  const analyses = await api.get<AnalysisHistory[]>('/agent/executions?limit=10');
-  return analyses.map((a) => _analysisToExecution(a));
+export async function fetchWorkflowExecutions(limit = 10, offset = 0): Promise<{ items: WorkflowExecution[]; total: number }> {
+  const resp = await api.get<PaginatedResponse<AnalysisHistory>>(`/agent/executions?limit=${limit}&offset=${offset}`);
+  return {
+    items: resp.items.map((a) => _analysisToExecution(a)),
+    total: resp.total,
+  };
 }
 
 export async function fetchLatestExecution(): Promise<WorkflowExecution | null> {
-  const executions = await fetchWorkflowExecutions();
-  return executions[0] || null;
+  const { items } = await fetchWorkflowExecutions(1, 0);
+  return items[0] || null;
 }
 
 export async function fetchWorkflowStats(): Promise<{ workflow_type: string; is_running: boolean; stats: Record<string, unknown> }> {

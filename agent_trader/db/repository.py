@@ -65,16 +65,27 @@ class TradingRepository:
     @staticmethod
     async def get_recent_decisions(
         symbol: Optional[str] = None,
-        limit: int = 10
+        limit: int = 10,
+        offset: int = 0,
     ) -> List[TradingDecision]:
         """获取最近的交易决策"""
         async with get_db() as db:
             query = select(TradingDecision).order_by(desc(TradingDecision.created_at))
             if symbol:
                 query = query.where(TradingDecision.symbol == symbol)
-            query = query.limit(limit)
+            query = query.offset(offset).limit(limit)
             result = await db.execute(query)
             return result.scalars().all()
+
+    @staticmethod
+    async def count_decisions(symbol: Optional[str] = None) -> int:
+        """获取交易决策总数"""
+        async with get_db() as db:
+            query = select(sa_func.count(TradingDecision.id))
+            if symbol:
+                query = query.where(TradingDecision.symbol == symbol)
+            result = await db.execute(query)
+            return result.scalar() or 0
 
     # ========== 分析历史 ==========
 
@@ -113,16 +124,89 @@ class TradingRepository:
     @staticmethod
     async def get_recent_analyses(
         trigger: Optional[str] = None,
-        limit: int = 10
+        limit: int = 10,
+        offset: int = 0,
     ) -> List[AnalysisHistory]:
         """获取最近的分析历史"""
         async with get_db() as db:
             query = select(AnalysisHistory).order_by(desc(AnalysisHistory.created_at))
             if trigger:
                 query = query.where(AnalysisHistory.trigger == trigger)
-            query = query.limit(limit)
+            query = query.offset(offset).limit(limit)
             result = await db.execute(query)
             return result.scalars().all()
+
+    @staticmethod
+    async def count_analyses(trigger: Optional[str] = None) -> int:
+        """获取分析历史总数"""
+        async with get_db() as db:
+            query = select(sa_func.count(AnalysisHistory.id))
+            if trigger:
+                query = query.where(AnalysisHistory.trigger == trigger)
+            result = await db.execute(query)
+            return result.scalar() or 0
+
+    @staticmethod
+    async def export_analyses(
+        trigger: Optional[str] = None,
+        workflow_id: Optional[str] = None,
+        backtest_id: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> List[AnalysisHistory]:
+        """导出分析历史（不限数量），支持按 trigger / workflow_id / backtest_id / 时间范围 过滤"""
+        from datetime import datetime, timedelta
+        async with get_db() as db:
+            query = select(AnalysisHistory).order_by(desc(AnalysisHistory.created_at))
+            if trigger:
+                query = query.where(AnalysisHistory.trigger == trigger)
+            if workflow_id:
+                query = query.where(AnalysisHistory.workflow_id == workflow_id)
+            if date_from:
+                dt_from = datetime.fromisoformat(date_from)
+                query = query.where(AnalysisHistory.created_at >= dt_from)
+            if date_to:
+                # date_to 是日期字符串（如 2026-02-19），需要包含当天全天
+                dt_to = datetime.fromisoformat(date_to) + timedelta(days=1)
+                query = query.where(AnalysisHistory.created_at < dt_to)
+            result = await db.execute(query)
+            items = result.scalars().all()
+            # backtest_id 存储在 input_context JSON 中，需要在 Python 层过滤
+            if backtest_id:
+                items = [
+                    a for a in items
+                    if isinstance(a.input_context, dict) and a.input_context.get("backtest_id") == backtest_id
+                ]
+            return items
+
+    @staticmethod
+    async def export_decisions(
+        symbol: Optional[str] = None,
+        date_from: Optional[str] = None,
+        date_to: Optional[str] = None,
+    ) -> List[TradingDecision]:
+        """导出交易决策（不限数量），支持按 symbol / 时间范围 过滤"""
+        from datetime import datetime, timedelta
+        async with get_db() as db:
+            query = select(TradingDecision).order_by(desc(TradingDecision.created_at))
+            if symbol:
+                query = query.where(TradingDecision.symbol == symbol)
+            if date_from:
+                dt_from = datetime.fromisoformat(date_from)
+                query = query.where(TradingDecision.created_at >= dt_from)
+            if date_to:
+                dt_to = datetime.fromisoformat(date_to) + timedelta(days=1)
+                query = query.where(TradingDecision.created_at < dt_to)
+            result = await db.execute(query)
+            return result.scalars().all()
+
+    @staticmethod
+    async def get_distinct_triggers() -> List[str]:
+        """获取所有不同的 trigger 值（用于前端过滤选择）"""
+        async with get_db() as db:
+            query = select(AnalysisHistory.trigger).distinct().order_by(AnalysisHistory.trigger)
+            result = await db.execute(query)
+            return [r[0] for r in result.all() if r[0]]
 
     @staticmethod
     async def get_workflow_stats(analysis_type: Optional[str] = None) -> Dict[str, Any]:
@@ -400,3 +484,33 @@ class TradingRepository:
         async with get_db() as db:
             record = await db.get(BacktestResult, task_id)
             return record.to_dict() if record else None
+
+    @staticmethod
+    async def get_backtest_summaries(limit: int = 100) -> List[Dict[str, Any]]:
+        """获取回测摘要列表（轻量，用于下拉选择）"""
+        async with get_db() as db:
+            query = (
+                select(
+                    BacktestResult.id,
+                    BacktestResult.config,
+                    BacktestResult.status,
+                    BacktestResult.created_at,
+                )
+                .order_by(desc(BacktestResult.created_at))
+                .limit(limit)
+            )
+            result = await db.execute(query)
+            rows = result.all()
+            summaries = []
+            for row in rows:
+                cfg = row.config or {}
+                summaries.append({
+                    "id": row.id,
+                    "status": row.status,
+                    "workflow_type": cfg.get("workflow_type", ""),
+                    "start_date": cfg.get("start_date", ""),
+                    "end_date": cfg.get("end_date", ""),
+                    "initial_capital": cfg.get("initial_capital", 0),
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                })
+            return summaries

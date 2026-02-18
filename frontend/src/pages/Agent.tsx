@@ -6,6 +6,10 @@ import { useToast } from '@/components/ui/Toast';
 import {
   fetchDecisions,
   fetchAnalyses,
+  exportAnalyses,
+  exportDecisions,
+  fetchExecutionTriggers,
+  fetchBacktestSummaries,
   fetchAgentMessages,
   fetchWorkflows,
   reloadWorkflows,
@@ -22,6 +26,7 @@ import {
   cancelQueuedMessage,
   clearChatQueue,
 } from '@/api';
+import type { BacktestSummary, ExportFilter } from '@/api';
 import { useLiveExecution } from '@/api/useAgentEvents';
 import { formatCurrency, formatRelative, formatDuration } from '@/utils/format';
 import { cn } from '@/utils/cn';
@@ -57,6 +62,9 @@ import {
   X,
   Trash2,
   EyeOff,
+  Download,
+  FileJson,
+  ChevronLeft,
 } from 'lucide-react';
 import type {
   TradingDecision,
@@ -987,16 +995,348 @@ function AgentChatInput({
   );
 }
 
+// ========== Export Dialog ==========
+
+function ExportMenu({
+  type,
+  onExport,
+  exporting,
+}: {
+  type: 'executions' | 'analyses' | 'decisions';
+  onExport: (format: 'csv' | 'json', opts?: ExportFilter) => void;
+  exporting: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [triggers, setTriggers] = useState<string[]>([]);
+  const [backtests, setBacktests] = useState<BacktestSummary[]>([]);
+  const [selectedTrigger, setSelectedTrigger] = useState<string>('');
+  const [selectedBacktest, setSelectedBacktest] = useState<string>('');
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
+  const [preset, setPreset] = useState<string>('7d');
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  // Load triggers + backtest list when menu opens
+  useEffect(() => {
+    if (open && type !== 'decisions') {
+      fetchExecutionTriggers().then(setTriggers).catch(() => {});
+      fetchBacktestSummaries().then(setBacktests).catch(() => {});
+    }
+  }, [open, type]);
+
+  // Reset backtest selection when trigger changes
+  useEffect(() => {
+    if (selectedTrigger !== 'backtest') setSelectedBacktest('');
+  }, [selectedTrigger]);
+
+  // Apply date preset
+  useEffect(() => {
+    if (preset === 'custom') return;
+    const today = new Date();
+    const to = today.toISOString().slice(0, 10);
+    setDateTo(to);
+    if (preset === '7d') {
+      const d = new Date(today); d.setDate(d.getDate() - 7);
+      setDateFrom(d.toISOString().slice(0, 10));
+    } else if (preset === '30d') {
+      const d = new Date(today); d.setDate(d.getDate() - 30);
+      setDateFrom(d.toISOString().slice(0, 10));
+    } else if (preset === '90d') {
+      const d = new Date(today); d.setDate(d.getDate() - 90);
+      setDateFrom(d.toISOString().slice(0, 10));
+    } else if (preset === 'all') {
+      setDateFrom('');
+      setDateTo('');
+    }
+  }, [preset]);
+
+  const handleExport = (format: 'csv' | 'json') => {
+    const opts: ExportFilter = {};
+    if (selectedTrigger) opts.trigger = selectedTrigger;
+    if (selectedBacktest) opts.backtest_id = selectedBacktest;
+    if (dateFrom) opts.date_from = dateFrom;
+    if (dateTo) opts.date_to = dateTo;
+    onExport(format, Object.keys(opts).length > 0 ? opts : undefined);
+    setOpen(false);
+  };
+
+  const formatBacktestLabel = (bt: BacktestSummary) => {
+    const date = bt.created_at ? new Date(bt.created_at).toLocaleDateString() : '';
+    return `${bt.id.slice(0, 8)} · ${bt.start_date}~${bt.end_date} (${date})`;
+  };
+
+  const inputCls = 'w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs text-foreground focus:border-accent focus:outline-none';
+
+  return (
+    <div className="relative" ref={menuRef}>
+      <Button
+        variant="ghost"
+        icon={exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+        disabled={exporting}
+        onClick={() => setOpen(!open)}
+      >
+        <span className="hidden sm:inline">Export</span>
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1 w-72 rounded-xl border border-border bg-card p-3 shadow-xl sm:w-80">
+          <p className="mb-2.5 text-xs font-semibold text-foreground">Export {type}</p>
+
+          {/* Date range presets */}
+          <div className="mb-2.5">
+            <label className="mb-1 block text-[11px] text-muted">Time range</label>
+            <div className="flex flex-wrap gap-1">
+              {[
+                { value: '7d', label: '7 days' },
+                { value: '30d', label: '30 days' },
+                { value: '90d', label: '90 days' },
+                { value: 'all', label: 'All' },
+                { value: 'custom', label: 'Custom' },
+              ].map((p) => (
+                <button
+                  key={p.value}
+                  onClick={() => setPreset(p.value)}
+                  className={`rounded-md px-2 py-1 text-[11px] font-medium transition-colors ${
+                    preset === p.value
+                      ? 'bg-accent text-white'
+                      : 'bg-surface-2 text-muted hover:text-foreground'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Custom date inputs */}
+          {preset === 'custom' && (
+            <div className="mb-2.5 grid grid-cols-2 gap-2">
+              <div>
+                <label className="mb-1 block text-[11px] text-muted">From</label>
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[11px] text-muted">To</label>
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className={inputCls}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Filter by trigger (only for executions/analyses) */}
+          {type !== 'decisions' && triggers.length > 0 && (
+            <div className="mb-2.5">
+              <label className="mb-1 block text-[11px] text-muted">Filter by trigger</label>
+              <select
+                value={selectedTrigger}
+                onChange={(e) => setSelectedTrigger(e.target.value)}
+                className={inputCls}
+              >
+                <option value="">All types</option>
+                {triggers.map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Select specific backtest (when trigger=backtest) */}
+          {type !== 'decisions' && selectedTrigger === 'backtest' && backtests.length > 0 && (
+            <div className="mb-2.5">
+              <label className="mb-1 block text-[11px] text-muted">Select backtest run</label>
+              <select
+                value={selectedBacktest}
+                onChange={(e) => setSelectedBacktest(e.target.value)}
+                className={inputCls}
+              >
+                <option value="">All backtests</option>
+                {backtests.map((bt) => (
+                  <option key={bt.id} value={bt.id}>{formatBacktestLabel(bt)}</option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Summary hint */}
+          <p className="mb-2.5 text-[11px] text-muted">
+            {dateFrom && dateTo
+              ? `${dateFrom} — ${dateTo}`
+              : dateFrom
+              ? `From ${dateFrom}`
+              : dateTo
+              ? `Until ${dateTo}`
+              : 'All time'}
+            {selectedTrigger ? ` · ${selectedTrigger}` : ''}
+            {selectedBacktest ? ` · backtest ${selectedBacktest.slice(0, 8)}…` : ''}
+          </p>
+
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleExport('csv')}
+              disabled={exporting}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-card-hover disabled:opacity-50"
+            >
+              <Download className="h-3.5 w-3.5" />
+              CSV
+            </button>
+            <button
+              onClick={() => handleExport('json')}
+              disabled={exporting}
+              className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-3 py-2 text-xs font-medium text-foreground transition-colors hover:bg-card-hover disabled:opacity-50"
+            >
+              <FileJson className="h-3.5 w-3.5" />
+              JSON
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ========== Pagination ==========
+
+function Pagination({
+  page,
+  total,
+  pageSize,
+  onPageChange,
+}: {
+  page: number;
+  total: number;
+  pageSize: number;
+  onPageChange: (page: number) => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  if (total <= pageSize) return null;
+
+  return (
+    <div className="flex items-center justify-between border-t border-border pt-3">
+      <span className="text-xs text-muted">
+        {page * pageSize + 1}–{Math.min((page + 1) * pageSize, total)} of {total}
+      </span>
+      <div className="flex items-center gap-1.5">
+        <button
+          onClick={() => onPageChange(page - 1)}
+          disabled={page === 0}
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted transition-colors hover:bg-card-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        {/* Page number buttons — show up to 5 pages */}
+        {Array.from({ length: totalPages }, (_, i) => i)
+          .filter((i) => {
+            if (totalPages <= 5) return true;
+            if (i === 0 || i === totalPages - 1) return true;
+            return Math.abs(i - page) <= 1;
+          })
+          .reduce<(number | 'ellipsis')[]>((acc, i) => {
+            const last = acc[acc.length - 1];
+            if (typeof last === 'number' && i - last > 1) acc.push('ellipsis');
+            acc.push(i);
+            return acc;
+          }, [])
+          .map((item, idx) =>
+            item === 'ellipsis' ? (
+              <span key={`e-${idx}`} className="px-1 text-xs text-muted">…</span>
+            ) : (
+              <button
+                key={item}
+                onClick={() => onPageChange(item)}
+                className={cn(
+                  'flex h-8 min-w-[2rem] items-center justify-center rounded-lg border text-xs font-medium transition-colors',
+                  page === item
+                    ? 'border-accent bg-accent/15 text-accent-light'
+                    : 'border-border text-muted hover:bg-card-hover hover:text-foreground'
+                )}
+              >
+                {item + 1}
+              </button>
+            )
+          )}
+        <button
+          onClick={() => onPageChange(page + 1)}
+          disabled={page >= totalPages - 1}
+          className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-muted transition-colors hover:bg-card-hover hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <ChevronRight className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ========== Export Helpers ==========
+
+function downloadFile(content: string, filename: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportAsCSV(data: Record<string, unknown>[], filename: string) {
+  if (data.length === 0) return;
+  const headers = Object.keys(data[0]);
+  const rows = data.map((row) =>
+    headers.map((h) => {
+      const v = row[h];
+      const s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+      return `"${s.replace(/"/g, '""')}"`;
+    }).join(',')
+  );
+  // UTF-8 BOM 前缀，确保 Excel 正确识别中文
+  downloadFile('\uFEFF' + [headers.join(','), ...rows].join('\n'), filename, 'text/csv;charset=utf-8');
+}
+
+function exportAsJSON(data: unknown, filename: string) {
+  downloadFile(JSON.stringify(data, null, 2), filename, 'application/json');
+}
+
 // ========== Main Agent Page ==========
 
 export default function Agent() {
   const { toast } = useToast();
+  const PAGE_SIZE = 10;
+
   const [decisions, setDecisions] = useState<TradingDecision[]>([]);
+  const [decisionsTotal, setDecisionsTotal] = useState(0);
+  const [decisionsPage, setDecisionsPage] = useState(0);
+
   const [analyses, setAnalyses] = useState<AnalysisHistory[]>([]);
+  const [analysesTotal, setAnalysesTotal] = useState(0);
+  const [analysesPage, setAnalysesPage] = useState(0);
+
+  const [executions, setExecutions] = useState<WorkflowExecution[]>([]);
+  const [executionsTotal, setExecutionsTotal] = useState(0);
+  const [executionsPage, setExecutionsPage] = useState(0);
+
   const [messages, setMessages] = useState<AgentMessage[]>([]);
   const [workflows, setWorkflows] = useState<Record<string, WorkflowInfo>>({});
   const [tools, setTools] = useState<AgentTool[]>([]);
-  const [executions, setExecutions] = useState<WorkflowExecution[]>([]);
   const [active, setActive] = useState<ActiveWorkflow | null>(null);
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const [tab, setTab] = useState<Tab>('config');
@@ -1005,30 +1345,35 @@ export default function Agent() {
   const [saving, setSaving] = useState(false);
   const [reloading, setReloading] = useState(false);
   const [toolFilter, setToolFilter] = useState<string>('all');
+  const [exporting, setExporting] = useState(false);
 
   const loadAll = useCallback(() => {
     Promise.all([
-      fetchDecisions(20),
-      fetchAnalyses(20),
+      fetchDecisions(PAGE_SIZE, decisionsPage * PAGE_SIZE),
+      fetchAnalyses(PAGE_SIZE, analysesPage * PAGE_SIZE),
       fetchAgentMessages(),
       fetchWorkflows(),
       fetchAgentTools(),
-      fetchWorkflowExecutions(),
+      fetchWorkflowExecutions(PAGE_SIZE, executionsPage * PAGE_SIZE),
       fetchActiveWorkflow(),
       fetchAgentConfig(),
-    ]).then(([d, a, m, w, t, e, aw, cfg]) => {
-      setDecisions(d);
-      setAnalyses(a);
+    ]).then(([dResp, aResp, m, w, t, eResp, aw, cfg]) => {
+      setDecisions(dResp.items);
+      setDecisionsTotal(dResp.total);
+      setAnalyses(aResp.items);
+      setAnalysesTotal(aResp.total);
       setMessages(m);
       setWorkflows(w);
       setTools(t);
-      setExecutions(e);
+      setExecutions(eResp.items);
+      setExecutionsTotal(eResp.total);
       setActive(aw);
       setConfig(cfg);
     }).catch(() => {
       toast('Failed to load agent data', 'error');
     });
-  }, [toast]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toast, decisionsPage, analysesPage, executionsPage]);
 
   useEffect(() => {
     loadAll();
@@ -1296,11 +1641,36 @@ export default function Agent() {
       {/* Execution Timeline Tab */}
       {tab === 'execution' && (
         <div className="space-y-3 sm:space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-base font-semibold text-foreground sm:text-lg">Workflow Executions</h2>
-            <div className="flex items-center gap-2 text-xs text-muted">
-              <Clock className="h-3.5 w-3.5" />
-              {executions.length} execution{executions.length !== 1 ? 's' : ''}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted">
+                <Clock className="mr-1 inline h-3.5 w-3.5" />
+                {executionsTotal} total
+              </span>
+              <ExportMenu
+                type="executions"
+                exporting={exporting}
+                onExport={async (format, opts) => {
+                  setExporting(true);
+                  try {
+                    const data = await exportAnalyses(opts);
+                    const parts = ['executions'];
+                    if (opts?.backtest_id) parts.push(`bt-${opts.backtest_id.slice(0, 8)}`);
+                    else if (opts?.trigger) parts.push(opts.trigger);
+                    if (opts?.date_from) parts.push(opts.date_from);
+                    if (opts?.date_to) parts.push(opts.date_to);
+                    const filename = parts.join('_');
+                    if (format === 'csv') {
+                      exportAsCSV(data as unknown as Record<string, unknown>[], `${filename}.csv`);
+                    } else {
+                      exportAsJSON(data, `${filename}.json`);
+                    }
+                    toast(`Exported ${data.length} executions as ${format.toUpperCase()}`, 'success');
+                  } catch { toast('Export failed', 'error'); }
+                  finally { setExporting(false); }
+                }}
+              />
             </div>
           </div>
 
@@ -1324,9 +1694,17 @@ export default function Agent() {
               </div>
             </Card>
           ) : (
-            executions.map((exec) => (
-              <ExecutionCard key={exec.id} execution={exec} />
-            ))
+            <>
+              {executions.map((exec) => (
+                <ExecutionCard key={exec.id} execution={exec} />
+              ))}
+              <Pagination
+                page={executionsPage}
+                total={executionsTotal}
+                pageSize={PAGE_SIZE}
+                onPageChange={setExecutionsPage}
+              />
+            </>
           )}
         </div>
       )}
@@ -1374,124 +1752,215 @@ export default function Agent() {
       {/* Decisions Tab */}
       {tab === 'decisions' && (
         <div className="space-y-3">
-          {decisions.map((d) => (
-            <Card key={d.id} hover>
-              <div className="flex items-start gap-3 sm:gap-4">
-                <div
-                  className={cn(
-                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl sm:h-10 sm:w-10',
-                    d.action === 'buy' && 'bg-profit-bg',
-                    d.action === 'sell' && 'bg-loss-bg',
-                    d.action === 'hold' && 'bg-info-bg'
-                  )}
-                >
-                  {d.action === 'buy' && <ArrowUpRight className="h-4 w-4 text-profit sm:h-5 sm:w-5" />}
-                  {d.action === 'sell' && <ArrowDownRight className="h-4 w-4 text-loss sm:h-5 sm:w-5" />}
-                  {d.action === 'hold' && <BarChart3 className="h-4 w-4 text-info sm:h-5 sm:w-5" />}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                    <span className="text-sm font-bold text-foreground sm:text-base">{d.symbol}</span>
-                    <Badge variant={d.action === 'buy' ? 'profit' : d.action === 'sell' ? 'loss' : 'info'}>
-                      {d.action.toUpperCase()}
-                    </Badge>
-                    {d.quantity && (
-                      <span className="text-xs text-muted-foreground sm:text-sm">
-                        {d.quantity} shares {d.price ? `@ ${formatCurrency(d.price)}` : ''}
-                      </span>
-                    )}
-                  </div>
-                  <span className="mt-0.5 block text-[11px] text-muted sm:hidden">{formatRelative(d.created_at)}</span>
-                  <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground sm:mt-2 sm:text-sm">{d.reasoning}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-3 sm:mt-3 sm:gap-4">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-muted">Confidence</span>
-                      <div className="h-1.5 w-16 rounded-full bg-border sm:w-20">
-                        <div
-                          className="h-1.5 rounded-full bg-accent"
-                          style={{ width: `${d.confidence * 100}%` }}
-                        />
-                      </div>
-                      <span className="text-xs font-medium text-foreground">
-                        {(d.confidence * 100).toFixed(0)}%
-                      </span>
-                    </div>
-                    {d.stop_loss && (
-                      <span className="text-xs text-muted">
-                        SL: <span className="text-loss">{formatCurrency(d.stop_loss)}</span>
-                      </span>
-                    )}
-                    {d.take_profit && (
-                      <span className="text-xs text-muted">
-                        TP: <span className="text-profit">{formatCurrency(d.take_profit)}</span>
-                      </span>
-                    )}
-                    <span className="ml-auto hidden text-xs text-muted sm:inline">{formatRelative(d.created_at)}</span>
-                  </div>
-                </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-base font-semibold text-foreground sm:text-lg">Trading Decisions</h2>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted">{decisionsTotal} total</span>
+              <ExportMenu
+                type="decisions"
+                exporting={exporting}
+                onExport={async (format, opts) => {
+                  setExporting(true);
+                  try {
+                    const data = await exportDecisions(opts);
+                    const parts = ['decisions'];
+                    if (opts?.symbol) parts.push(opts.symbol);
+                    if (opts?.date_from) parts.push(opts.date_from);
+                    if (opts?.date_to) parts.push(opts.date_to);
+                    const filename = parts.join('_');
+                    if (format === 'csv') {
+                      exportAsCSV(data as unknown as Record<string, unknown>[], `${filename}.csv`);
+                    } else {
+                      exportAsJSON(data, `${filename}.json`);
+                    }
+                    toast(`Exported ${data.length} decisions as ${format.toUpperCase()}`, 'success');
+                  } catch { toast('Export failed', 'error'); }
+                  finally { setExporting(false); }
+                }}
+              />
+            </div>
+          </div>
+          {decisions.length === 0 ? (
+            <Card>
+              <div className="flex flex-col items-center py-12 text-center">
+                <BarChart3 className="mb-3 h-10 w-10 text-muted" />
+                <p className="text-sm text-muted">No trading decisions yet</p>
               </div>
             </Card>
-          ))}
+          ) : (
+            <>
+              {decisions.map((d) => (
+                <Card key={d.id} hover>
+                  <div className="flex items-start gap-3 sm:gap-4">
+                    <div
+                      className={cn(
+                        'flex h-9 w-9 shrink-0 items-center justify-center rounded-xl sm:h-10 sm:w-10',
+                        d.action === 'buy' && 'bg-profit-bg',
+                        d.action === 'sell' && 'bg-loss-bg',
+                        d.action === 'hold' && 'bg-info-bg'
+                      )}
+                    >
+                      {d.action === 'buy' && <ArrowUpRight className="h-4 w-4 text-profit sm:h-5 sm:w-5" />}
+                      {d.action === 'sell' && <ArrowDownRight className="h-4 w-4 text-loss sm:h-5 sm:w-5" />}
+                      {d.action === 'hold' && <BarChart3 className="h-4 w-4 text-info sm:h-5 sm:w-5" />}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                        <span className="text-sm font-bold text-foreground sm:text-base">{d.symbol}</span>
+                        <Badge variant={d.action === 'buy' ? 'profit' : d.action === 'sell' ? 'loss' : 'info'}>
+                          {d.action.toUpperCase()}
+                        </Badge>
+                        {d.quantity && (
+                          <span className="text-xs text-muted-foreground sm:text-sm">
+                            {d.quantity} shares {d.price ? `@ ${formatCurrency(d.price)}` : ''}
+                          </span>
+                        )}
+                      </div>
+                      <span className="mt-0.5 block text-[11px] text-muted sm:hidden">{formatRelative(d.created_at)}</span>
+                      <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground sm:mt-2 sm:text-sm">{d.reasoning}</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-3 sm:mt-3 sm:gap-4">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs text-muted">Confidence</span>
+                          <div className="h-1.5 w-16 rounded-full bg-border sm:w-20">
+                            <div
+                              className="h-1.5 rounded-full bg-accent"
+                              style={{ width: `${d.confidence * 100}%` }}
+                            />
+                          </div>
+                          <span className="text-xs font-medium text-foreground">
+                            {(d.confidence * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        {d.stop_loss && (
+                          <span className="text-xs text-muted">
+                            SL: <span className="text-loss">{formatCurrency(d.stop_loss)}</span>
+                          </span>
+                        )}
+                        {d.take_profit && (
+                          <span className="text-xs text-muted">
+                            TP: <span className="text-profit">{formatCurrency(d.take_profit)}</span>
+                          </span>
+                        )}
+                        <span className="ml-auto hidden text-xs text-muted sm:inline">{formatRelative(d.created_at)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+              <Pagination
+                page={decisionsPage}
+                total={decisionsTotal}
+                pageSize={PAGE_SIZE}
+                onPageChange={setDecisionsPage}
+              />
+            </>
+          )}
         </div>
       )}
 
       {/* Analyses Tab */}
       {tab === 'analyses' && (
         <div className="space-y-3">
-          {analyses.map((a) => (
-            <Card key={a.id} hover>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div className="flex items-center gap-2.5 sm:gap-3">
-                  {a.success ? (
-                    <CheckCircle className="h-4 w-4 shrink-0 text-profit sm:h-5 sm:w-5" />
-                  ) : (
-                    <XCircle className="h-4 w-4 shrink-0 text-loss sm:h-5 sm:w-5" />
-                  )}
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-                      <span className="text-sm font-semibold text-foreground">{a.trigger}</span>
-                      {a.analysis_type && <Badge variant="info">{a.analysis_type}</Badge>}
-                      <Badge variant={a.success ? 'profit' : 'loss'}>
-                        {a.success ? 'Success' : 'Failed'}
-                      </Badge>
-                    </div>
-                    {a.workflow_id && (
-                      <span className="mt-0.5 block truncate text-xs text-muted">{a.workflow_id}</span>
-                    )}
-                  </div>
-                </div>
-                <span className="shrink-0 pl-6 text-xs text-muted sm:pl-0">{formatRelative(a.created_at)}</span>
-              </div>
-              {a.output_response && (
-                <p className="mt-3 rounded-lg bg-background p-3 text-sm text-muted-foreground">
-                  {a.output_response}
-                </p>
-              )}
-              {a.error_message && (
-                <p className="mt-3 rounded-lg bg-loss-bg p-3 text-sm text-loss">
-                  {a.error_message}
-                </p>
-              )}
-              <div className="mt-2 flex flex-wrap items-center gap-3 sm:mt-3 sm:gap-4">
-                {a.execution_time_seconds && (
-                  <span className="text-xs text-muted">
-                    Duration: <span className="text-foreground">{formatDuration(a.execution_time_seconds)}</span>
-                  </span>
-                )}
-                {a.tool_calls && a.tool_calls.length > 0 && (
-                  <div className="flex items-center gap-1">
-                    <Wrench className="h-3 w-3 text-muted" />
-                    <span className="text-xs text-muted">{a.tool_calls.length} tool calls</span>
-                  </div>
-                )}
-                {a.trades_executed && a.trades_executed.length > 0 && (
-                  <span className="text-xs text-muted">
-                    {a.trades_executed.length} trade(s) executed
-                  </span>
-                )}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <h2 className="text-base font-semibold text-foreground sm:text-lg">Analysis History</h2>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted">{analysesTotal} total</span>
+              <ExportMenu
+                type="analyses"
+                exporting={exporting}
+                onExport={async (format, opts) => {
+                  setExporting(true);
+                  try {
+                    const data = await exportAnalyses(opts);
+                    const parts = ['analyses'];
+                    if (opts?.backtest_id) parts.push(`bt-${opts.backtest_id.slice(0, 8)}`);
+                    else if (opts?.trigger) parts.push(opts.trigger);
+                    if (opts?.date_from) parts.push(opts.date_from);
+                    if (opts?.date_to) parts.push(opts.date_to);
+                    const filename = parts.join('_');
+                    if (format === 'csv') {
+                      exportAsCSV(data as unknown as Record<string, unknown>[], `${filename}.csv`);
+                    } else {
+                      exportAsJSON(data, `${filename}.json`);
+                    }
+                    toast(`Exported ${data.length} analyses as ${format.toUpperCase()}`, 'success');
+                  } catch { toast('Export failed', 'error'); }
+                  finally { setExporting(false); }
+                }}
+              />
+            </div>
+          </div>
+          {analyses.length === 0 ? (
+            <Card>
+              <div className="flex flex-col items-center py-12 text-center">
+                <Cpu className="mb-3 h-10 w-10 text-muted" />
+                <p className="text-sm text-muted">No analysis history yet</p>
               </div>
             </Card>
-          ))}
+          ) : (
+            <>
+              {analyses.map((a) => (
+                <Card key={a.id} hover>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="flex items-center gap-2.5 sm:gap-3">
+                      {a.success ? (
+                        <CheckCircle className="h-4 w-4 shrink-0 text-profit sm:h-5 sm:w-5" />
+                      ) : (
+                        <XCircle className="h-4 w-4 shrink-0 text-loss sm:h-5 sm:w-5" />
+                      )}
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
+                          <span className="text-sm font-semibold text-foreground">{a.trigger}</span>
+                          {a.analysis_type && <Badge variant="info">{a.analysis_type}</Badge>}
+                          <Badge variant={a.success ? 'profit' : 'loss'}>
+                            {a.success ? 'Success' : 'Failed'}
+                          </Badge>
+                        </div>
+                        {a.workflow_id && (
+                          <span className="mt-0.5 block truncate text-xs text-muted">{a.workflow_id}</span>
+                        )}
+                      </div>
+                    </div>
+                    <span className="shrink-0 pl-6 text-xs text-muted sm:pl-0">{formatRelative(a.created_at)}</span>
+                  </div>
+                  {a.output_response && (
+                    <p className="mt-3 rounded-lg bg-background p-3 text-sm text-muted-foreground">
+                      {a.output_response}
+                    </p>
+                  )}
+                  {a.error_message && (
+                    <p className="mt-3 rounded-lg bg-loss-bg p-3 text-sm text-loss">
+                      {a.error_message}
+                    </p>
+                  )}
+                  <div className="mt-2 flex flex-wrap items-center gap-3 sm:mt-3 sm:gap-4">
+                    {a.execution_time_seconds && (
+                      <span className="text-xs text-muted">
+                        Duration: <span className="text-foreground">{formatDuration(a.execution_time_seconds)}</span>
+                      </span>
+                    )}
+                    {a.tool_calls && a.tool_calls.length > 0 && (
+                      <div className="flex items-center gap-1">
+                        <Wrench className="h-3 w-3 text-muted" />
+                        <span className="text-xs text-muted">{a.tool_calls.length} tool calls</span>
+                      </div>
+                    )}
+                    {a.trades_executed && a.trades_executed.length > 0 && (
+                      <span className="text-xs text-muted">
+                        {a.trades_executed.length} trade(s) executed
+                      </span>
+                    )}
+                  </div>
+                </Card>
+              ))}
+              <Pagination
+                page={analysesPage}
+                total={analysesTotal}
+                pageSize={PAGE_SIZE}
+                onPageChange={setAnalysesPage}
+              />
+            </>
+          )}
         </div>
       )}
 

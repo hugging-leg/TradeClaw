@@ -42,7 +42,7 @@ export default function Dashboard() {
     fetchPortfolio().then(setPortfolio).catch(() => {});
     fetchPortfolioHistory(30).then(setSnapshots).catch(() => {});
     fetchSystemStatus().then(setStatus).catch(() => {});
-    fetchAnalyses(5).then(setAnalyses).catch(() => {});
+    fetchAnalyses(5).then((resp) => setAnalyses(resp.items)).catch(() => {});
   }, []);
 
   if (!portfolio || !status) {

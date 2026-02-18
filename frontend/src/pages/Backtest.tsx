@@ -18,6 +18,7 @@ import {
   submitBacktest,
   cancelBacktest,
   fetchWorkflows,
+  exportAnalyses,
 } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import { formatCurrency, formatPercent, formatDate, formatDateTime } from '@/utils/format';
@@ -34,6 +35,8 @@ import {
   Activity,
   ChevronDown,
   ChevronUp,
+  Download,
+  FileJson,
 } from 'lucide-react';
 import type { BacktestResult, BacktestStatistics, WorkflowInfo } from '@/types';
 
@@ -431,6 +434,39 @@ function TradesTable({ trades }: { trades: BacktestResult['trades'] }) {
 }
 
 // ============================================================
+// Export Helpers
+// ============================================================
+
+function downloadFile(content: string, filename: string, mimeType: string) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportAsCSV(data: Record<string, unknown>[], filename: string) {
+  if (data.length === 0) return;
+  const headers = Object.keys(data[0]);
+  const rows = data.map((row) =>
+    headers.map((h) => {
+      const v = row[h];
+      const s = v == null ? '' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+      return `"${s.replace(/"/g, '""')}"`;
+    }).join(',')
+  );
+  downloadFile('\uFEFF' + [headers.join(','), ...rows].join('\n'), filename, 'text/csv;charset=utf-8');
+}
+
+function exportAsJSON(data: unknown, filename: string) {
+  downloadFile(JSON.stringify(data, null, 2), filename, 'application/json;charset=utf-8');
+}
+
+// ============================================================
 // Main Page
 // ============================================================
 
@@ -440,6 +476,7 @@ export default function Backtest() {
   const [selected, setSelected] = useState<BacktestResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [activeTab, setActiveTab] = useState<'equity' | 'trades' | 'config'>('equity');
+  const [exportingId, setExportingId] = useState<string | null>(null);
 
   // Keep a ref for SSE updates
   const resultsRef = useRef(results);
@@ -549,6 +586,25 @@ export default function Backtest() {
     }
   };
 
+  // Export analyses for a specific backtest
+  const handleExport = async (backtestId: string, format: 'csv' | 'json') => {
+    setExportingId(backtestId);
+    try {
+      const data = await exportAnalyses({ backtest_id: backtestId });
+      const bt = results.find((r) => r.id === backtestId);
+      const label = bt ? `${bt.config.workflow_type}_${bt.config.start_date}_${bt.config.end_date}` : backtestId.slice(0, 8);
+      if (format === 'csv') {
+        exportAsCSV(data as unknown as Record<string, unknown>[], `backtest_${label}.csv`);
+      } else {
+        exportAsJSON(data, `backtest_${label}.json`);
+      }
+    } catch (e) {
+      console.error('Export failed:', e);
+    } finally {
+      setExportingId(null);
+    }
+  };
+
   // Helpers
   const stats: BacktestStatistics | null = selected?.result ?? null;
   const isRunning = selected?.status === 'running';
@@ -642,22 +698,46 @@ export default function Backtest() {
             </div>
           )}
 
-          {/* Tabs */}
+          {/* Tabs + Export */}
           <div className="-mx-4 overflow-x-auto px-4 pb-0 md:mx-0 md:px-0">
-            <div className="flex gap-1 border-b border-border">
-              {(['equity', 'trades', 'config'] as const).map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
-                    activeTab === tab
-                      ? 'border-accent text-accent'
-                      : 'border-transparent text-muted hover:text-foreground'
-                  }`}
-                >
-                  {tab === 'equity' ? 'Equity Curve' : tab === 'trades' ? `Trades (${selected.trades?.length || 0})` : 'Configuration'}
-                </button>
-              ))}
+            <div className="flex items-center justify-between border-b border-border">
+              <div className="flex gap-1">
+                {(['equity', 'trades', 'config'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    className={`whitespace-nowrap border-b-2 px-4 py-2.5 text-sm font-medium transition-colors ${
+                      activeTab === tab
+                        ? 'border-accent text-accent'
+                        : 'border-transparent text-muted hover:text-foreground'
+                    }`}
+                  >
+                    {tab === 'equity' ? 'Equity Curve' : tab === 'trades' ? `Trades (${selected.trades?.length || 0})` : 'Configuration'}
+                  </button>
+                ))}
+              </div>
+              {selected.status === 'completed' && (
+                <div className="flex items-center gap-1 pb-1">
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleExport(selected.id, 'csv'); }}
+                    disabled={exportingId === selected.id}
+                    className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+                    title="Export analyses as CSV"
+                  >
+                    {exportingId === selected.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                    <span className="hidden sm:inline">CSV</span>
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleExport(selected.id, 'json'); }}
+                    disabled={exportingId === selected.id}
+                    className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+                    title="Export analyses as JSON"
+                  >
+                    <FileJson className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">JSON</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
@@ -788,7 +868,7 @@ export default function Backtest() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex shrink-0 items-center gap-3">
+                  <div className="flex shrink-0 items-center gap-2">
                     {r.status === 'running' && (
                       <div className="flex items-center gap-1 text-xs text-muted">
                         <Loader2 className="h-3 w-3 animate-spin" />
@@ -796,15 +876,25 @@ export default function Backtest() {
                       </div>
                     )}
                     {r.status === 'completed' && (
-                      <span
-                        className={
-                          totalReturn >= 0
-                            ? 'text-sm font-semibold text-profit'
-                            : 'text-sm font-semibold text-loss'
-                        }
-                      >
-                        {formatPercent(totalReturn * 100)}
-                      </span>
+                      <>
+                        <span
+                          className={
+                            totalReturn >= 0
+                              ? 'text-sm font-semibold text-profit'
+                              : 'text-sm font-semibold text-loss'
+                          }
+                        >
+                          {formatPercent(totalReturn * 100)}
+                        </span>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleExport(r.id, 'csv'); }}
+                          disabled={exportingId === r.id}
+                          className="rounded-md p-1.5 text-muted transition-colors hover:bg-surface-2 hover:text-foreground disabled:opacity-50"
+                          title="Export analyses (CSV)"
+                        >
+                          {exportingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+                        </button>
+                      </>
                     )}
                     <Badge
                       variant={

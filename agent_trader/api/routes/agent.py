@@ -216,12 +216,19 @@ async def toggle_tool(
 async def get_executions(
     trigger: Optional[str] = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
 ):
-    """获取 workflow 执行历史（来自 DB analysis_history）"""
+    """获取 workflow 执行历史（来自 DB analysis_history），支持分页"""
     analyses = await TradingRepository.get_recent_analyses(
-        trigger=trigger, limit=limit
+        trigger=trigger, limit=limit, offset=offset
     )
-    return [a.to_dict() for a in analyses]
+    total = await TradingRepository.count_analyses(trigger=trigger)
+    return {
+        "items": [a.to_dict() for a in analyses],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 # ========== Decisions ==========
@@ -230,12 +237,68 @@ async def get_executions(
 async def get_decisions(
     symbol: Optional[str] = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
 ):
-    """获取交易决策历史"""
+    """获取交易决策历史，支持分页"""
     decisions = await TradingRepository.get_recent_decisions(
-        symbol=symbol, limit=limit
+        symbol=symbol, limit=limit, offset=offset
+    )
+    total = await TradingRepository.count_decisions(symbol=symbol)
+    return {
+        "items": [d.to_dict() for d in decisions],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+# ========== Export (no limit cap) ==========
+
+@router.get("/agent/executions/export")
+async def export_executions(
+    trigger: Optional[str] = Query(default=None),
+    workflow_id: Optional[str] = Query(default=None),
+    backtest_id: Optional[str] = Query(default=None),
+    date_from: Optional[str] = Query(default=None, description="Start date (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(default=None, description="End date (YYYY-MM-DD)"),
+):
+    """导出分析历史（不限数量），支持按 trigger / workflow_id / backtest_id / 时间范围 过滤"""
+    # 如果指定了 backtest_id，自动设置 trigger=backtest
+    effective_trigger = trigger or ("backtest" if backtest_id else None)
+    analyses = await TradingRepository.export_analyses(
+        trigger=effective_trigger,
+        workflow_id=workflow_id,
+        backtest_id=backtest_id,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return [a.to_dict() for a in analyses]
+
+
+@router.get("/agent/decisions/export")
+async def export_decisions(
+    symbol: Optional[str] = Query(default=None),
+    date_from: Optional[str] = Query(default=None, description="Start date (YYYY-MM-DD)"),
+    date_to: Optional[str] = Query(default=None, description="End date (YYYY-MM-DD)"),
+):
+    """导出交易决策（不限数量），支持按 symbol / 时间范围 过滤"""
+    decisions = await TradingRepository.export_decisions(
+        symbol=symbol, date_from=date_from, date_to=date_to,
     )
     return [d.to_dict() for d in decisions]
+
+
+@router.get("/agent/executions/triggers")
+async def get_execution_triggers():
+    """获取所有不同的 trigger 值（用于前端过滤选择）"""
+    triggers = await TradingRepository.get_distinct_triggers()
+    return triggers
+
+
+@router.get("/agent/executions/backtests")
+async def get_backtest_summaries():
+    """获取回测摘要列表（用于导出时选择特定回测）"""
+    return await TradingRepository.get_backtest_summaries()
 
 
 # ========== Agent Messages ==========
