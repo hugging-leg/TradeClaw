@@ -367,7 +367,7 @@ function EquityChart({ data, initialCapital }: {
               color: '#f0f0f5',
             }}
             labelStyle={{ color: '#a0a0b0' }}
-            formatter={(value: number) => [formatCurrency(value), 'Equity']}
+            formatter={(value?: number) => [formatCurrency(value ?? 0), 'Equity']}
           />
           <Area type="monotone" dataKey="equity" stroke={color} strokeWidth={2} fill={`url(#${gradientId})`} />
         </AreaChart>
