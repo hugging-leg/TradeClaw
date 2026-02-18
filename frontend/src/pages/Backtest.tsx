@@ -20,6 +20,7 @@ import {
   fetchWorkflows,
   exportAnalyses,
 } from '@/api';
+import type { AnalysisHistory } from '@/types';
 import { useAuthStore } from '@/stores/auth';
 import { formatCurrency, formatPercent, formatDate, formatDateTime } from '@/utils/format';
 import {
@@ -37,6 +38,11 @@ import {
   ChevronUp,
   Download,
   FileJson,
+  CheckCircle,
+  XCircle,
+  Wrench,
+  Brain,
+  Clock,
 } from 'lucide-react';
 import type { BacktestResult, BacktestStatistics, WorkflowInfo } from '@/types';
 
@@ -434,6 +440,240 @@ function TradesTable({ trades }: { trades: BacktestResult['trades'] }) {
 }
 
 // ============================================================
+// Analyses Panel Component
+// ============================================================
+
+function AnalysesPanel({ backtestId }: { backtestId: string }) {
+  const [analyses, setAnalyses] = useState<AnalysisHistory[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 10;
+
+  useEffect(() => {
+    setLoading(true);
+    setPage(0);
+    exportAnalyses({ backtest_id: backtestId })
+      .then(setAnalyses)
+      .catch(() => setAnalyses([]))
+      .finally(() => setLoading(false));
+  }, [backtestId]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center py-12">
+        <Loader2 className="h-5 w-5 animate-spin text-accent" />
+        <span className="ml-2 text-sm text-muted">Loading analyses…</span>
+      </div>
+    );
+  }
+
+  if (analyses.length === 0) {
+    return (
+      <div className="flex flex-col items-center py-12 text-center">
+        <Brain className="mb-3 h-10 w-10 text-muted/30" />
+        <p className="text-sm text-muted">No analysis records for this backtest</p>
+      </div>
+    );
+  }
+
+  const totalPages = Math.ceil(analyses.length / PAGE_SIZE);
+  const displayed = analyses.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  const formatDuration = (s: number) => {
+    if (s < 1) return `${Math.round(s * 1000)}ms`;
+    if (s < 60) return `${s.toFixed(1)}s`;
+    return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+  };
+
+  const getSimulatedDate = (a: AnalysisHistory) => {
+    const ctx = a.input_context as Record<string, unknown> | null;
+    return ctx?.simulated_date as string | undefined;
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Summary bar */}
+      <div className="flex flex-wrap items-center gap-3 text-xs text-muted">
+        <span>{analyses.length} analysis record(s)</span>
+        <span>·</span>
+        <span className="text-profit">
+          {analyses.filter((a) => a.success).length} success
+        </span>
+        <span className="text-loss">
+          {analyses.filter((a) => !a.success).length} failed
+        </span>
+        {analyses[0]?.execution_time_seconds && (
+          <>
+            <span>·</span>
+            <span>
+              Avg {formatDuration(
+                analyses.reduce((s, a) => s + (a.execution_time_seconds || 0), 0) / analyses.length
+              )}
+            </span>
+          </>
+        )}
+      </div>
+
+      {/* Analysis cards */}
+      {displayed.map((a) => {
+        const isExpanded = expandedId === a.id;
+        const simDate = getSimulatedDate(a);
+        return (
+          <div
+            key={a.id}
+            className="rounded-xl border border-border bg-card transition-colors hover:border-border-hover"
+          >
+            {/* Header — always visible */}
+            <button
+              onClick={() => setExpandedId(isExpanded ? null : a.id)}
+              className="flex w-full items-center gap-3 px-4 py-3 text-left"
+            >
+              {a.success ? (
+                <CheckCircle className="h-4 w-4 shrink-0 text-profit" />
+              ) : (
+                <XCircle className="h-4 w-4 shrink-0 text-loss" />
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {simDate && (
+                    <span className="text-sm font-semibold text-foreground">Day {simDate}</span>
+                  )}
+                  {a.analysis_type && <Badge variant="info">{a.analysis_type}</Badge>}
+                  <Badge variant={a.success ? 'profit' : 'loss'} className="text-[10px]">
+                    {a.success ? 'OK' : 'FAIL'}
+                  </Badge>
+                </div>
+                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
+                  {a.execution_time_seconds != null && (
+                    <span className="flex items-center gap-0.5">
+                      <Clock className="h-3 w-3" />
+                      {formatDuration(a.execution_time_seconds)}
+                    </span>
+                  )}
+                  {a.tool_calls && a.tool_calls.length > 0 && (
+                    <span className="flex items-center gap-0.5">
+                      <Wrench className="h-3 w-3" />
+                      {a.tool_calls.length} tools
+                    </span>
+                  )}
+                  {a.trades_executed && a.trades_executed.length > 0 && (
+                    <span className="text-accent font-medium">
+                      {a.trades_executed.length} trade(s)
+                    </span>
+                  )}
+                </div>
+              </div>
+              {isExpanded ? (
+                <ChevronUp className="h-4 w-4 shrink-0 text-muted" />
+              ) : (
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted" />
+              )}
+            </button>
+
+            {/* Expanded detail */}
+            {isExpanded && (
+              <div className="border-t border-border px-4 py-3 space-y-3">
+                {/* LLM Response */}
+                {a.output_response && (
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium text-muted">Agent Response</p>
+                    <div className="max-h-64 overflow-y-auto rounded-lg bg-background p-3 text-xs leading-relaxed text-muted-foreground whitespace-pre-wrap">
+                      {a.output_response}
+                    </div>
+                  </div>
+                )}
+
+                {/* Error */}
+                {a.error_message && (
+                  <div className="rounded-lg bg-loss/10 border border-loss/20 p-3 text-xs text-loss">
+                    {a.error_message}
+                  </div>
+                )}
+
+                {/* Tool calls */}
+                {a.tool_calls && a.tool_calls.length > 0 && (
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium text-muted">Tool Calls</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {a.tool_calls.map((tc, i) => {
+                        let label: string;
+                        if (typeof tc === 'string') {
+                          label = tc;
+                        } else if (tc && typeof tc === 'object' && 'name' in tc && typeof (tc as any).name === 'string') {
+                          label = String((tc as any).name);
+                        } else {
+                          label = JSON.stringify(tc);
+                        }
+                        return (
+                          <Badge key={i} variant="muted" className="text-[10px]">
+                            {label}
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Trades executed */}
+                {a.trades_executed && a.trades_executed.length > 0 && (
+                  <div>
+                    <p className="mb-1 text-[11px] font-medium text-muted">Trades Executed</p>
+                    <div className="space-y-1">
+                      {a.trades_executed.map((t, i) => (
+                        <div key={i} className="flex items-center gap-2 text-xs">
+                          <Badge variant={(t.side as string) === 'buy' ? 'profit' : 'loss'} className="text-[10px]">
+                            {(t.side as string)?.toUpperCase()}
+                          </Badge>
+                          <span className="font-medium text-foreground">{t.symbol as string}</span>
+                          <span className="text-muted">qty {t.quantity as number}</span>
+                          {t.price != null && (
+                            <span className="text-muted">@ ${Number(t.price).toFixed(2)}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Metadata */}
+                <div className="flex flex-wrap gap-3 text-[11px] text-muted pt-1 border-t border-border/50">
+                  <span>ID: {a.id.slice(0, 8)}…</span>
+                  {a.workflow_id && <span>Workflow: {a.workflow_id}</span>}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-center gap-2 pt-2">
+          <button
+            onClick={() => setPage(Math.max(0, page - 1))}
+            disabled={page === 0}
+            className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-surface-2 disabled:opacity-40"
+          >
+            ← Prev
+          </button>
+          <span className="text-xs text-muted">
+            {page + 1} / {totalPages}
+          </span>
+          <button
+            onClick={() => setPage(Math.min(totalPages - 1, page + 1))}
+            disabled={page >= totalPages - 1}
+            className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-surface-2 disabled:opacity-40"
+          >
+            Next →
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // Export Helpers
 // ============================================================
 
@@ -475,7 +715,7 @@ export default function Backtest() {
   const [workflows, setWorkflows] = useState<Record<string, WorkflowInfo>>({});
   const [selected, setSelected] = useState<BacktestResult | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'equity' | 'trades' | 'config'>('equity');
+  const [activeTab, setActiveTab] = useState<'equity' | 'trades' | 'analyses' | 'config'>('equity');
   const [exportingId, setExportingId] = useState<string | null>(null);
 
   // Keep a ref for SSE updates
@@ -702,7 +942,7 @@ export default function Backtest() {
           <div className="-mx-4 overflow-x-auto px-4 pb-0 md:mx-0 md:px-0">
             <div className="flex items-center justify-between border-b border-border">
               <div className="flex gap-1">
-                {(['equity', 'trades', 'config'] as const).map((tab) => (
+                {(['equity', 'trades', 'analyses', 'config'] as const).map((tab) => (
                   <button
                     key={tab}
                     onClick={() => setActiveTab(tab)}
@@ -712,7 +952,7 @@ export default function Backtest() {
                         : 'border-transparent text-muted hover:text-foreground'
                     }`}
                   >
-                    {tab === 'equity' ? 'Equity Curve' : tab === 'trades' ? `Trades (${selected.trades?.length || 0})` : 'Configuration'}
+                    {tab === 'equity' ? 'Equity Curve' : tab === 'trades' ? `Trades (${selected.trades?.length || 0})` : tab === 'analyses' ? 'Analyses' : 'Configuration'}
                   </button>
                 ))}
               </div>
@@ -782,6 +1022,16 @@ export default function Backtest() {
             <Card>
               <CardHeader title="Trade History" subtitle={`${selected.trades?.length || 0} trades executed`} />
               <TradesTable trades={selected.trades || []} />
+            </Card>
+          )}
+
+          {activeTab === 'analyses' && (
+            <Card>
+              <CardHeader
+                title="Agent Analyses"
+                subtitle="LLM analysis records for each simulated trading day"
+              />
+              <AnalysesPanel backtestId={selected.id} />
             </Card>
           )}
 
