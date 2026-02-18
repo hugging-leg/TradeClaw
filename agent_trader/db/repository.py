@@ -19,7 +19,8 @@ from .models import (
     AnalysisHistory,
     OrderRecord,
     PortfolioSnapshot,
-    AgentMessage
+    AgentMessage,
+    BacktestResult,
 )
 from .session import get_db
 
@@ -342,3 +343,60 @@ class TradingRepository:
             logger.info(f"清除 {count} 条消息: session={session_id}")
             return count
 
+    # ========== 回测结果 ==========
+
+    @staticmethod
+    async def save_backtest_result(
+        task_id: str,
+        config: Dict,
+        status: str,
+        result: Optional[Dict] = None,
+        equity_curve: Optional[list] = None,
+        trades: Optional[list] = None,
+        created_at=None,
+        completed_at=None,
+    ) -> BacktestResult:
+        """保存回测结果"""
+        async with get_db() as db:
+            record = BacktestResult(
+                id=task_id,
+                config=config,
+                status=status,
+                result=result,
+                equity_curve=equity_curve,
+                trades=trades,
+                completed_at=completed_at,
+            )
+            # 如果已存在则更新
+            existing = await db.get(BacktestResult, task_id)
+            if existing:
+                existing.config = config
+                existing.status = status
+                existing.result = result
+                existing.equity_curve = equity_curve
+                existing.trades = trades
+                existing.completed_at = completed_at
+                return existing
+            else:
+                db.add(record)
+                await db.flush()
+                return record
+
+    @staticmethod
+    async def get_backtest_results(limit: int = 50) -> list:
+        """获取回测结果列表"""
+        async with get_db() as db:
+            query = (
+                select(BacktestResult)
+                .order_by(desc(BacktestResult.created_at))
+                .limit(limit)
+            )
+            result = await db.execute(query)
+            return [r.to_dict() for r in result.scalars().all()]
+
+    @staticmethod
+    async def get_backtest_result(task_id: str) -> Optional[Dict]:
+        """获取单个回测结果"""
+        async with get_db() as db:
+            record = await db.get(BacktestResult, task_id)
+            return record.to_dict() if record else None

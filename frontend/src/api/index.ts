@@ -268,6 +268,27 @@ export async function fetchBacktestResults(): Promise<BacktestResult[]> {
   return api.get<BacktestResult[]>('/backtest');
 }
 
+export async function fetchBacktestDetail(taskId: string): Promise<BacktestResult> {
+  return api.get<BacktestResult>(`/backtest/${taskId}`);
+}
+
+export async function submitBacktest(config: {
+  start_date: string;
+  end_date: string;
+  initial_capital: number;
+  workflow_type: string;
+  commission_rate: number;
+  slippage_bps: number;
+  run_interval_days: number;
+}): Promise<BacktestResult> {
+  return api.post<BacktestResult>('/backtest', config);
+}
+
+export async function cancelBacktest(taskId: string): Promise<{ success: boolean; message: string }> {
+  return api.post<{ success: boolean; message: string }>(`/backtest/${taskId}/cancel`, {});
+}
+
+/** @deprecated Use submitBacktest instead */
 export async function runBacktest(config: unknown): Promise<BacktestResult> {
   return api.post<BacktestResult>('/backtest', config);
 }

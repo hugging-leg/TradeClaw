@@ -17,16 +17,12 @@
 import json
 import time as _time
 from typing import Any, Dict, List, Optional
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
-
-from sqlalchemy import select, update
 
 from agent_trader.utils.logging_config import get_logger
 from agent_trader.agents.workflow_base import WorkflowBase
 from agent_trader.agents.workflow_factory import register_workflow
-from agent_trader.db.session import get_db
-from agent_trader.db.models import CAPosition
 from agent_trader.models.trading_models import (
     Order, OrderSide, OrderType, TimeInForce
 )
@@ -107,7 +103,10 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
     流程：
     1. [代码] 自动卖出到期持仓
     2. [LLM]  使用通用 tools 分析新闻、查看持仓，输出结构化买入信号
-    3. [代码] 解析买入信号 → 校验 → 执行交易 → 记录 DB
+    3. [代码] 解析买入信号 → 校验 → 执行交易 → 记录持仓
+
+    持仓管理通过基类的 get_strategy_positions / add_strategy_position /
+    update_strategy_position 接口，实盘写 DB，回测用内存，自动隔离。
     """
 
     def _default_config(self) -> Dict[str, Any]:
@@ -167,8 +166,22 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
             )
 
             signals = self._parse_buy_signals(agent_result.text)
+            logger.info(
+                "CA 分析完成: 解析到 %d 个买入信号 (text_len=%d)",
+                len(signals), len(agent_result.text),
+            )
+            for sig in signals:
+                logger.info(
+                    "  信号: %s confidence=%.1f holding=%dd reason=%s",
+                    sig["ticker"], sig["confidence"], sig["holding_days"],
+                    sig["reason"][:80],
+                )
+
             if signals:
                 buy_results = await self._execute_buy_signals(signals)
+                logger.info("CA 买入执行结果: %s", buy_results)
+            else:
+                logger.info("CA: 无有效买入信号（可能 LLM 未输出 JSON 或置信度不足）")
 
             await self.message_manager.send_message(
                 f"🧠 认知套利分析结果:\n\n{agent_result.text}", "info"
@@ -222,6 +235,7 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         扫描并卖出所有到期的 CA 持仓。
 
         完全由代码驱动，不依赖 LLM。
+        使用基类的 get_strategy_positions / update_strategy_position 接口。
         """
         step_id = self.emit_step("ca_sell_check", "检查到期持仓", "running")
         t0 = _time.monotonic()
@@ -230,12 +244,8 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
             today = utc_now()
             sold_results = []
 
-            # 查询所有 open 的 CA 持仓
-            async with get_db() as db:
-                result = await db.execute(
-                    select(CAPosition).where(CAPosition.status == 'open')
-                )
-                positions = list(result.scalars().all())
+            # 查询所有 open 的策略持仓
+            positions = await self.get_strategy_positions(status='open')
 
             if not positions:
                 self.update_step(
@@ -251,12 +261,18 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
             expired = []
             active_info = []
             for pos in positions:
-                sell_date = ensure_utc(pos.target_sell_date)
+                sell_date_str = pos.get("target_sell_date")
+                if not sell_date_str:
+                    continue
+                sell_date = ensure_utc(
+                    datetime.fromisoformat(sell_date_str)
+                    if isinstance(sell_date_str, str) else sell_date_str
+                )
                 if today >= sell_date:
                     expired.append(pos)
                 else:
                     days_left = (sell_date - today).days
-                    active_info.append(f"{pos.ticker}(还剩{days_left}天)")
+                    active_info.append(f"{pos['ticker']}(还剩{days_left}天)")
 
             if not expired:
                 info = f"当前{len(positions)}个CA持仓，无到期: {', '.join(active_info)}"
@@ -280,8 +296,10 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
             portfolio = await self.get_portfolio()
 
             for pos in expired:
+                ticker = pos["ticker"]
+                pos_id = pos["id"]
                 sell_step_id = self.emit_step(
-                    "ca_sell", f"卖出到期持仓: {pos.ticker}", "running"
+                    "ca_sell", f"卖出到期持仓: {ticker}", "running"
                 )
                 sell_t0 = _time.monotonic()
 
@@ -290,39 +308,36 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                     actual_qty = 0
                     if portfolio:
                         for p in portfolio.positions:
-                            if p.symbol == pos.ticker and p.quantity > 0:
+                            if p.symbol == ticker and p.quantity > 0:
                                 actual_qty = int(p.quantity)
                                 break
 
                     if actual_qty <= 0:
                         # 实际未持有，标记取消
-                        async with get_db() as db:
-                            await db.execute(
-                                update(CAPosition)
-                                .where(CAPosition.id == pos.id)
-                                .values(status='cancelled')
-                            )
+                        await self.update_strategy_position(
+                            pos_id, status='cancelled'
+                        )
                         sold_results.append({
-                            "ticker": pos.ticker, "status": "cancelled",
+                            "ticker": ticker, "status": "cancelled",
                             "reason": "实际持仓为 0",
                         })
                         self.update_step(
                             sell_step_id, "completed",
-                            output_data=f"{pos.ticker}: 实际未持有，已取消",
+                            output_data=f"{ticker}: 实际未持有，已取消",
                             duration_ms=int((_time.monotonic() - sell_t0) * 1000),
                         )
                         continue
 
                     # 获取当前价格
-                    quote = await self.market_data_api.get_latest_price(pos.ticker)
+                    quote = await self.market_data_api.get_latest_price(ticker)
                     current_price = float(quote.get('close', 0)) if quote else 0
-                    buy_price = float(pos.buy_price)
+                    buy_price = float(pos["buy_price"])
                     pnl = (current_price - buy_price) * actual_qty
                     pnl_pct = ((current_price - buy_price) / buy_price * 100) if buy_price > 0 else 0
 
                     # 提交卖出订单
                     order = Order(
-                        symbol=pos.ticker,
+                        symbol=ticker,
                         side=OrderSide.SELL,
                         quantity=Decimal(actual_qty),
                         order_type=OrderType.MARKET,
@@ -331,55 +346,51 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                     order_id = await self.broker_api.submit_order(order)
 
                     if order_id:
-                        async with get_db() as db:
-                            await db.execute(
-                                update(CAPosition)
-                                .where(CAPosition.id == pos.id)
-                                .values(
-                                    status='sold',
-                                    sold_price=Decimal(str(current_price)),
-                                    sold_at=utc_now(),
-                                    pnl=Decimal(str(round(pnl, 2))),
-                                )
-                            )
+                        await self.update_strategy_position(
+                            pos_id,
+                            status='sold',
+                            sold_price=current_price,
+                            sold_at=utc_now().isoformat(),
+                            pnl=round(pnl, 2),
+                        )
 
                         pnl_emoji = "📈" if pnl >= 0 else "📉"
                         msg = (
-                            f"{pnl_emoji} CA 到期卖出 {pos.ticker}\n"
+                            f"{pnl_emoji} CA 到期卖出 {ticker}\n"
                             f"📊 数量: {actual_qty} 股\n"
                             f"💰 买入: ${buy_price:.2f} → 卖出: ${current_price:.2f}\n"
                             f"📈 盈亏: ${pnl:+,.2f} ({pnl_pct:+.2f}%)\n"
-                            f"⏱️ 持仓: {pos.holding_days} 天\n"
-                            f"💡 原因: {(pos.reason or '')[:80]}"
+                            f"⏱️ 持仓: {pos.get('holding_days', '?')} 天\n"
+                            f"💡 原因: {(pos.get('reason') or '')[:80]}"
                         )
                         await self.message_manager.send_message(msg, "success" if pnl >= 0 else "warning")
 
                         sold_results.append({
-                            "ticker": pos.ticker, "status": "sold",
+                            "ticker": ticker, "status": "sold",
                             "quantity": actual_qty, "buy_price": buy_price,
                             "sell_price": current_price,
                             "pnl": round(pnl, 2), "pnl_pct": round(pnl_pct, 2),
                         })
                         self.update_step(
                             sell_step_id, "completed",
-                            output_data=f"{pos.ticker}: 卖出 {actual_qty}股, PnL ${pnl:+,.2f} ({pnl_pct:+.2f}%)",
+                            output_data=f"{ticker}: 卖出 {actual_qty}股, PnL ${pnl:+,.2f} ({pnl_pct:+.2f}%)",
                             duration_ms=int((_time.monotonic() - sell_t0) * 1000),
                         )
                     else:
                         sold_results.append({
-                            "ticker": pos.ticker, "status": "failed",
+                            "ticker": ticker, "status": "failed",
                             "reason": "订单提交失败",
                         })
                         self.update_step(
                             sell_step_id, "failed",
-                            error=f"{pos.ticker}: 订单提交失败",
+                            error=f"{ticker}: 订单提交失败",
                             duration_ms=int((_time.monotonic() - sell_t0) * 1000),
                         )
 
                 except Exception as e:
-                    logger.error(f"卖出 {pos.ticker} 失败: {e}")
+                    logger.error(f"卖出 {ticker} 失败: {e}")
                     sold_results.append({
-                        "ticker": pos.ticker, "status": "error", "reason": str(e),
+                        "ticker": ticker, "status": "error", "reason": str(e),
                     })
                     self.update_step(
                         sell_step_id, "failed", error=str(e),
@@ -487,7 +498,8 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         """
         根据 LLM 分析结果执行买入。
 
-        代码负责：仓位计算、重复检查、市场状态检查、下单、DB 记录。
+        代码负责：仓位计算、重复检查、市场状态检查、下单、记录持仓。
+        使用基类的策略持仓管理接口，自动适配实盘/回测。
         """
         if not signals:
             return []
@@ -515,14 +527,10 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                 )
                 return []
 
-            # 获取当前 CA 持仓数
-            async with get_db() as db:
-                result = await db.execute(
-                    select(CAPosition).where(CAPosition.status == 'open')
-                )
-                open_positions = list(result.scalars().all())
-                open_tickers = {p.ticker for p in open_positions}
-                open_count = len(open_positions)
+            # 获取当前策略持仓
+            open_positions = await self.get_strategy_positions(status='open')
+            open_tickers = {p["ticker"] for p in open_positions}
+            open_count = len(open_positions)
 
             # 获取组合
             portfolio = await self.get_portfolio()
@@ -606,22 +614,22 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                         })
                         continue
 
-                    # 记录到 DB
+                    # 记录策略持仓（通过基类接口）
                     target_sell_date = utc_now() + timedelta(days=sig["holding_days"])
-                    async with get_db() as db:
-                        position = CAPosition(
-                            ticker=ticker,
-                            quantity=quantity,
-                            buy_price=Decimal(str(price)),
-                            buy_date=utc_now(),
-                            target_sell_date=target_sell_date,
-                            holding_days=sig["holding_days"],
-                            reason=sig["reason"],
-                            chain=sig["chain"],
-                            score=sig["confidence"],
-                            status='open',
-                        )
-                        db.add(position)
+                    pos_id = await self.add_strategy_position(
+                        ticker=ticker,
+                        quantity=quantity,
+                        buy_price=price,
+                        buy_date=utc_now(),
+                        target_sell_date=target_sell_date,
+                        holding_days=sig["holding_days"],
+                        reason=sig["reason"],
+                        metadata={
+                            "chain": sig["chain"],
+                            "score": sig["confidence"],
+                            "order_id": str(order_id),
+                        },
+                    )
 
                     open_tickers.add(ticker)
                     open_count += 1
@@ -642,6 +650,7 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
                         "quantity": quantity, "price": price,
                         "holding_days": sig["holding_days"],
                         "order_id": str(order_id),
+                        "position_id": pos_id,
                     })
 
                 except Exception as e:
@@ -718,22 +727,28 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
 ---
 """
 
-        # 当前 CA 持仓信息
+        # 当前 CA 持仓信息（通过基类接口）
         ca_positions_context = ""
         try:
-            async with get_db() as db:
-                result = await db.execute(
-                    select(CAPosition).where(CAPosition.status == 'open')
-                )
-                positions = list(result.scalars().all())
+            positions = await self.get_strategy_positions(status='open')
 
             if positions:
                 pos_lines = []
                 for p in positions:
-                    days_left = (ensure_utc(p.target_sell_date) - utc_now()).days
+                    sell_date_str = p.get("target_sell_date")
+                    if sell_date_str:
+                        sell_date = ensure_utc(
+                            datetime.fromisoformat(sell_date_str)
+                            if isinstance(sell_date_str, str) else sell_date_str
+                        )
+                        days_left = (sell_date - utc_now()).days
+                    else:
+                        days_left = "?"
+                    meta = p.get("metadata") or {}
+                    score = meta.get("score", "?")
                     pos_lines.append(
-                        f"- {p.ticker}: {p.quantity}股 @ ${float(p.buy_price):.2f}, "
-                        f"还剩{days_left}天, 置信度{p.score}/10"
+                        f"- {p['ticker']}: {p['quantity']}股 @ ${float(p['buy_price']):.2f}, "
+                        f"还剩{days_left}天, 置信度{score}/10"
                     )
                 ca_positions_context = f"""
 **当前 CA 持仓 ({len(positions)}/{self._config["max_ca_positions"]})：**

@@ -36,6 +36,7 @@ import {
   Activity,
   Newspaper,
   Settings2,
+  Loader2,
 } from 'lucide-react';
 import type {
   SchedulerJob,
@@ -140,7 +141,7 @@ function AddJobDialog({ open, onClose, onSubmit }: AddJobDialogProps) {
           {/* Trigger Type */}
           <div>
             <label className="mb-1.5 block text-sm font-medium text-foreground">Trigger Type</label>
-            <div className="flex gap-2">
+            <div className="flex flex-col gap-2 sm:flex-row">
               {([
                 { key: 'cron' as const, label: '⏰ Cron (Fixed Time)' },
                 { key: 'interval' as const, label: '🔄 Interval (Repeating)' },
@@ -415,18 +416,18 @@ function RuleTriggerCard({
   };
 
   return (
-    <div className="flex items-center gap-4 rounded-xl border border-border p-4 transition-colors hover:border-border-hover">
+    <div className="flex flex-col gap-3 rounded-xl border border-border p-4 transition-colors hover:border-border-hover sm:flex-row sm:items-center sm:gap-4">
       <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl', typeColor)}>
         <TypeIcon className="h-5 w-5" />
       </div>
 
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <span className="text-sm font-semibold text-foreground">{rule.name}</span>
           <Badge variant={rule.enabled ? 'profit' : 'muted'} dot>{rule.enabled ? 'Active' : 'Disabled'}</Badge>
         </div>
         <p className="mt-0.5 text-xs text-muted-foreground">{rule.description}</p>
-        <div className="mt-2 flex items-center gap-4 text-xs text-muted">
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
           {rule.last_triggered && (
             <span>Last: {formatRelative(rule.last_triggered)}</span>
           )}
@@ -434,10 +435,10 @@ function RuleTriggerCard({
         </div>
       </div>
 
-      {/* Threshold */}
-      <div className="flex items-center gap-2">
+      {/* Threshold + Toggle */}
+      <div className="flex items-center gap-2 sm:shrink-0">
         {editing ? (
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <input
               type="number"
               step="0.1"
@@ -468,23 +469,23 @@ function RuleTriggerCard({
             {rule.threshold}{rule.type === 'news_importance' ? '' : '%'}
           </button>
         )}
-      </div>
 
-      {/* Toggle */}
-      <button
-        onClick={() => onToggle(rule.id)}
-        className={cn(
-          'flex h-7 w-12 items-center rounded-full px-0.5 transition-colors',
-          rule.enabled ? 'bg-accent' : 'bg-gray-700'
-        )}
-      >
-        <div
+        {/* Toggle */}
+        <button
+          onClick={() => onToggle(rule.id)}
           className={cn(
-            'h-6 w-6 rounded-full bg-white shadow transition-transform',
-            rule.enabled ? 'translate-x-5' : 'translate-x-0'
+            'flex h-7 w-12 shrink-0 items-center rounded-full px-0.5 transition-colors',
+            rule.enabled ? 'bg-accent' : 'bg-gray-700'
           )}
-        />
-      </button>
+        >
+          <div
+            className={cn(
+              'h-6 w-6 rounded-full bg-white shadow transition-transform',
+              rule.enabled ? 'translate-x-5' : 'translate-x-0'
+            )}
+          />
+        </button>
+      </div>
     </div>
   );
 }
@@ -500,8 +501,10 @@ export default function Scheduler() {
   const [toggling, setToggling] = useState(false);
   const [showAddJob, setShowAddJob] = useState(false);
   const [deletingJob, setDeletingJob] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setLoading(true);
     Promise.all([
       fetchSchedulerJobs(),
       fetchExecutionHistory(),
@@ -514,7 +517,7 @@ export default function Scheduler() {
       setRiskEvents(r);
       setStatus(s);
       setRuleTriggers(rt);
-    });
+    }).finally(() => setLoading(false));
   }, []);
 
   const handleToggleTrading = async () => {
@@ -586,7 +589,7 @@ export default function Scheduler() {
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Scheduler & Triggers</h1>
           <p className="mt-1 text-sm text-muted">Manage scheduled tasks, event triggers, and risk controls</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant="secondary"
             icon={status?.is_trading_enabled ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
@@ -605,8 +608,16 @@ export default function Scheduler() {
         </div>
       </div>
 
+      {/* Loading State */}
+      {loading && (
+        <div className="flex flex-col items-center justify-center py-16">
+          <Loader2 className="mb-3 h-8 w-8 animate-spin text-accent" />
+          <p className="text-sm text-muted">Loading scheduler data…</p>
+        </div>
+      )}
+
       {/* System Status */}
-      {status && (
+      {!loading && status && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
           <Card className="flex items-center gap-3 !p-4">
             <StatusDot status={status.is_running ? 'online' : 'offline'} />
@@ -652,6 +663,7 @@ export default function Scheduler() {
         </div>
       )}
 
+      {!loading && <>
       {/* Scheduled Jobs (with CRUD) */}
       <Card>
         <div className="flex items-center justify-between">
@@ -667,12 +679,12 @@ export default function Scheduler() {
           {jobs.map((job) => (
             <div
               key={job.id}
-              className="flex items-center justify-between rounded-lg border border-border p-3 transition-colors hover:border-border-hover"
+              className="flex flex-col gap-2 rounded-lg border border-border p-3 transition-colors hover:border-border-hover sm:flex-row sm:items-center sm:justify-between"
             >
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 min-w-0">
                 <div
                   className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-lg',
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
                     job.status === 'active' ? 'bg-profit-bg' : 'bg-border'
                   )}
                 >
@@ -680,9 +692,9 @@ export default function Scheduler() {
                     className={cn('h-4 w-4', job.status === 'active' ? 'text-profit' : 'text-muted')}
                   />
                 </div>
-                <div>
-                  <div className="text-sm font-semibold text-foreground">{job.name}</div>
-                  <div className="flex items-center gap-2 text-xs text-muted">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-foreground">{job.name}</div>
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted">
                     <code className="rounded bg-card-hover px-1.5 py-0.5 font-mono text-[11px]">{job.trigger}</code>
                     {job.next_run_time && (
                       <span>Next: {formatRelative(job.next_run_time)}</span>
@@ -690,7 +702,7 @@ export default function Scheduler() {
                   </div>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 sm:shrink-0">
                 {job.require_trading_day && <Badge variant="muted">Trading Day</Badge>}
                 {job.require_market_open && <Badge variant="muted">Market Open</Badge>}
                 <Badge variant={job.status === 'active' ? 'profit' : 'muted'} dot>
@@ -757,7 +769,7 @@ export default function Scheduler() {
         </div>
       </Card>
 
-      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Execution History */}
         <Card>
           <CardHeader title="Execution History" subtitle="Recent job runs" />
@@ -765,20 +777,20 @@ export default function Scheduler() {
             {history.map((rec, idx) => (
               <div
                 key={idx}
-                className="flex items-center justify-between rounded-lg border border-border/50 p-3"
+                className="flex flex-col gap-1.5 rounded-lg border border-border/50 p-3 sm:flex-row sm:items-center sm:justify-between"
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 min-w-0">
                   {rec.success ? (
-                    <CheckCircle className="h-4 w-4 text-profit" />
+                    <CheckCircle className="h-4 w-4 shrink-0 text-profit" />
                   ) : (
-                    <XCircle className="h-4 w-4 text-loss" />
+                    <XCircle className="h-4 w-4 shrink-0 text-loss" />
                   )}
-                  <div>
-                    <div className="text-sm font-medium text-foreground">{rec.job_id}</div>
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium text-foreground">{rec.job_id}</div>
                     <div className="text-xs text-muted">{formatRelative(rec.executed_at)}</div>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 sm:shrink-0">
                   <span className="text-xs text-muted-foreground">
                     {formatDuration(rec.duration_ms / 1000)}
                   </span>
@@ -832,6 +844,8 @@ export default function Scheduler() {
           )}
         </Card>
       </div>
+
+      </>}
 
       {/* Add Job Dialog */}
       <AddJobDialog

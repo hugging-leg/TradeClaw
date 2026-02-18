@@ -707,13 +707,25 @@ export const mockBacktestResults: BacktestResult[] = [
       end_date: '2025-06-30',
       initial_capital: 100000,
       workflow_type: 'llm_portfolio',
-      symbols: ['AAPL', 'MSFT', 'GOOGL', 'NVDA', 'AMZN'],
+      commission_rate: 0.001,
+      slippage_bps: 5.0,
+      run_interval_days: 1,
     },
-    total_return: 18.5,
-    sharpe_ratio: 1.82,
-    max_drawdown: -8.3,
-    win_rate: 64.2,
-    total_trades: 47,
+    status: 'completed',
+    progress: 1.0,
+    current_date: null,
+    result: {
+      total_return: 0.185,
+      annualized_return: 0.42,
+      sharpe_ratio: 1.82,
+      max_drawdown: 0.083,
+      win_rate: 0.642,
+      total_trades: 47,
+      profit_factor: 2.1,
+      avg_trade_pnl: 394.0,
+      final_equity: 118500,
+      initial_capital: 100000,
+    },
     equity_curve: Array.from({ length: 180 }, (_, i) => {
       const base = 100000;
       const trend = i * 100;
@@ -725,11 +737,15 @@ export const mockBacktestResults: BacktestResult[] = [
           return d.toISOString().split('T')[0];
         })(),
         equity: Math.round((base + trend + noise) * 100) / 100,
+        cash: Math.round((base * 0.3 + noise * 0.1) * 100) / 100,
+        positions_value: Math.round((base * 0.7 + trend + noise * 0.9) * 100) / 100,
       };
     }),
     trades: [],
-    status: 'completed',
+    error: null,
     created_at: daysAgo(3),
+    started_at: daysAgo(3),
+    completed_at: daysAgo(3),
   },
 ];
 

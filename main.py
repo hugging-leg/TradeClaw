@@ -26,7 +26,7 @@ async def main():
     # Create trading system
     trading_system = TradingSystem()
 
-    # Create backtest runner (独立进程池，不阻塞实盘)
+    # Create backtest runner (异步执行，与实盘共享 event loop)
     backtest_runner = BacktestRunner()
 
     # 注入到 API 层

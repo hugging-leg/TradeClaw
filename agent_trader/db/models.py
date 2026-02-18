@@ -228,24 +228,65 @@ class SchedulerJobExecution(Base):
         }
 
 
-class CAPosition(Base):
+class BacktestResult(Base):
     """
-    认知套利 Workflow 持仓跟踪
-    
-    记录 CA workflow 的买入持仓，用于到期卖出
+    回测结果记录
+
+    存储完整的回测配置、equity curve 和统计指标。
     """
-    __tablename__ = 'ca_positions'
+    __tablename__ = 'backtest_results'
+
+    id = Column(String(36), primary_key=True)  # task_id
+    config = Column(JSON, nullable=False)  # BacktestConfig dict
+    status = Column(String(20), nullable=False, index=True)  # completed, failed, cancelled
+    result = Column(JSON, nullable=True)  # 统计指标 dict
+    equity_curve = Column(JSON, nullable=True)  # [{date, equity, cash, positions_value}, ...]
+    trades = Column(JSON, nullable=True)  # 交易记录列表
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'id': self.id,
+            'config': self.config,
+            'status': self.status,
+            'result': self.result,
+            'equity_curve': self.equity_curve,
+            'trades': self.trades,
+            'total_return': (self.result or {}).get('total_return', 0.0),
+            'sharpe_ratio': (self.result or {}).get('sharpe_ratio', 0.0),
+            'max_drawdown': (self.result or {}).get('max_drawdown', 0.0),
+            'win_rate': (self.result or {}).get('win_rate', 0.0),
+            'total_trades': (self.result or {}).get('total_trades', 0),
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'completed_at': self.completed_at.isoformat() if self.completed_at else None,
+        }
+
+
+class StrategyPosition(Base):
+    """
+    通用策略持仓跟踪
+
+    任何 Workflow 都可以用此表记录策略层面的持仓（买入原因、目标卖出日期等）。
+    通过 workflow_type 字段区分来源策略。
+
+    与 Broker 的实际持仓（portfolio.positions）是独立的：
+    - StrategyPosition 记录"策略意图"（为什么买、计划何时卖）
+    - Broker 持仓记录"实际持有"
+    - 卖出时需要交叉验证两者
+    """
+    __tablename__ = 'strategy_positions'
 
     id = Column(GUID(), primary_key=True, default=uuid.uuid4)
-    ticker = Column(String(20), nullable=False, index=True, unique=True)
+    workflow_type = Column(String(50), nullable=False, index=True)  # e.g. "cognitive_arbitrage"
+    ticker = Column(String(20), nullable=False, index=True)
     quantity = Column(Integer, nullable=False)
     buy_price = Column(Numeric(20, 8), nullable=False)
     buy_date = Column(DateTime(timezone=True), nullable=False)
-    target_sell_date = Column(DateTime(timezone=True), nullable=False, index=True)
-    holding_days = Column(Integer, nullable=False)
+    target_sell_date = Column(DateTime(timezone=True), nullable=True, index=True)
+    holding_days = Column(Integer, nullable=True)
     reason = Column(Text, nullable=True)
-    chain = Column(Text, nullable=True)  # 传导链
-    score = Column(Float, nullable=True)
+    metadata_ = Column("metadata", JSON, nullable=True)  # 策略特有的额外数据 (chain, score, etc.)
     status = Column(String(20), default='open', index=True)  # open, sold, cancelled
     sold_price = Column(Numeric(20, 8), nullable=True)
     sold_at = Column(DateTime(timezone=True), nullable=True)
@@ -256,6 +297,7 @@ class CAPosition(Base):
     def to_dict(self) -> Dict[str, Any]:
         return {
             'id': str(self.id),
+            'workflow_type': self.workflow_type,
             'ticker': self.ticker,
             'quantity': self.quantity,
             'buy_price': float(self.buy_price),
@@ -263,11 +305,10 @@ class CAPosition(Base):
             'target_sell_date': self.target_sell_date.isoformat() if self.target_sell_date else None,
             'holding_days': self.holding_days,
             'reason': self.reason,
-            'chain': self.chain,
-            'score': self.score,
+            'metadata': self.metadata_,
             'status': self.status,
             'sold_price': float(self.sold_price) if self.sold_price else None,
             'sold_at': self.sold_at.isoformat() if self.sold_at else None,
-            'pnl': float(self.pnl) if self.pnl else None
+            'pnl': float(self.pnl) if self.pnl else None,
         }
 

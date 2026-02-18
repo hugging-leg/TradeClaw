@@ -6,8 +6,15 @@
 - 仅在展示给用户时转换为交易时区
 - 服务器时区不确定，禁止使用 datetime.now() (naive) 或 datetime.utcnow()
 - 统一入口，避免各模块各自处理时区
+
+回测支持：
+- 通过 contextvars 实现 SimulatedClock，utc_now() 自动返回模拟时间
+- contextvars 是 per-task 隔离的，回测和实盘可同时运行互不干扰
+- 使用 simulated_clock(dt) context manager 或 set_simulated_time/clear_simulated_time
 """
 
+from contextvars import ContextVar
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -21,6 +28,11 @@ UTC = timezone.utc
 
 # 交易时区（从配置读取，仅用于展示）
 _trading_tz: Optional[pytz.BaseTzInfo] = None
+
+# 模拟时间（回测用，per-task 隔离）
+_simulated_time: ContextVar[Optional[datetime]] = ContextVar(
+    "_simulated_time", default=None
+)
 
 
 def get_trading_timezone() -> pytz.BaseTzInfo:
@@ -37,8 +49,58 @@ def utc_now() -> datetime:
 
     这是项目中获取 "当前时间" 的唯一推荐方式。
     禁止使用 datetime.now() / datetime.utcnow()。
+
+    回测模式下自动返回模拟时间（通过 contextvars 注入）。
     """
+    sim = _simulated_time.get()
+    if sim is not None:
+        return sim
     return datetime.now(UTC)
+
+
+# ========== 回测时间控制 ==========
+
+
+def set_simulated_time(dt: datetime) -> None:
+    """
+    设置当前 task 的模拟时间（回测用）。
+
+    Args:
+        dt: UTC aware datetime
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    _simulated_time.set(dt)
+
+
+def clear_simulated_time() -> None:
+    """清除模拟时间，恢复为真实时间。"""
+    _simulated_time.set(None)
+
+
+@contextmanager
+def simulated_clock(dt: datetime):
+    """
+    Context manager: 在 with 块内 utc_now() 返回模拟时间。
+
+    用法:
+        with simulated_clock(some_datetime):
+            # 这里的 utc_now() 返回 some_datetime
+            await workflow.execute(...)
+
+    Args:
+        dt: UTC aware datetime
+    """
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    token = _simulated_time.set(dt)
+    try:
+        yield
+    finally:
+        _simulated_time.reset(token)
+
+
+# ========== 原有工具函数 ==========
 
 
 def to_trading_tz(dt: datetime) -> datetime:

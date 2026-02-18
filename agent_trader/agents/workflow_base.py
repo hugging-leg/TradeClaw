@@ -204,6 +204,12 @@ class WorkflowBase(ABC):
         # 用户消息队列（运行中追加 prompt）
         self._user_message_queue: asyncio.Queue[str] = asyncio.Queue()
 
+        # 策略持仓管理：回测模式使用内存存储，实盘使用 DB
+        # 由 backtest_runner 在创建 workflow 后设置 _backtest_mode = True
+        self._backtest_mode: bool = False
+        self._strategy_positions_mem: List[Dict[str, Any]] = []  # 内存后端
+        self._strategy_pos_counter: int = 0  # 内存模式 ID 生成
+
         logger.info(f"Initialized {self.__class__.__name__}")
 
     # ========== 模板方法：execute() ==========
@@ -1151,3 +1157,161 @@ class WorkflowBase(ABC):
             "stage": stage,
             "workflow_type": self.get_workflow_type()
         }
+
+    # ========== 策略持仓管理（通用接口） ==========
+    #
+    # 任何 workflow 都可以使用这些方法管理策略层面的持仓跟踪。
+    # - 实盘模式：读写 DB 的 strategy_positions 表
+    # - 回测模式：读写内存中的 _strategy_positions_mem 列表
+    #
+    # 子类通过 self.get_workflow_type() 自动隔离不同策略的持仓。
+
+    async def get_strategy_positions(
+        self, status: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        获取当前策略的持仓列表。
+
+        Args:
+            status: 过滤状态 ('open', 'sold', 'cancelled')，None 返回全部
+        """
+        wf_type = self.get_workflow_type()
+
+        if self._backtest_mode:
+            results = [
+                p for p in self._strategy_positions_mem
+                if p["workflow_type"] == wf_type
+            ]
+            if status:
+                results = [p for p in results if p["status"] == status]
+            return results
+
+        # 实盘：查 DB
+        from agent_trader.db.session import get_db
+        from agent_trader.db.models import StrategyPosition
+        from sqlalchemy import select
+
+        async with get_db() as db:
+            stmt = select(StrategyPosition).where(
+                StrategyPosition.workflow_type == wf_type
+            )
+            if status:
+                stmt = stmt.where(StrategyPosition.status == status)
+            result = await db.execute(stmt)
+            return [row.to_dict() for row in result.scalars().all()]
+
+    async def add_strategy_position(
+        self,
+        ticker: str,
+        quantity: int,
+        buy_price: float,
+        buy_date=None,
+        target_sell_date=None,
+        holding_days: Optional[int] = None,
+        reason: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        添加一个策略持仓记录。
+
+        Returns:
+            持仓记录 ID (str)
+        """
+        from datetime import datetime
+        wf_type = self.get_workflow_type()
+        now = buy_date or utc_now()
+
+        if self._backtest_mode:
+            self._strategy_pos_counter += 1
+            pos_id = f"mem-{self._strategy_pos_counter}"
+            self._strategy_positions_mem.append({
+                "id": pos_id,
+                "workflow_type": wf_type,
+                "ticker": ticker,
+                "quantity": quantity,
+                "buy_price": buy_price,
+                "buy_date": now.isoformat() if isinstance(now, datetime) else str(now),
+                "target_sell_date": target_sell_date.isoformat() if isinstance(target_sell_date, datetime) else str(target_sell_date) if target_sell_date else None,
+                "holding_days": holding_days,
+                "reason": reason,
+                "metadata": metadata,
+                "status": "open",
+                "sold_price": None,
+                "sold_at": None,
+                "pnl": None,
+            })
+            return pos_id
+
+        # 实盘：写 DB
+        from decimal import Decimal
+        from agent_trader.db.session import get_db
+        from agent_trader.db.models import StrategyPosition
+
+        pos = StrategyPosition(
+            workflow_type=wf_type,
+            ticker=ticker,
+            quantity=quantity,
+            buy_price=Decimal(str(buy_price)),
+            buy_date=now,
+            target_sell_date=target_sell_date,
+            holding_days=holding_days,
+            reason=reason,
+            metadata_=metadata,
+            status='open',
+        )
+        async with get_db() as db:
+            db.add(pos)
+
+        return str(pos.id)
+
+    async def update_strategy_position(
+        self,
+        position_id: str,
+        **updates,
+    ) -> bool:
+        """
+        更新策略持仓记录字段。
+
+        常见用法：
+            await self.update_strategy_position(pos_id, status='sold', sold_price=150.0, pnl=500.0)
+
+        Returns:
+            是否成功
+        """
+        if self._backtest_mode:
+            for pos in self._strategy_positions_mem:
+                if pos["id"] == position_id:
+                    pos.update(updates)
+                    return True
+            return False
+
+        # 实盘：更新 DB
+        from agent_trader.db.session import get_db
+        from agent_trader.db.models import StrategyPosition
+        from sqlalchemy import update as sa_update
+
+        # 类型转换
+        db_updates = {}
+        for k, v in updates.items():
+            if k == "metadata":
+                db_updates["metadata_"] = v
+            else:
+                if k in ("buy_price", "sold_price", "pnl") and v is not None:
+                    from decimal import Decimal
+                    db_updates[k] = Decimal(str(v))
+                else:
+                    db_updates[k] = v
+
+        try:
+            pos_uuid = uuid.UUID(position_id)
+        except (ValueError, AttributeError):
+            logger.warning(f"Invalid position ID: {position_id}")
+            return False
+
+        async with get_db() as db:
+            await db.execute(
+                sa_update(StrategyPosition)
+                .where(StrategyPosition.id == pos_uuid)
+                .values(**db_updates)
+            )
+        return True

@@ -347,19 +347,58 @@ export interface BacktestConfig {
   end_date: string;
   initial_capital: number;
   workflow_type: string;
-  symbols: string[];
+  commission_rate: number;
+  slippage_bps: number;
+  run_interval_days: number;
+}
+
+export interface BacktestEquityPoint {
+  date: string;
+  equity: number;
+  cash: number;
+  positions_value: number;
+}
+
+export interface BacktestTrade {
+  symbol: string;
+  side: string;
+  quantity: number;
+  price: number;
+  commission: number;
+  timestamp: string;
+  order_id: string;
+}
+
+export interface BacktestStatistics {
+  total_return: number;
+  annualized_return: number;
+  sharpe_ratio: number;
+  max_drawdown: number;
+  win_rate: number;
+  total_trades: number;
+  profit_factor: number;
+  avg_trade_pnl: number;
+  final_equity: number;
+  initial_capital: number;
 }
 
 export interface BacktestResult {
   id: string;
   config: BacktestConfig;
-  total_return: number;
-  sharpe_ratio: number;
-  max_drawdown: number;
-  win_rate: number;
-  total_trades: number;
-  equity_curve: { date: string; equity: number }[];
-  trades: Order[];
-  status: 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  progress: number;
+  current_date: string | null;
+  equity_curve: BacktestEquityPoint[];
+  trades: BacktestTrade[];
+  result: BacktestStatistics | null;
+  error: string | null;
   created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  // Flattened from result for backward compat
+  total_return?: number;
+  sharpe_ratio?: number;
+  max_drawdown?: number;
+  win_rate?: number;
+  total_trades?: number;
 }

@@ -74,6 +74,29 @@ def add_service_info(
     return event_dict
 
 
+def format_positional_args(
+    logger: logging.Logger,
+    method_name: str,
+    event_dict: dict
+) -> dict:
+    """
+    将 positional_args 应用到 event 字符串中。
+
+    structlog 不会自动处理 logger.info("msg %s", arg) 中的 %s 占位符，
+    而是把 positional args 放到 positional_args 字段。这个 processor
+    在渲染前将它们格式化到 event 中，然后删除 positional_args 字段。
+    """
+    pos_args = event_dict.pop("positional_args", None)
+    if pos_args:
+        event = event_dict.get("event", "")
+        try:
+            event_dict["event"] = event % pos_args
+        except (TypeError, ValueError):
+            # 格式化失败时保留原始 event + args
+            event_dict["event"] = f"{event} {pos_args}"
+    return event_dict
+
+
 def setup_logging(
     log_level: Optional[str] = None,
     json_logs: Optional[bool] = None,
@@ -120,6 +143,7 @@ def setup_logging(
         structlog.processors.TimeStamper(fmt="iso"),
         add_correlation_id,
         add_service_info,
+        format_positional_args,  # 处理 logger.info("msg %s", arg) 风格的调用
         structlog.processors.StackInfoRenderer(),
         # 将 structlog 事件转换为标准 logging
         structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
