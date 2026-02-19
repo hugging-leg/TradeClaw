@@ -307,6 +307,16 @@ function EquityChart({ data, initialCapital }: {
   data: { date: string; equity: number }[];
   initialCapital: number;
 }) {
+  // 响应式：检测是否为移动端窄屏
+  const [isMobile, setIsMobile] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 640px)');
+    const handler = (e: MediaQueryListEvent | MediaQueryList) => setIsMobile(e.matches);
+    handler(mq);
+    mq.addEventListener('change', handler as (e: MediaQueryListEvent) => void);
+    return () => mq.removeEventListener('change', handler as (e: MediaQueryListEvent) => void);
+  }, []);
+
   if (!data || data.length < 2) {
     return (
       <div className="flex h-[300px] items-center justify-center text-sm text-muted">
@@ -341,10 +351,29 @@ function EquityChart({ data, initialCapital }: {
     return `$${(v / 1000).toFixed(1)}k`;
   };
 
+  // 移动端：显示更少的 tick，旋转标签，缩短日期格式
+  const tickCount = isMobile ? 4 : 8;
+  const xInterval = Math.max(1, Math.floor(data.length / tickCount));
+
+  // 移动端缩短日期：将 "Feb 15, 2026" 格式化为 "2/15"
+  const formatXTick = (value: string) => {
+    if (!isMobile) return value;
+    // 尝试解析 "MMM D, YYYY" 格式
+    const d = new Date(value);
+    if (!isNaN(d.getTime())) {
+      return `${d.getMonth() + 1}/${d.getDate()}`;
+    }
+    // fallback: 截断
+    return value.length > 6 ? value.slice(0, 6) : value;
+  };
+
   return (
     <div className="h-[300px] sm:h-[350px]">
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={data} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
+        <AreaChart
+          data={data}
+          margin={{ top: 5, right: 5, left: 0, bottom: isMobile ? 20 : 0 }}
+        >
           <defs>
             <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={color} stopOpacity={0.3} />
@@ -354,10 +383,14 @@ function EquityChart({ data, initialCapital }: {
           <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 11, fill: '#71717a' }}
+            tick={{ fontSize: isMobile ? 10 : 11, fill: '#71717a' }}
             axisLine={{ stroke: '#1e1e2e' }}
             tickLine={false}
-            interval={Math.max(1, Math.floor(data.length / 8))}
+            interval={xInterval}
+            tickFormatter={formatXTick}
+            angle={isMobile ? -35 : 0}
+            textAnchor={isMobile ? 'end' : 'middle'}
+            height={isMobile ? 50 : 30}
           />
           <YAxis
             domain={yDomain}
