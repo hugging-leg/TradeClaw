@@ -150,6 +150,23 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
         user_message = await self._build_analysis_prompt(context, sold_results)
         agent_result = await self._run_agent(user_message)
 
+        # 检测 LLM 返回空结果（可能是额度不足、模型不可用等）
+        if not agent_result.text and not agent_result.tool_calls:
+            logger.warning(
+                "CA workflow: LLM 返回空结果 (text=%r, tools=%d, duration=%dms)",
+                agent_result.text, len(agent_result.tool_calls), agent_result.duration_ms,
+            )
+            return {
+                "success": False,
+                "error": "LLM returned empty response — possibly out of quota or model unavailable",
+                "workflow_type": self.get_workflow_type(),
+                "trigger": trigger,
+                "llm_response": "",
+                "tool_calls": [],
+                "sold_positions": sold_results,
+                "buy_results": [],
+            }
+
         # 发送通知
         if agent_result.tool_calls:
             tools_msg = "**调用的工具:**\n" + "\n".join(

@@ -782,6 +782,14 @@ class WorkflowBase(ABC):
 
         total_duration = int((time.monotonic() - t0) * 1000)
 
+        # 检测空结果（可能是 LLM API 额度不足、模型不可用等）
+        if not final_text and not tool_calls and not all_messages:
+            logger.warning(
+                "_run_agent: LLM 返回完全空的结果 (duration=%dms). "
+                "可能原因: API 额度不足、模型不可用、网络超时",
+                total_duration,
+            )
+
         return AgentResult(
             text=final_text,
             tool_calls=tool_calls,

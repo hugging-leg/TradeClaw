@@ -491,6 +491,22 @@ function AnalysesPanel({ backtestId }: { backtestId: string }) {
     return ctx?.simulated_date as string | undefined;
   };
 
+  const failedCount = analyses.filter((a) => !a.success).length;
+  const emptyCount = analyses.filter((a) => a.success && !a.output_response && (!a.tool_calls || a.tool_calls.length === 0)).length;
+
+  // 提取常见错误模式（去重）
+  const errorSummary = (() => {
+    const errors = analyses
+      .filter((a) => !a.success && a.error_message)
+      .map((a) => a.error_message!);
+    const unique = [...new Set(errors.map((e) => {
+      // 简化错误消息：取前 120 字符
+      const short = e.length > 120 ? e.slice(0, 120) + '…' : e;
+      return short;
+    }))];
+    return unique.slice(0, 3); // 最多显示 3 种不同错误
+  })();
+
   return (
     <div className="space-y-3">
       {/* Summary bar */}
@@ -500,9 +516,16 @@ function AnalysesPanel({ backtestId }: { backtestId: string }) {
         <span className="text-profit">
           {analyses.filter((a) => a.success).length} success
         </span>
-        <span className="text-loss">
-          {analyses.filter((a) => !a.success).length} failed
-        </span>
+        {failedCount > 0 && (
+          <span className="text-loss font-medium">
+            {failedCount} failed
+          </span>
+        )}
+        {emptyCount > 0 && (
+          <span className="text-warning">
+            {emptyCount} empty
+          </span>
+        )}
         {analyses[0]?.execution_time_seconds && (
           <>
             <span>·</span>
@@ -514,6 +537,29 @@ function AnalysesPanel({ backtestId }: { backtestId: string }) {
           </>
         )}
       </div>
+
+      {/* Error summary banner — shown when there are failures */}
+      {failedCount > 0 && errorSummary.length > 0 && (
+        <div className="rounded-lg border border-loss/20 bg-loss/5 px-3 py-2">
+          <p className="mb-1 text-[11px] font-semibold text-loss">
+            {failedCount} of {analyses.length} analyses failed
+          </p>
+          {errorSummary.map((err, i) => (
+            <p key={i} className="text-[11px] leading-relaxed text-loss/70 break-all">
+              • {err}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {/* Empty response warning */}
+      {emptyCount > 0 && failedCount === 0 && (
+        <div className="rounded-lg border border-warning/20 bg-warning/5 px-3 py-2">
+          <p className="text-[11px] text-warning">
+            {emptyCount} analysis(es) returned empty responses — the LLM may have run out of quota or returned no actionable output.
+          </p>
+        </div>
+      )}
 
       {/* Analysis cards */}
       {displayed.map((a) => {
@@ -543,7 +589,17 @@ function AnalysesPanel({ backtestId }: { backtestId: string }) {
                   <Badge variant={a.success ? 'profit' : 'loss'} className="text-[10px]">
                     {a.success ? 'OK' : 'FAIL'}
                   </Badge>
+                  {/* 成功但无 output 也无 tool calls — 可能是额度不足 */}
+                  {a.success && !a.output_response && (!a.tool_calls || a.tool_calls.length === 0) && (
+                    <span className="text-[10px] text-warning">empty response</span>
+                  )}
                 </div>
+                {/* 失败时在折叠状态也显示错误摘要 */}
+                {!a.success && a.error_message && (
+                  <p className="mt-0.5 truncate text-[11px] text-loss">
+                    {a.error_message}
+                  </p>
+                )}
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted">
                   {a.execution_time_seconds != null && (
                     <span className="flex items-center gap-0.5">
@@ -897,6 +953,25 @@ export default function Backtest() {
                 currentDate={selected.current_date}
               />
             </Card>
+          )}
+
+          {/* Error Banner (if failed or has error) */}
+          {(selected.status === 'failed' || selected.error) && (
+            <div className="rounded-xl border border-loss/30 bg-loss/5 px-4 py-3">
+              <div className="flex items-start gap-3">
+                <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-loss" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-loss">
+                    {selected.status === 'failed' ? 'Backtest Failed' : 'Backtest Completed with Errors'}
+                  </p>
+                  {selected.error && (
+                    <p className="mt-1 text-xs leading-relaxed text-loss/80 whitespace-pre-wrap break-all">
+                      {selected.error}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Stats */}
