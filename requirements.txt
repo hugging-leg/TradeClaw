@@ -33,6 +33,9 @@ psycopg[binary,pool]>=3.1.0  # PostgreSQL 驱动 (langgraph-checkpoint-postgres 
 python-jose[cryptography]>=3.3.0
 bcrypt>=4.0.0
 
+# ========== Web Search ==========
+trafilatura>=1.8.0  # 网页正文提取（SearXNG + Trafilatura 替代 Tavily/SerpAPI）
+
 # ========== Scheduling & Async ==========
 apscheduler>=3.10.0
 tenacity>=8.2.0

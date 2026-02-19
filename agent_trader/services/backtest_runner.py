@@ -105,6 +105,9 @@ class BacktestConfig:
     slippage_bps: float = 5.0  # 5 bps = 0.05%
     # 调度：每 N 个交易日执行一次 workflow
     run_interval_days: int = 1
+    # 回测中禁用的 tool 分类（防止 lookahead bias）
+    # 例如 ["web_search"] 禁用网络搜索（会用当前时间搜索历史数据）
+    disabled_tool_categories: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -115,6 +118,7 @@ class BacktestConfig:
             "commission_rate": self.commission_rate,
             "slippage_bps": self.slippage_bps,
             "run_interval_days": self.run_interval_days,
+            "disabled_tool_categories": self.disabled_tool_categories,
         }
 
 
@@ -411,6 +415,23 @@ class BacktestRunner:
 
         # 启用回测模式：策略持仓使用内存后端，不污染实盘 DB
         workflow._backtest_mode = True
+
+        # 按 category 禁用指定 tools（防止 lookahead bias）
+        if config.disabled_tool_categories and hasattr(workflow, 'tool_registry') and workflow.tool_registry:
+            for category in config.disabled_tool_categories:
+                count = workflow.tool_registry.set_category_enabled(category, False)
+                if count > 0:
+                    logger.info(
+                        "Backtest %s: disabled %d tools in category '%s'",
+                        task.id, count, category,
+                    )
+            # 重建 Agent 以应用新的 tool 列表
+            if hasattr(workflow, 'rebuild_agent'):
+                workflow.rebuild_agent()
+                logger.info(
+                    "Backtest %s: agent rebuilt with %d enabled tools",
+                    task.id, len(workflow.tool_registry.get_enabled_tools()),
+                )
 
         # 7. 记录初始 equity
         task.equity_curve.append({

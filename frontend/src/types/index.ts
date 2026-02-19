@@ -350,6 +350,7 @@ export interface BacktestConfig {
   commission_rate: number;
   slippage_bps: number;
   run_interval_days: number;
+  disabled_tool_categories?: string[];
 }
 
 export interface BacktestEquityPoint {

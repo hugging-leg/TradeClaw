@@ -97,6 +97,33 @@ class ToolRegistry:
         entry = self._tools.get(name)
         return entry.enabled if entry else False
 
+    def get_categories(self) -> list[str]:
+        """获取所有已注册的 tool 分类（去重、排序）"""
+        return sorted({entry.category for entry in self._tools.values()})
+
+    def set_category_enabled(self, category: str, enabled: bool) -> int:
+        """
+        批量设置某个 category 下所有 tools 的启用状态。
+
+        Args:
+            category: tool 分类名
+            enabled: 启用/禁用
+
+        Returns:
+            受影响的 tool 数量
+        """
+        count = 0
+        for entry in self._tools.values():
+            if entry.category == category:
+                entry.enabled = enabled
+                count += 1
+        if count > 0:
+            logger.info(
+                "Category '%s' %s (%d tools)",
+                category, "enabled" if enabled else "disabled", count,
+            )
+        return count
+
     def get_metadata(self) -> list[dict]:
         """获取所有 tools 的元数据（供 API 使用）"""
         result = []

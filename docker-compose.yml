@@ -15,6 +15,21 @@ services:
       timeout: 5s
       retries: 5
 
+  searxng:
+    image: searxng/searxng:latest
+    container_name: trading-searxng
+    restart: unless-stopped
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://searxng:8080/
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   trading-agent:
     image: brerudike/trading-agent
     container_name: llm-trading-agent
@@ -26,12 +41,15 @@ services:
       - DATA_DIR=/app/user_data
       - ENVIRONMENT=production
       - POSTGRES_URI=postgresql://${POSTGRES_USER:-trading}:${POSTGRES_PASSWORD:-trading}@postgres:5432/${POSTGRES_DB:-trading_memory}
+      - SEARXNG_BASE_URL=http://searxng:8080
     ports:
       - "8000:8000"
     volumes:
       - ./user_data:/app/user_data
     depends_on:
       postgres:
+        condition: service_healthy
+      searxng:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/api/auth/status"]

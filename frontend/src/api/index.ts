@@ -341,8 +341,19 @@ export async function submitBacktest(config: {
   commission_rate: number;
   slippage_bps: number;
   run_interval_days: number;
+  disabled_tool_categories?: string[];
 }): Promise<BacktestResult> {
   return api.post<BacktestResult>('/backtest', config);
+}
+
+export interface ToolCategoryInfo {
+  category: string;
+  tools: string[];
+  lookahead_risk: boolean;
+}
+
+export async function fetchToolCategories(): Promise<ToolCategoryInfo[]> {
+  return api.get<ToolCategoryInfo[]>('/backtest/tool-categories');
 }
 
 export async function cancelBacktest(taskId: string): Promise<{ success: boolean; message: string }> {

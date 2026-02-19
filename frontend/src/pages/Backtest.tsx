@@ -19,7 +19,9 @@ import {
   cancelBacktest,
   fetchWorkflows,
   exportAnalyses,
+  fetchToolCategories,
 } from '@/api';
+import type { ToolCategoryInfo } from '@/api';
 import type { AnalysisHistory } from '@/types';
 import { useAuthStore } from '@/stores/auth';
 import { formatCurrency, formatPercent, formatDate, formatDateTime } from '@/utils/format';
@@ -99,6 +101,7 @@ interface ConfigFormProps {
     commission_rate: number;
     slippage_bps: number;
     run_interval_days: number;
+    disabled_tool_categories: string[];
   }) => void;
   isSubmitting: boolean;
 }
@@ -112,6 +115,8 @@ function ConfigForm({ workflows, onSubmit, isSubmitting }: ConfigFormProps) {
   const [slippageBps, setSlippageBps] = useState(5.0);
   const [runInterval, setRunInterval] = useState(1);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [toolCategories, setToolCategories] = useState<ToolCategoryInfo[]>([]);
+  const [disabledCategories, setDisabledCategories] = useState<Set<string>>(new Set());
 
   // Set default workflow
   useEffect(() => {
@@ -120,6 +125,32 @@ function ConfigForm({ workflows, onSubmit, isSubmitting }: ConfigFormProps) {
       setWorkflowType(keys[0]);
     }
   }, [workflows, workflowType]);
+
+  // Fetch tool categories
+  useEffect(() => {
+    fetchToolCategories()
+      .then((cats) => {
+        setToolCategories(cats);
+        // Auto-disable categories with lookahead risk
+        const autoDisabled = new Set(
+          cats.filter((c) => c.lookahead_risk).map((c) => c.category)
+        );
+        setDisabledCategories(autoDisabled);
+      })
+      .catch(() => {});
+  }, []);
+
+  const toggleCategory = (category: string) => {
+    setDisabledCategories((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) {
+        next.delete(category);
+      } else {
+        next.add(category);
+      }
+      return next;
+    });
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -131,6 +162,7 @@ function ConfigForm({ workflows, onSubmit, isSubmitting }: ConfigFormProps) {
       commission_rate: commissionRate,
       slippage_bps: slippageBps,
       run_interval_days: runInterval,
+      disabled_tool_categories: Array.from(disabledCategories),
     });
   };
 
@@ -188,51 +220,111 @@ function ConfigForm({ workflows, onSubmit, isSubmitting }: ConfigFormProps) {
         </button>
 
         {showAdvanced && (
-          <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted">
-                Commission Rate
-                <span className="ml-1 text-muted/60">({(commissionRate * 100).toFixed(2)}%)</span>
-              </label>
-              <input
-                type="number"
-                value={commissionRate}
-                onChange={(e) => setCommissionRate(Number(e.target.value))}
-                min={0}
-                max={0.1}
-                step={0.0001}
-                className={inputClass}
-              />
+          <div className="mt-3 space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-muted">
+                  Commission Rate
+                  <span className="ml-1 text-muted/60">({(commissionRate * 100).toFixed(2)}%)</span>
+                </label>
+                <input
+                  type="number"
+                  value={commissionRate}
+                  onChange={(e) => setCommissionRate(Number(e.target.value))}
+                  min={0}
+                  max={0.1}
+                  step={0.0001}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-muted">
+                  Slippage (bps)
+                  <span className="ml-1 text-muted/60">({slippageBps} bps = {(slippageBps / 100).toFixed(3)}%)</span>
+                </label>
+                <input
+                  type="number"
+                  value={slippageBps}
+                  onChange={(e) => setSlippageBps(Number(e.target.value))}
+                  min={0}
+                  max={100}
+                  step={0.5}
+                  className={inputClass}
+                />
+              </div>
+              <div>
+                <label className="mb-1.5 block text-xs font-medium text-muted">
+                  Run Interval (trading days)
+                </label>
+                <input
+                  type="number"
+                  value={runInterval}
+                  onChange={(e) => setRunInterval(Number(e.target.value))}
+                  min={1}
+                  max={30}
+                  step={1}
+                  className={inputClass}
+                />
+              </div>
             </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted">
-                Slippage (bps)
-                <span className="ml-1 text-muted/60">({slippageBps} bps = {(slippageBps / 100).toFixed(3)}%)</span>
-              </label>
-              <input
-                type="number"
-                value={slippageBps}
-                onChange={(e) => setSlippageBps(Number(e.target.value))}
-                min={0}
-                max={100}
-                step={0.5}
-                className={inputClass}
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-xs font-medium text-muted">
-                Run Interval (trading days)
-              </label>
-              <input
-                type="number"
-                value={runInterval}
-                onChange={(e) => setRunInterval(Number(e.target.value))}
-                min={1}
-                max={30}
-                step={1}
-                className={inputClass}
-              />
-            </div>
+
+            {/* Tool Categories — disable specific tool groups during backtest */}
+            {toolCategories.length > 0 && (
+              <div>
+                <label className="mb-2 block text-xs font-medium text-muted">
+                  Agent Tools
+                  <span className="ml-1 text-muted/60">(uncheck to disable during backtest)</span>
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {toolCategories.map((cat) => {
+                    const isDisabled = disabledCategories.has(cat.category);
+                    return (
+                      <button
+                        key={cat.category}
+                        type="button"
+                        onClick={() => toggleCategory(cat.category)}
+                        className={`
+                          inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all
+                          ${isDisabled
+                            ? 'border-border bg-card text-muted line-through opacity-60'
+                            : 'border-accent/30 bg-accent/10 text-accent'
+                          }
+                          hover:opacity-80
+                        `}
+                        title={
+                          cat.tools.length > 0
+                            ? `Tools: ${cat.tools.join(', ')}`
+                            : cat.category
+                        }
+                      >
+                        <span
+                          className={`inline-block h-2 w-2 rounded-full ${
+                            isDisabled ? 'bg-muted/40' : 'bg-accent'
+                          }`}
+                        />
+                        {cat.category}
+                        {cat.tools.length > 0 && (
+                          <span className="text-muted/60">({cat.tools.length})</span>
+                        )}
+                        {cat.lookahead_risk && (
+                          <span
+                            className="ml-0.5 text-[10px] text-warning"
+                            title="This category may cause lookahead bias in backtesting"
+                          >
+                            lookahead
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {disabledCategories.size > 0 && (
+                  <p className="mt-1.5 text-[10px] text-muted/60">
+                    Disabled: {Array.from(disabledCategories).join(', ')}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 

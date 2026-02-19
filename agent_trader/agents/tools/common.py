@@ -12,11 +12,12 @@ from agent_trader.agents.tools.data_tools import create_data_tools
 from agent_trader.agents.tools.analysis_tools import create_analysis_tools
 from agent_trader.agents.tools.system_tools import create_system_tools
 from agent_trader.agents.tools.trading_tools import create_trading_tools
+from agent_trader.agents.tools.web_search_tools import create_web_search_tools
 
 
 def create_common_tools(workflow) -> List[tuple]:
     """
-    创建所有通用 tools（数据 + 分析 + 系统 + 交易）
+    创建所有通用 tools（数据 + 分析 + 系统 + 交易 + Web 搜索）
 
     Args:
         workflow: WorkflowBase 子类实例
@@ -29,4 +30,5 @@ def create_common_tools(workflow) -> List[tuple]:
     tools.extend(create_analysis_tools(workflow))
     tools.extend(create_system_tools(workflow))
     tools.extend(create_trading_tools(workflow))
+    tools.extend(create_web_search_tools(workflow))
     return tools

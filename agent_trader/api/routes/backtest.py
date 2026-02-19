@@ -43,6 +43,10 @@ class BacktestRequest(BaseModel):
     commission_rate: float = Field(0.001, description="Commission rate (0.001 = 0.1%)")
     slippage_bps: float = Field(5.0, description="Slippage in basis points")
     run_interval_days: int = Field(1, description="Run workflow every N trading days")
+    disabled_tool_categories: List[str] = Field(
+        default_factory=list,
+        description="Tool categories to disable during backtest (e.g. ['web_search'] to prevent lookahead bias)",
+    )
 
 
 class BacktestCancelResponse(BaseModel):
@@ -67,6 +71,7 @@ async def submit_backtest(req: BacktestRequest):
         commission_rate=req.commission_rate,
         slippage_bps=req.slippage_bps,
         run_interval_days=req.run_interval_days,
+        disabled_tool_categories=req.disabled_tool_categories,
     )
 
     task_id = await runner.submit(config)
@@ -97,6 +102,47 @@ async def list_backtests():
         pass
 
     return in_memory
+
+
+@router.get("/backtest/tool-categories")
+async def get_tool_categories():
+    """
+    获取所有可用的 tool 分类列表。
+
+    前端在回测配置中展示，让用户选择要禁用的 categories。
+    每个 category 附带 tool 名称列表和 lookahead 风险标记。
+    """
+    from agent_trader.api.deps import get_trading_system
+
+    # 回测中可能导致 lookahead bias 的 category
+    LOOKAHEAD_CATEGORIES = {"web_search"}
+
+    # 尝试从实盘 workflow 获取 registry（最准确）
+    try:
+        ts = get_trading_system()
+        registry = getattr(ts.trading_workflow, "tool_registry", None)
+        if registry:
+            categories: dict = {}
+            for entry in registry.get_all_entries():
+                if entry.category not in categories:
+                    categories[entry.category] = {
+                        "category": entry.category,
+                        "tools": [],
+                        "lookahead_risk": entry.category in LOOKAHEAD_CATEGORIES,
+                    }
+                categories[entry.category]["tools"].append(entry.name)
+            return list(categories.values())
+    except Exception:
+        pass
+
+    # Fallback: 返回已知的 category 列表
+    return [
+        {"category": "data", "tools": [], "lookahead_risk": False},
+        {"category": "analysis", "tools": [], "lookahead_risk": False},
+        {"category": "system", "tools": [], "lookahead_risk": False},
+        {"category": "trading", "tools": [], "lookahead_risk": False},
+        {"category": "web_search", "tools": [], "lookahead_risk": True},
+    ]
 
 
 @router.get("/backtest/{task_id}")

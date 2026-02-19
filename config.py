@@ -39,6 +39,9 @@ class Settings(BaseSettings):
     # Finnhub
     finnhub_api_key: Optional[str] = None
 
+    # SearXNG (自建 Web 搜索引擎)
+    searxng_base_url: Optional[str] = None  # e.g. http://searxng:8080 or http://localhost:8080
+
     # === 提供商配置 ===
     broker_provider: str = "alpaca"
     market_data_provider: str = "tiingo"
