@@ -627,6 +627,9 @@ class WorkflowBase(ABC):
             # 当前 agent 思考步骤（用于 token 流式更新）
             current_thinking_step_id: Optional[str] = None
             accumulated_tokens = ""
+            # 当前 reasoning 步骤（reasoning model 的深度推理过程）
+            current_reasoning_step_id: Optional[str] = None
+            accumulated_reasoning = ""
             # 当前正在等待结果的 tool call step ids
             pending_tool_steps: Dict[str, str] = {}  # tool_call_id -> step_id
 
@@ -641,10 +644,33 @@ class WorkflowBase(ABC):
 
                     # 只处理 LLM node 的输出
                     if node in _model_nodes and isinstance(ai_chunk, AIMessageChunk):
+                        # Reasoning token（reasoning model 的思考过程）
+                        reasoning_text = ai_chunk.additional_kwargs.get("reasoning_content")
+                        if reasoning_text:
+                            # 首次收到 reasoning token，创建 reasoning step
+                            if current_reasoning_step_id is None:
+                                current_reasoning_step_id = self.emit_step(
+                                    "llm_reasoning", "Agent 深度推理中", "running"
+                                )
+                                accumulated_reasoning = ""
+
+                            accumulated_reasoning += reasoning_text
+                            self._emit_token(current_reasoning_step_id, reasoning_text, accumulated_reasoning)
+
                         # 文本 token
                         if ai_chunk.content:
                             token_text = ai_chunk.content if isinstance(ai_chunk.content, str) else ""
                             if token_text:
+                                # 收到正式 content 时，先关闭 reasoning step
+                                if current_reasoning_step_id:
+                                    self.update_step(
+                                        current_reasoning_step_id, "completed",
+                                        output_data=(accumulated_reasoning.strip() or None),
+                                        duration_ms=int((time.monotonic() - t0) * 1000),
+                                    )
+                                    current_reasoning_step_id = None
+                                    accumulated_reasoning = ""
+
                                 # 首次收到 token，创建 thinking step
                                 if current_thinking_step_id is None:
                                     current_thinking_step_id = self.emit_step(
@@ -688,6 +714,16 @@ class WorkflowBase(ABC):
                                 if isinstance(msg, AIMessage):
                                     if msg.content:
                                         final_text = msg.content
+
+                                    # 完成当前 reasoning step（如果还未关闭）
+                                    if current_reasoning_step_id:
+                                        self.update_step(
+                                            current_reasoning_step_id, "completed",
+                                            output_data=(accumulated_reasoning.strip() or None),
+                                            duration_ms=int((time.monotonic() - t0) * 1000),
+                                        )
+                                        current_reasoning_step_id = None
+                                        accumulated_reasoning = ""
 
                                     # 完成当前 thinking step
                                     if current_thinking_step_id:
@@ -760,6 +796,11 @@ class WorkflowBase(ABC):
                                         )
 
             # 关闭本轮 pending steps
+            if current_reasoning_step_id:
+                self.update_step(
+                    current_reasoning_step_id, "completed",
+                    output_data=(accumulated_reasoning.strip() or None),
+                )
             if current_thinking_step_id:
                 self.update_step(current_thinking_step_id, "completed")
             for step_id in pending_tool_steps.values():

@@ -11,7 +11,7 @@ from datetime import timedelta
 from langchain.tools import tool
 
 from agent_trader.utils.logging_config import get_logger
-from agent_trader.utils.timezone import utc_now
+from agent_trader.utils.timezone import utc_now, to_trading_tz
 
 logger = get_logger(__name__)
 
@@ -39,20 +39,34 @@ def _create_get_current_time(wf):
     @tool
     async def get_current_time() -> str:
         """
-        获取当前日期和时间（UTC时间）
+        获取当前日期和时间（含 UTC 和美东时间、星期信息）
 
         Returns:
-            当前日期时间信息
+            当前日期时间信息（UTC、美东时间 ET、星期几）
         """
         try:
             now_utc = utc_now()
+            now_et = to_trading_tz(now_utc)
+
+            # 星期名称映射
+            weekday_names = [
+                "Monday", "Tuesday", "Wednesday", "Thursday",
+                "Friday", "Saturday", "Sunday",
+            ]
+            weekday_name = weekday_names[now_et.weekday()]
+            is_weekend = now_et.weekday() >= 5
 
             result = {
                 "current_time_utc": now_utc.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                "current_time_et": now_et.strftime("%Y-%m-%d %H:%M:%S %Z"),
+                "weekday": weekday_name,
+                "is_weekend": is_weekend,
             }
 
             await wf.message_manager.send_message(
-                f"🕐 当前时间: {result['current_time_utc']}", "info"
+                f"🕐 当前时间: {result['current_time_et']} ({weekday_name})"
+                f" | UTC: {result['current_time_utc']}",
+                "info",
             )
 
             return json.dumps(result, indent=2, ensure_ascii=False)

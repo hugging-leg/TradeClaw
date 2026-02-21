@@ -65,6 +65,7 @@ import {
   Download,
   FileJson,
   ChevronLeft,
+  Sparkles,
 } from 'lucide-react';
 import type {
   TradingDecision,
@@ -89,6 +90,7 @@ const TOOL_CATEGORY_META: Record<string, { label: string; color: string; icon: t
 };
 
 const STEP_TYPE_META: Record<string, { label: string; color: string; icon: typeof Brain }> = {
+  llm_reasoning: { label: 'Reasoning', color: 'text-orange-400', icon: Sparkles },
   llm_thinking: { label: 'Thinking', color: 'text-purple-400', icon: Brain },
   tool_call: { label: 'Tool', color: 'text-blue-400', icon: Wrench },
   decision: { label: 'Decision', color: 'text-emerald-400', icon: Zap },
