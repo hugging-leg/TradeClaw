@@ -55,6 +55,17 @@ export default function Portfolio() {
       value: s.equity!,
     }));
 
+  // Smart Y-axis domain: zoom into actual data range so fluctuations are visible
+  const equityYDomain: [number, number] | undefined = (() => {
+    if (equityData.length === 0) return undefined;
+    const vals = equityData.map((d) => d.value);
+    const minV = Math.min(...vals);
+    const maxV = Math.max(...vals);
+    const range = maxV - minV;
+    const padding = Math.max(range * 0.1, maxV * 0.001);
+    return [Math.floor(minV - padding), Math.ceil(maxV + padding)];
+  })();
+
   const pnlData = snapshots
     .filter((s) => s.profit_loss != null)
     .map((s) => ({
@@ -145,7 +156,7 @@ export default function Portfolio() {
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e1e2e" />
                   <XAxis dataKey="date" tick={{ fontSize: 11, fill: '#71717a' }} axisLine={{ stroke: '#1e1e2e' }} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: '#71717a' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
+                  <YAxis domain={equityYDomain} tick={{ fontSize: 11, fill: '#71717a' }} axisLine={false} tickLine={false} tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
                   <Tooltip
                     contentStyle={{ backgroundColor: '#12121a', border: '1px solid #2a2a3e', borderRadius: '8px', fontSize: '12px', color: '#f0f0f5' }}
                     labelStyle={{ color: '#a0a0b0' }}
