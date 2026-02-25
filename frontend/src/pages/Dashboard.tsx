@@ -68,6 +68,17 @@ export default function Dashboard() {
       value: s.equity!,
     }));
 
+  // Smart Y-axis domain: zoom into actual data range so fluctuations are visible
+  const chartYDomain: [number, number] | undefined = (() => {
+    if (chartData.length === 0) return undefined;
+    const vals = chartData.map((d) => d.value);
+    const minV = Math.min(...vals);
+    const maxV = Math.max(...vals);
+    const range = maxV - minV;
+    const padding = Math.max(range * 0.1, maxV * 0.001);
+    return [Math.floor(minV - padding), Math.ceil(maxV + padding)];
+  })();
+
   const pieData = portfolio.positions.map((p) => ({
     name: p.symbol,
     value: p.market_value,
@@ -151,6 +162,7 @@ export default function Dashboard() {
                     tickLine={false}
                   />
                   <YAxis
+                    domain={chartYDomain}
                     tick={{ fontSize: 11, fill: '#71717a' }}
                     axisLine={false}
                     tickLine={false}
