@@ -1,92 +1,92 @@
-# SearXNG 配置 — Agent-Trader 专用
-# 文档: https://docs.searxng.org/admin/settings/
+# SearXNG Configuration — TradeClaw
+# Docs: https://docs.searxng.org/admin/settings/
 
 use_default_settings: true
 
 server:
-  # 监听地址（容器内）
+  # Listen address (inside container)
   bind_address: "0.0.0.0"
   port: 8080
   secret_key: "agent-trader-1145141919810"
-  # 关闭 limiter（内部服务，不对外暴露）
+  # Disable limiter (internal service, not exposed publicly)
   limiter: false
 
 search:
-  # 安全搜索关闭（金融新闻不需要过滤）
+  # Safe search off (financial news doesn't need filtering)
   safe_search: 0
-  # 默认语言
+  # Default language
   default_lang: "en"
-  # 搜索格式
+  # Output formats
   formats:
     - html
     - json
 
-# JSON API 输出配置
+# JSON API output settings
 general:
-  # 关闭调试模式
+  # Disable debug mode
   debug: false
 
-# 启用的搜索引擎
+# Enabled search engines
 engines:
-  # Google — 主搜索引擎
+  # Google — primary search engine
   - name: google
     engine: google
     shortcut: g
     disabled: false
 
-  # Bing — 备用
+  # Bing — fallback
   - name: bing
     engine: bing
     shortcut: b
     disabled: false
 
-  # DuckDuckGo — 备用
+  # DuckDuckGo — fallback
   - name: duckduckgo
     engine: duckduckgo
     shortcut: ddg
     disabled: false
 
-  # Google News — 新闻专用
+  # Google News — news-specific
   - name: google news
     engine: google_news
     shortcut: gn
     disabled: false
 
-  # Bing News — 新闻备用
+  # Bing News — news fallback
   - name: bing news
     engine: bing_news
     shortcut: bn
     disabled: false
 
-  # Yahoo Finance — 财经搜索
+  # Yahoo Finance — financial search
   - name: yahoo news
     engine: yahoo_news
     shortcut: yn
     disabled: false
 
-  # Wikipedia — 背景知识
+  # Wikipedia — background knowledge
   - name: wikipedia
     engine: wikipedia
     shortcut: wp
     disabled: false
 
-# 禁用不需要的引擎类别
+# Category tabs
 categories_as_tabs:
   general:
   news:
   science:
 
-# 出站请求设置
+# Outgoing request settings
 outgoing:
-  # 请求超时
+  # Request timeout
   request_timeout: 5.0
-  # 最大请求并发数
+  # Max concurrent requests
   pool_maxsize: 20
-  # User-Agent
-  useragent_suffix: "AgentTrader/1.0"
+  # User-Agent suffix
+  useragent_suffix: "TradeClaw/1.0"
 
-# UI 设置（内部使用，不太重要）
+# UI settings (internal use, not critical)
 ui:
-  # 关闭静态文件压缩（减少 CPU 开销）
+  # Enable static file hashing (reduce CPU overhead)
   static_use_hash: true
   default_theme: simple
