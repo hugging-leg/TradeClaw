@@ -30,6 +30,9 @@ _READABLE_FIELDS = [
     # Monitoring
     "price_change_threshold", "volatility_threshold",
     "rebalance_cooldown_seconds", "market_etfs",
+    # News
+    "news_poll_interval_minutes", "news_poll_max_per_batch",
+    "news_importance_threshold",
     # Providers
     "broker_provider", "market_data_provider", "realtime_data_provider",
     "news_providers", "message_provider",
@@ -100,6 +103,10 @@ class SettingsUpdate(BaseModel):
     volatility_threshold: Optional[float] = None
     rebalance_cooldown_seconds: Optional[int] = None
     market_etfs: Optional[str] = None
+    # News
+    news_poll_interval_minutes: Optional[int] = None
+    news_poll_max_per_batch: Optional[int] = None
+    news_importance_threshold: Optional[int] = None
     # Providers
     broker_provider: Optional[str] = None
     market_data_provider: Optional[str] = None

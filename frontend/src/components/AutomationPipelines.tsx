@@ -216,6 +216,7 @@ export default function AutomationPipelines({ settings, onUpdateSetting }: Autom
 
   const newsInterval = (settings.news_poll_interval_minutes as number) ?? 5;
   const newsMaxBatch = (settings.news_poll_max_per_batch as number) ?? 20;
+  const newsThreshold = (settings.news_importance_threshold as number) ?? 7;
   const priceThreshold = (settings.price_change_threshold as number) ?? 5.0;
   const volatilityThreshold = (settings.volatility_threshold as number) ?? 8.0;
   const cooldown = (settings.rebalance_cooldown_seconds as number) ?? 3600;
@@ -257,15 +258,15 @@ export default function AutomationPipelines({ settings, onUpdateSetting }: Autom
           <Arrow />
           <PipelineStep
             icon={Brain}
-            label="LLM Importance Filter"
-            description="Evaluate relevance & urgency"
+            label="LLM Scoring (0-10)"
+            description={`Trigger threshold ≥ ${newsThreshold}`}
             status={newsStatus?.evaluator_available ? 'active' : newsEnabled ? 'error' : 'inactive'}
           />
           <Arrow />
           <PipelineStep
             icon={Zap}
-            label="Trigger Workflow"
-            description="Run trading agent analysis"
+            label="Aggregate & Trigger"
+            description="Batch important news → 1 workflow"
             status={newsEnabled ? 'active' : 'inactive'}
           />
         </div>
@@ -303,6 +304,12 @@ export default function AutomationPipelines({ settings, onUpdateSetting }: Autom
             label="Max News per Batch"
             value={newsMaxBatch}
             onChange={(v) => onUpdateSetting('news_poll_max_per_batch', v)}
+          />
+          <InlineSetting
+            label="Importance Threshold"
+            value={newsThreshold}
+            suffix="/ 10"
+            onChange={(v) => onUpdateSetting('news_importance_threshold', Math.max(0, Math.min(10, Math.round(v))))}
           />
         </div>
 
@@ -415,7 +422,7 @@ export default function AutomationPipelines({ settings, onUpdateSetting }: Autom
         <h4 className="text-xs font-semibold text-zinc-400 mb-2">How Automation Works</h4>
         <div className="space-y-2 text-xs text-zinc-500">
           <p>
-            <strong className="text-zinc-400">News Pipeline:</strong> An APScheduler job fetches news from configured REST APIs at the set interval. Each article is deduplicated by URL/title hash, then evaluated by a lightweight LLM for market relevance. Important news triggers the main trading workflow with full context.
+            <strong className="text-zinc-400">News Pipeline:</strong> An APScheduler job fetches news from configured REST APIs at the set interval. Each article is deduplicated by URL/title hash, then scored 0-10 by a lightweight LLM. Articles scoring ≥ the importance threshold are collected and <em>aggregated into a single workflow trigger</em>, avoiding redundant executions.
           </p>
           <p>
             <strong className="text-zinc-400">Price Pipeline:</strong> When a WebSocket realtime provider is configured, the system subscribes to trade data for held positions and market ETFs. Price changes exceeding the threshold trigger the trading workflow. A cooldown prevents excessive triggers.

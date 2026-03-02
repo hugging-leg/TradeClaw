@@ -59,42 +59,33 @@ class NewsImportanceEvaluator:
     """
     新闻重要性评估器
 
-    使用 LLM 评估新闻是否足够重要以触发交易决策
-    每条新闻只分析一次，不依赖当前持仓
+    使用 LLM 对新闻进行 0-10 重要性打分。
+    调用方根据可配置的阈值（news_importance_threshold）决定是否触发 workflow。
+    每条新闻只分析一次，不依赖当前持仓。
     """
 
-    PROMPT_TEMPLATE = """你是一个金融新闻分析师。请评估以下新闻的投资重要性。
+    PROMPT_TEMPLATE = """You are a financial news analyst. Score the following news article on a scale of 0-10 for investment importance.
 
-新闻标题: {headline}
-新闻摘要: {summary}
-来源: {source}
-相关标的: {symbols}
+Headline: {headline}
+Summary: {summary}
+Source: {source}
+Related symbols: {symbols}
 
-请评估这条新闻是否重要到需要立即触发投资组合分析。
+**Scoring guide:**
+- **9-10**: Market-moving events (FOMC rate decision, major earnings shock, bankruptcy, M&A of large-cap)
+- **7-8**: Significant events (CEO resignation, FDA ruling, major lawsuit, sector-wide policy change)
+- **5-6**: Moderate events (analyst upgrade/downgrade on major stock, notable product launch, supply chain disruption)
+- **3-4**: Minor events (routine earnings in-line, general market commentary, minor partnership)
+- **0-2**: Noise (opinion pieces, rehashed news, clickbait, routine daily summary)
 
-**重要新闻标准**（应触发分析）：
-- 重大财务事件（财报大幅超预期/不及预期、破产、债务违约）
-- 高层变动（CEO/CFO 辞职、重大人事地震）
-- 监管/法律冲击（FDA 拒批、重大诉讼裁决、反垄断调查）
-- 战略变化（重大收购/分拆、核心业务剥离、战略转型）
-- 突发事件（自然灾害影响供应链、网络安全事件）
-
-**普通新闻**（不触发）：
-- 分析师评级调整、目标价更新
-- 日常市场评论、行业趋势报道
-- 例行财报（符合预期）
-- 一般产品发布、合作公告
-
-请用 JSON 格式回复:
+Respond in JSON only:
 {{
-    "is_important": true/false,
-    "reason": "一句话说明判断依据",
+    "score": <integer 0-10>,
+    "reason": "one sentence explaining the score",
     "urgency": "high/medium/low",
-    "affected_symbols": ["相关股票代码列表"],
+    "affected_symbols": ["list of relevant tickers"],
     "action_suggestion": "buy/sell/hold/analyze"
-}}
-
-只返回 JSON，不要其他内容。"""
+}}"""
 
     def __init__(self):
         self.llm = None
@@ -114,7 +105,8 @@ class NewsImportanceEvaluator:
 
         Returns:
             {
-                "is_important": bool,
+                "score": int (0-10),
+                "is_important": bool (score >= threshold),
                 "reason": str,
                 "urgency": str,
                 "affected_symbols": List[str],
@@ -124,6 +116,7 @@ class NewsImportanceEvaluator:
         if not self.llm:
             logger.warning("LLM 未初始化，跳过新闻评估")
             return {
+                "score": 0,
                 "is_important": False,
                 "reason": "LLM unavailable",
                 "urgency": "low",
@@ -133,11 +126,11 @@ class NewsImportanceEvaluator:
 
         try:
             # 处理 symbols（可能是单个或列表）
-            symbols = news.symbol if isinstance(news.symbol, str) else ", ".join(news.symbol) if news.symbol else "未知"
+            symbols = news.symbol if isinstance(news.symbol, str) else ", ".join(news.symbol) if news.symbol else "N/A"
 
             prompt = self.PROMPT_TEMPLATE.format(
                 headline=news.headline,
-                summary=news.summary[:500] if news.summary else "无摘要",
+                summary=news.summary[:500] if news.summary else "No summary",
                 source=news.source,
                 symbols=symbols
             )
@@ -157,16 +150,31 @@ class NewsImportanceEvaluator:
 
             result = json.loads(response)
 
+            # 确保 score 字段存在且合法
+            score = int(result.get("score", 0))
+            score = max(0, min(10, score))
+            result["score"] = score
+
+            # 根据阈值判断 is_important（向后兼容）
+            threshold = getattr(settings, "news_importance_threshold", 7)
+            result["is_important"] = score >= threshold
+
             # 确保必要字段存在
             result.setdefault("affected_symbols", [news.symbol] if news.symbol else [])
             result.setdefault("action_suggestion", "analyze")
+            result.setdefault("urgency", "high" if score >= 9 else "medium" if score >= 6 else "low")
 
-            logger.info(f"新闻评估: {news.headline[:50]}... → {result.get('is_important')}, {result.get('urgency')}")
+            logger.info(
+                "新闻评估: %s... → score=%d/%d (threshold=%d) %s",
+                news.headline[:50], score, 10, threshold,
+                "✓ IMPORTANT" if result["is_important"] else "✗ skip",
+            )
             return result
 
         except Exception as e:
             logger.error(f"评估新闻重要性失败: {e}")
             return {
+                "score": 0,
                 "is_important": False,
                 "reason": f"Error: {e}",
                 "urgency": "low",
@@ -352,8 +360,8 @@ class RealtimeMarketMonitor:
         """
         处理新闻数据
 
-        每条新闻只调用一次 LLM 评估，不限于持仓股票
-        重要新闻触发 agent workflow，由 agent 决定如何处理
+        每条新闻只调用一次 LLM 评估（0-10 打分），不限于持仓股票。
+        score >= news_importance_threshold 的新闻触发 agent workflow。
         """
         try:
             logger.debug(f"收到新闻: {news.headline[:50]}...")
@@ -362,7 +370,6 @@ class RealtimeMarketMonitor:
             evaluation = await self.news_evaluator.evaluate(news)
 
             if evaluation.get("is_important"):
-                # 发布事件，由事件系统处理冷却/合流
                 await self._publish_event(
                     trigger="breaking_news",
                     context={
@@ -375,6 +382,7 @@ class RealtimeMarketMonitor:
                             "published_at": news.timestamp.isoformat() if news.timestamp else None
                         },
                         "evaluation": {
+                            "score": evaluation.get("score", 0),
                             "is_important": evaluation.get("is_important"),
                             "reason": evaluation.get("reason"),
                             "urgency": evaluation.get("urgency"),
@@ -384,7 +392,10 @@ class RealtimeMarketMonitor:
                     }
                 )
             else:
-                logger.debug(f"新闻不重要，跳过: {evaluation.get('reason')}")
+                logger.debug(
+                    "新闻评分不足，跳过: score=%d, reason=%s",
+                    evaluation.get("score", 0), evaluation.get("reason"),
+                )
 
         except Exception as e:
             logger.error(f"处理新闻数据时出错: {e}")

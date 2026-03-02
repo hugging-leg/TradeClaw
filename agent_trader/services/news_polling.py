@@ -115,6 +115,12 @@ class NewsPollingService:
         """
         执行一次新闻轮询。
 
+        流程：
+        1. REST API 拉取新闻
+        2. seen_hashes 去重
+        3. LLM 逐条评估（0-10 打分）
+        4. 所有重要新闻**聚合**后，只触发**一次** workflow
+
         Returns:
             轮询结果摘要
         """
@@ -122,7 +128,7 @@ class NewsPollingService:
         self.stats["total_polls"] += 1
         self.stats["last_poll"] = utc_now().isoformat()
 
-        result = {
+        result: Dict[str, Any] = {
             "fetched": 0,
             "new": 0,
             "important": 0,
@@ -163,14 +169,15 @@ class NewsPollingService:
 
         logger.info("News poll: %d fetched, %d new", result["fetched"], result["new"])
 
-        # 3. LLM 评估每条新闻
+        # 3. LLM 评估每条新闻（先全部评估，收集重要新闻）
         if not self._evaluator or not self._evaluator.llm:
             logger.warning("News evaluator LLM not available, skipping evaluation")
             return result
 
+        important_items: List[Dict[str, Any]] = []
+
         for item in new_items:
             try:
-                # 转换为 RealtimeNews 格式（NewsImportanceEvaluator 的输入）
                 rt_news = RealtimeNews(
                     id=_news_hash(item),
                     headline=item.title,
@@ -186,62 +193,83 @@ class NewsPollingService:
                 if evaluation.get("is_important"):
                     result["important"] += 1
                     self.stats["total_important"] += 1
-
-                    # 4. 触发 workflow 分析
-                    await self._trigger_analysis(item, evaluation)
-                    result["triggered"] += 1
-                    self.stats["total_triggers"] += 1
+                    important_items.append({
+                        "news": {
+                            "headline": item.title,
+                            "summary": item.description or "",
+                            "source": item.source,
+                            "url": item.url,
+                            "symbols": item.symbols,
+                            "published_at": (
+                                item.published_at.isoformat()
+                                if item.published_at
+                                else None
+                            ),
+                        },
+                        "evaluation": {
+                            "score": evaluation.get("score", 0),
+                            "is_important": True,
+                            "reason": evaluation.get("reason"),
+                            "urgency": evaluation.get("urgency"),
+                            "affected_symbols": evaluation.get("affected_symbols", []),
+                            "action_suggestion": evaluation.get("action_suggestion"),
+                        },
+                    })
 
             except Exception as e:
                 logger.error("Error evaluating news '%s': %s", item.title[:50], e)
                 result["errors"].append(f"Eval error: {e}")
 
+        # 4. 聚合触发：所有重要新闻合并为一次 workflow 调用
+        if important_items:
+            await self._trigger_aggregated(important_items)
+            result["triggered"] = 1
+            self.stats["total_triggers"] += 1
+
         logger.info(
-            "News poll complete: %d new, %d important, %d triggered",
+            "News poll complete: %d new, %d important, triggered=%s",
             result["new"],
             result["important"],
-            result["triggered"],
+            "yes" if important_items else "no",
         )
         return result
 
-    async def _trigger_analysis(
+    async def _trigger_aggregated(
         self,
-        item: NewsItem,
-        evaluation: Dict[str, Any],
-    ):
-        """触发 workflow 分析"""
+        items: List[Dict[str, Any]],
+    ) -> None:
+        """将多条重要新闻聚合为一次 workflow 触发"""
         if not self.trading_system:
             logger.warning("TradingSystem not available, cannot trigger analysis")
             return
 
-        context = {
-            "news": {
-                "headline": item.title,
-                "summary": item.description or "",
-                "source": item.source,
-                "url": item.url,
-                "symbols": item.symbols,
-                "published_at": (
-                    item.published_at.isoformat()
-                    if item.published_at
-                    else None
-                ),
-            },
-            "evaluation": {
-                "is_important": evaluation.get("is_important"),
-                "reason": evaluation.get("reason"),
-                "urgency": evaluation.get("urgency"),
-                "affected_symbols": evaluation.get("affected_symbols", []),
-                "action_suggestion": evaluation.get("action_suggestion"),
-            },
-        }
+        # 按 score 降序排列，最重要的在前
+        items.sort(key=lambda x: x["evaluation"].get("score", 0), reverse=True)
+
+        if len(items) == 1:
+            # 单条新闻：保持简洁的 context 结构
+            context = items[0]
+        else:
+            # 多条新闻：聚合
+            context = {
+                "important_news_count": len(items),
+                "news_items": items,
+                "top_headline": items[0]["news"]["headline"],
+                "max_score": items[0]["evaluation"].get("score", 0),
+            }
 
         try:
             await self.trading_system.trigger_workflow(
                 trigger="polling_news",
                 context=context,
             )
-            logger.info("Triggered workflow for news: %s", item.title[:60])
+            headlines = [it["news"]["headline"][:40] for it in items[:3]]
+            logger.info(
+                "Triggered workflow for %d important news: %s%s",
+                len(items),
+                ", ".join(headlines),
+                "..." if len(items) > 3 else "",
+            )
         except Exception as e:
             logger.error("Failed to trigger workflow: %s", e)
 

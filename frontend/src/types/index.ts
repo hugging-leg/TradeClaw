@@ -302,6 +302,10 @@ export interface TradingSettings {
   scheduler_misfire_grace_time: number;
   max_pending_llm_jobs: number;
   message_rate_limit: number;
+  // News
+  news_poll_interval_minutes: number;
+  news_poll_max_per_batch: number;
+  news_importance_threshold: number;
   // Monitoring
   price_change_threshold: number;
   volatility_threshold: number;

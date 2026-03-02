@@ -662,6 +662,9 @@ export const mockSettings: TradingSettings = {
   max_pending_llm_jobs: 5,
   message_rate_limit: 1.0,
   // Monitoring
+  news_poll_interval_minutes: 5,
+  news_poll_max_per_batch: 20,
+  news_importance_threshold: 7,
   price_change_threshold: 5.0,
   volatility_threshold: 8.0,
   rebalance_cooldown_seconds: 3600,

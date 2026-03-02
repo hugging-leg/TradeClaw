@@ -147,6 +147,15 @@ class TestConfigurationDefaults:
         assert isinstance(settings.news_poll_max_per_batch, int)
         assert settings.news_poll_max_per_batch > 0
 
+    def test_news_importance_threshold(self):
+        """Test news importance threshold default and range"""
+        from config import settings
+        
+        assert hasattr(settings, 'news_importance_threshold')
+        assert isinstance(settings.news_importance_threshold, int)
+        assert 0 <= settings.news_importance_threshold <= 10
+        assert settings.news_importance_threshold == 7  # default
+
 
 class TestConfigurationValidation:
     """Test suite for configuration validation"""

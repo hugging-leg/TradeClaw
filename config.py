@@ -111,6 +111,7 @@ class Settings(BaseSettings):
     # === 新闻轮询配置 ===
     news_poll_interval_minutes: int = 5  # 新闻轮询间隔（分钟），0 = 禁用
     news_poll_max_per_batch: int = 20  # 每次轮询最大新闻条数
+    news_importance_threshold: int = 7  # 新闻重要性阈值（0-10），≥ 此值触发 workflow
 
     # === LLM Agent 配置 ===
     llm_recursion_limit: int = 64
