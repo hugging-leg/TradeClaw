@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Lobster / Claw emoji - TradeClaw favicon -->
+  <!-- Body -->
+  <ellipse cx="64" cy="72" rx="22" ry="28" fill="#E53935" />
+  <ellipse cx="64" cy="72" rx="18" ry="24" fill="#EF5350" />
+  <!-- Tail segments -->
+  <ellipse cx="64" cy="102" rx="14" ry="8" fill="#C62828" />
+  <ellipse cx="64" cy="112" rx="10" ry="6" fill="#C62828" />
+  <path d="M54 116 Q64 128 74 116" fill="#E53935" stroke="#C62828" stroke-width="1"/>
+  <!-- Left claw arm -->
+  <path d="M42 64 Q28 52 20 44" stroke="#E53935" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <!-- Left claw -->
+  <path d="M20 44 Q10 34 8 28 Q12 30 18 36" fill="#EF5350" stroke="#C62828" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M20 44 Q16 32 18 26 Q20 30 22 36" fill="#EF5350" stroke="#C62828" stroke-width="2" stroke-linejoin="round"/>
+  <!-- Right claw arm -->
+  <path d="M86 64 Q100 52 108 44" stroke="#E53935" stroke-width="8" stroke-linecap="round" fill="none"/>
+  <!-- Right claw -->
+  <path d="M108 44 Q118 34 120 28 Q116 30 110 36" fill="#EF5350" stroke="#C62828" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M108 44 Q112 32 110 26 Q108 30 106 36" fill="#EF5350" stroke="#C62828" stroke-width="2" stroke-linejoin="round"/>
+  <!-- Eyes -->
+  <circle cx="54" cy="54" r="5" fill="white"/>
+  <circle cx="74" cy="54" r="5" fill="white"/>
+  <circle cx="55" cy="53" r="2.5" fill="#1a1a2e"/>
+  <circle cx="75" cy="53" r="2.5" fill="#1a1a2e"/>
+  <!-- Antennae -->
+  <path d="M56 48 Q48 28 36 18" stroke="#E53935" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <path d="M72 48 Q80 28 92 18" stroke="#E53935" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+  <!-- Legs (small) -->
+  <line x1="48" y1="78" x2="36" y2="86" stroke="#C62828" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="46" y1="84" x2="34" y2="92" stroke="#C62828" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="80" y1="78" x2="92" y2="86" stroke="#C62828" stroke-width="2.5" stroke-linecap="round"/>
+  <line x1="82" y1="84" x2="94" y2="92" stroke="#C62828" stroke-width="2.5" stroke-linecap="round"/>
+  <!-- Body segments (subtle lines) -->
+  <line x1="48" y1="66" x2="80" y2="66" stroke="#D32F2F" stroke-width="0.8" opacity="0.5"/>
+  <line x1="46" y1="74" x2="82" y2="74" stroke="#D32F2F" stroke-width="0.8" opacity="0.5"/>
+  <line x1="48" y1="82" x2="80" y2="82" stroke="#D32F2F" stroke-width="0.8" opacity="0.5"/>
+</svg>

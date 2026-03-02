@@ -1,10 +1,16 @@
-# TradeClaw — LLM Agent 交易系统
+<p align="center">
+  <img src="assets/images/tradeclaw.png" alt="TradeClaw" width="480" />
+</p>
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](license.txt)
+<h1 align="center">TradeClaw — LLM Agent 交易系统</h1>
 
-AI 驱动的自主交易系统，支持美股和 ETF 交易。
+<p align="center">
+  <a href="license.txt"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
+</p>
 
-> 🇬🇧 [English](README.md)
+<p align="center">AI 驱动的自主交易系统，支持美股和 ETF 交易。</p>
+
+<p align="center">🇬🇧 <a href="README.md">English</a></p>
 
 ## 核心特性
 

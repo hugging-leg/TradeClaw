@@ -1,10 +1,16 @@
-# TradeClaw — LLM Agent Trading System
+<p align="center">
+  <img src="assets/images/tradeclaw.png" alt="TradeClaw" width="480" />
+</p>
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](license.txt)
+<h1 align="center">TradeClaw — LLM Agent Trading System</h1>
 
-AI-powered autonomous trading system for US equities and ETFs.
+<p align="center">
+  <a href="license.txt"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" /></a>
+</p>
 
-> 🇨🇳 [中文文档](README_CN.md)
+<p align="center">AI-powered autonomous trading system for US equities and ETFs.</p>
+
+<p align="center">🇨🇳 <a href="README_CN.md">中文文档</a></p>
 
 ## Highlights
 
