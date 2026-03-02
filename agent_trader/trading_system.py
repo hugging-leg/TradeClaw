@@ -337,6 +337,20 @@ class TradingSystem(SchedulerMixin):
         """
         return self.trading_workflow.update_config(updates)
 
+    def rebuild_workflow_llm(self) -> None:
+        """
+        Rebuild the current workflow's LLM client from the latest llm_config.yaml.
+
+        Called after LLM provider/API key changes via Settings page so the
+        running agent picks up the new credentials without a full restart.
+        """
+        if self.trading_workflow is None:
+            return
+        rebuild = getattr(self.trading_workflow, "rebuild_llm_client", None)
+        if rebuild:
+            rebuild()
+            logger.info("Workflow LLM client rebuilt after config change")
+
     async def switch_workflow(self, workflow_type: str) -> Dict[str, Any]:
         """
         切换到不同的 workflow 类型。

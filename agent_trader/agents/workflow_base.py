@@ -496,6 +496,25 @@ class WorkflowBase(ABC):
         )
         logger.info(f"Agent rebuilt with {len(self.tools)} tools")
 
+    def rebuild_llm_client(self) -> None:
+        """
+        Unconditionally rebuild the LLM client from the latest llm_config.yaml.
+
+        Called when LLM provider/API key settings are changed externally
+        (e.g. via Settings page), so the running workflow picks up the new credentials.
+        """
+        from agent_trader.utils.llm_utils import create_llm_client
+
+        model_name = self._config.get("llm_model", "")
+        if model_name:
+            self.llm = create_llm_client(model_name=model_name)
+        else:
+            self.llm = create_llm_client(role="agent")
+        logger.info("LLM client rebuilt from latest config (model: %s)", model_name or "(role: agent)")
+
+        # Also rebuild agent to use the new LLM instance
+        self.rebuild_agent()
+
     # ========== 流式 Agent 执行 ==========
 
     @property
@@ -1128,11 +1147,11 @@ class WorkflowBase(ABC):
         # 2. LLM model 选择（引用 llm_config.yaml 中的 model id）
         if "llm_model" in updates:
             new_model_name = str(updates["llm_model"]).strip()
-            old_model_name = self._config.get("llm_model", "")
-            if new_model_name and new_model_name != old_model_name:
-                self._config["llm_model"] = new_model_name
-                need_llm_rebuild = True
-                logger.info(f"Agent LLM model updated: {new_model_name}")
+            self._config["llm_model"] = new_model_name
+            # Always rebuild — even if model name is unchanged, the underlying
+            # provider config (API key, base_url) may have been updated.
+            need_llm_rebuild = True
+            logger.info(f"Agent LLM model set: {new_model_name}")
 
         if need_llm_rebuild and self.llm is not None:
             from agent_trader.utils.llm_utils import create_llm_client

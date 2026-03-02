@@ -6,15 +6,23 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 
-from agent_trader.config.llm_config import (
-    LLMConfigFile,
-    get_llm_config_manager,
-)
+from agent_trader.api.deps import get_trading_system
+from agent_trader.config.llm_config import get_llm_config_manager
 from agent_trader.utils.logging_config import get_logger
 
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+def _notify_workflow_llm_changed() -> None:
+    """Notify the running workflow that LLM config has changed."""
+    try:
+        ts = get_trading_system()
+        ts.rebuild_workflow_llm()
+    except Exception as e:
+        # TradingSystem may not be initialized yet (e.g. during startup)
+        logger.debug("Could not notify workflow of LLM config change: %s", e)
 
 
 # ========== Providers ==========
@@ -53,6 +61,9 @@ async def update_providers(body: UpdateProvidersRequest):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid config: {e}")
 
+    # Rebuild the running workflow's LLM client so new API keys take effect immediately
+    _notify_workflow_llm_changed()
+
     return {
         "providers": mgr.get_providers_sanitized(),
         "models": mgr.get_all_model_names(),
@@ -79,6 +90,10 @@ async def update_roles(body: UpdateRolesRequest):
     """更新角色绑定（持久化到 YAML）"""
     mgr = get_llm_config_manager()
     result = mgr.update_roles(body.roles)
+
+    # Role binding change may point to a different model — rebuild LLM client
+    _notify_workflow_llm_changed()
+
     return result
 
 
