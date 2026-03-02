@@ -472,8 +472,12 @@ class RiskManager:
         """检查日内损失限制"""
         if portfolio.equity <= 0:
             return
+        # Portfolio-level cooldown uses a synthetic symbol "__portfolio__"
+        if not self._is_cooled_down(rule, "__portfolio__"):
+            return
         daily_loss_pct = float(portfolio.day_pnl / portfolio.equity)
         if daily_loss_pct <= -rule.threshold:
+            self._mark_triggered(rule, "__portfolio__")
             results["daily_limit_breached"] = True
             logger.critical(
                 "日内损失限制突破 (%s)! 亏损: %.2f%%",

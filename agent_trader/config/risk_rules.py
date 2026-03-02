@@ -127,6 +127,7 @@ def _default_rules() -> List[RiskRule]:
             priority=50,
             threshold=0.03,
             action=RuleAction.LLM_ANALYZE,
+            cooldown_seconds=21600,  # 6 hours — avoid repeated LLM triggers for the same position
             description="Trigger LLM analysis when loss exceeds 3%",
         ),
         RiskRule(
@@ -136,6 +137,7 @@ def _default_rules() -> List[RiskRule]:
             priority=50,
             threshold=0.10,
             action=RuleAction.LLM_ANALYZE,
+            cooldown_seconds=21600,  # 6 hours
             description="Trigger LLM analysis when profit exceeds 10%",
         ),
         RiskRule(
@@ -145,6 +147,7 @@ def _default_rules() -> List[RiskRule]:
             priority=5,
             threshold=0.10,
             action=RuleAction.ALERT,
+            cooldown_seconds=21600,  # 6 hours
             description="Alert when daily portfolio loss exceeds 10%",
         ),
         RiskRule(
@@ -154,6 +157,7 @@ def _default_rules() -> List[RiskRule]:
             priority=80,
             threshold=0.25,
             action=RuleAction.ALERT,
+            cooldown_seconds=21600,  # 6 hours
             description="Alert when single position weight exceeds 25%",
         ),
     ]
