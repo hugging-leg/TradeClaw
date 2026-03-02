@@ -28,7 +28,7 @@ def run_tests():
     # Check if coverage is requested
     if "--coverage" in sys.argv:
         cmd.extend([
-            "--cov=src",
+            "--cov=agent_trader",
             "--cov-report=html",
             "--cov-report=term-missing",
             "--cov-report=xml",

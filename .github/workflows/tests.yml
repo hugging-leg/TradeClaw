@@ -102,5 +102,5 @@ jobs:
 
     - name: Run mypy
       run: |
-        mypy src/ --ignore-missing-imports
+        mypy agent_trader/ --ignore-missing-imports
       continue-on-error: true 

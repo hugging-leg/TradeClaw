@@ -16,7 +16,6 @@ import {
   fetchLLMProviders,
   updateLLMProviders,
   fetchLLMRoles,
-  updateLLMRoles,
   testLLMModel,
 } from '@/api';
 import type { LLMProvider, LLMModel, LLMRoles, LLMModelRef } from '@/types';
@@ -34,7 +33,6 @@ import {
   ChevronRight,
   Loader2,
 } from 'lucide-react';
-import { cn } from '@/utils/cn';
 
 // ========== Provider Editor ==========
 
