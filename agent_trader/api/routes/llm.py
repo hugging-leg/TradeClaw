@@ -49,6 +49,20 @@ async def update_providers(body: UpdateProvidersRequest):
     mgr = get_llm_config_manager()
     current = mgr.get_config()
 
+    # Restore masked API keys: the frontend receives sanitized keys (e.g. "sk-a****xyz").
+    # If the user didn't change a key, it comes back still masked.  We must replace
+    # masked keys with the real values from the current config to avoid overwriting
+    # real keys with masked strings.
+    current_keys: Dict[str, str] = {
+        p.id: p.api_key for p in current.providers
+    }
+    for provider_data in body.providers:
+        incoming_key = provider_data.get("api_key", "")
+        provider_id = provider_data.get("id", "")
+        if "*" in incoming_key and provider_id in current_keys:
+            # Key was not changed by the user — restore the real key
+            provider_data["api_key"] = current_keys[provider_id]
+
     # 构建新配置
     data: Dict[str, Any] = {"providers": body.providers}
     if body.roles is not None:
