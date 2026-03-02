@@ -197,12 +197,15 @@ class RealtimeMarketMonitor:
     ):
         self.trading_system = trading_system
 
-        # 使用工厂模式获取实时数据适配器
+        # Get realtime data adapter via factory (returns None if not configured)
         try:
             self.adapter = get_realtime_data_api()
-            logger.info(f"使用实时数据提供商: {self.adapter.get_provider_name()}")
+            if self.adapter:
+                logger.info("Realtime data provider: %s", self.adapter.get_provider_name())
+            else:
+                logger.info("No realtime data provider configured; price monitoring disabled")
         except Exception as e:
-            logger.error(f"创建实时数据适配器失败: {e}")
+            logger.error("Failed to create realtime data adapter: %s", e)
             self.adapter = None
 
         # 新闻重要性评估器

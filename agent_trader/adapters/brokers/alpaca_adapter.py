@@ -120,13 +120,21 @@ class AlpacaBrokerAdapter(BrokerAPI):
         """Get account information"""
         try:
             account = await self._run_sync(self.trading_client.get_account)
+            equity = Decimal(str(account.equity))
+            # last_equity is previous day's closing equity; use it for day P&L
+            last_equity = (
+                Decimal(str(account.last_equity))
+                if getattr(account, "last_equity", None) is not None
+                else equity
+            )
             return {
-                "equity": Decimal(str(account.equity)),
+                "equity": equity,
                 "cash": Decimal(str(account.cash)),
                 "portfolio_value": Decimal(str(account.portfolio_value)),
                 "daytrading_buying_power": Decimal(str(account.daytrading_buying_power)),
                 "regt_buying_power": Decimal(str(account.regt_buying_power)),
                 "buying_power": Decimal(str(account.buying_power)),
+                "last_equity": last_equity,
                 "status": account.status,
                 "trade_suspended_by_user": account.trade_suspended_by_user,
                 "transfers_blocked": account.transfers_blocked
@@ -176,15 +184,20 @@ class AlpacaBrokerAdapter(BrokerAPI):
             # Calculate P&L
             total_pnl = sum(pos.unrealized_pnl for pos in positions)
 
+            # Day P&L = current equity - previous day's closing equity
+            equity = account_info["equity"]
+            last_equity = account_info.get("last_equity", equity)
+            day_pnl = equity - last_equity
+
             portfolio = Portfolio(
-                equity=account_info["equity"],
+                equity=equity,
                 cash=account_info["cash"],
                 market_value=account_info["portfolio_value"],
                 day_trade_count=0,
                 buying_power=account_info["buying_power"],
                 positions=positions,
                 total_pnl=total_pnl,
-                day_pnl=Decimal("0")
+                day_pnl=day_pnl,
             )
 
             return portfolio

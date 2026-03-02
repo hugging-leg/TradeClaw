@@ -2,6 +2,8 @@
 系统状态 & 操作 API
 """
 
+from typing import Dict, Any
+
 from fastapi import APIRouter, Depends, HTTPException
 
 from agent_trader.api.deps import get_trading_system
@@ -54,3 +56,34 @@ async def trigger_analysis(ts: TradingSystem = Depends(get_trading_system)):
         )
     await ts.trigger_workflow(trigger="manual_analysis", context={"source": "api"})
     return {"success": True, "message": "Analysis triggered"}
+
+
+# ------------------------------------------------------------------
+# 新闻轮询
+# ------------------------------------------------------------------
+
+@router.get("/system/news-polling/status")
+async def get_news_polling_status(
+    ts: TradingSystem = Depends(get_trading_system),
+) -> Dict[str, Any]:
+    """获取新闻轮询服务状态"""
+    if not hasattr(ts, "_news_polling_service") or ts._news_polling_service is None:
+        return {"enabled": False, "message": "News polling service not initialized"}
+    return {
+        "enabled": True,
+        **ts._news_polling_service.get_status(),
+    }
+
+
+@router.post("/system/news-polling/trigger")
+async def trigger_news_poll(
+    ts: TradingSystem = Depends(get_trading_system),
+) -> Dict[str, Any]:
+    """手动触发一次新闻轮询"""
+    if not hasattr(ts, "_news_polling_service") or ts._news_polling_service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="News polling service not initialized",
+        )
+    result = await ts._news_polling_service.poll_once()
+    return {"success": True, **result}

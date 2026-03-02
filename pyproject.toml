@@ -3,10 +3,15 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-trader"
+name = "tradeclaw"
 version = "0.1.0"
 description = "LLM-powered trading agent"
 requires-python = ">=3.11"
+
+[project.optional-dependencies]
+browser = ["playwright>=1.40.0"]
+sandbox = ["RestrictedPython>=7.0"]
+opensandbox = ["opensandbox>=0.1.5", "opensandbox-code-interpreter>=0.1.1"]
 
 [tool.setuptools.packages.find]
 include = ["agent_trader*"]

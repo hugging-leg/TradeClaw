@@ -42,6 +42,7 @@ from agent_trader.messaging.message_manager import MessageManager
 from agent_trader.models.trading_models import Order, OrderSide, OrderType, Portfolio, TimeInForce
 from agent_trader.services.query_handler import QueryHandler
 from agent_trader.services.realtime_monitor import RealtimeMarketMonitor
+from agent_trader.services.news_polling import NewsPollingService
 from agent_trader.services.risk_manager import RiskManager
 from agent_trader.services.scheduler_mixin import SchedulerMixin
 from agent_trader.utils.logging_config import get_logger
@@ -94,6 +95,14 @@ async def _scheduled_risk_check_trampoline() -> None:
     ts = get_trading_system()
     await ts._run_risk_checks()
 
+
+async def _scheduled_news_poll_trampoline() -> None:
+    """APScheduler 回调 trampoline：新闻轮询"""
+    from agent_trader.api.deps import get_trading_system
+    ts = get_trading_system()
+    if hasattr(ts, '_news_polling_service') and ts._news_polling_service:
+        await ts._news_polling_service.poll_once()
+
 logger = get_logger(__name__)
 
 
@@ -137,6 +146,16 @@ class TradingSystem(SchedulerMixin):
             RiskManager(broker_api=self.broker_api, message_manager=self.message_manager)
             if self.risk_enabled
             else None
+        )
+        # 注入 LLM 分析触发回调（风险规则中 action=llm_analyze 时使用）
+        if self.risk_manager:
+            self.risk_manager.set_llm_trigger_callback(self.trigger_workflow)
+
+        # ---- News Polling Service ----
+        self._news_polling_service = NewsPollingService(
+            trading_system=self,
+            poll_interval_minutes=getattr(settings, 'news_poll_interval_minutes', 5),
+            max_news_per_poll=getattr(settings, 'news_poll_max_per_batch', 20),
         )
 
         # ---- Query Handler ----
@@ -252,6 +271,23 @@ class TradingSystem(SchedulerMixin):
 
             # Memory Manager
             await self.memory_manager.close()
+
+            # Browser Manager (also cleans up OpenSandbox browser container if any)
+            try:
+                from agent_trader.agents.tools.browser_tools import BrowserManager
+                browser = BrowserManager.get_instance()
+                if browser._initialized:
+                    await browser.shutdown()
+            except Exception as e:
+                logger.debug("Browser cleanup: %s", e)
+
+            # Code Sandbox (OpenSandbox container if any)
+            try:
+                from agent_trader.agents.tools.code_sandbox_tools import OpenSandboxBackend
+                sandbox_backend = OpenSandboxBackend.get_instance()
+                await sandbox_backend.shutdown()
+            except Exception as e:
+                logger.debug("Code sandbox cleanup: %s", e)
 
             self.is_running = False
             self.is_shutting_down = False
@@ -836,6 +872,18 @@ class TradingSystem(SchedulerMixin):
                 require_market_open=True,
             )
             logger.info("Scheduled risk check: every %dmin (market hours)", settings.risk_check_interval)
+
+        # 5. News polling (interval, market hours only)
+        news_poll_interval = getattr(settings, 'news_poll_interval_minutes', 5)
+        if news_poll_interval > 0:
+            self.add_interval_job(
+                job_id="news_poll",
+                func=_scheduled_news_poll_trampoline,
+                minutes=news_poll_interval,
+                require_trading_day=True,
+                require_market_open=False,  # Poll even outside market hours
+            )
+            logger.info("Scheduled news poll: every %dmin", news_poll_interval)
 
     async def _scheduled_portfolio_check(self) -> None:
         """APScheduler 回调：组合检查"""

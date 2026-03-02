@@ -242,6 +242,9 @@ def create_llm_client(
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     temperature: float = 0.1,
+    *,
+    model_name: Optional[str] = None,
+    role: Optional[str] = None,
     **kwargs
 ) -> FixedIndexChatOpenAI:
     """
@@ -249,60 +252,86 @@ def create_llm_client(
 
     使用 FixedIndexChatOpenAI 以兼容 tool_call index 不规范的 provider。
 
+    参数解析优先级：
+    1. 显式传入 base_url/api_key/model（最高，用于测试等场景）
+    2. model_name — 从 llm_config.yaml 中按 model id 解析
+    3. role — 从 llm_config.yaml 的 roles 中解析
+    4. .env 中的 llm_base_url/llm_api_key/llm_model（向后兼容兜底）
+
     Args:
-        base_url: API base URL，默认从配置读取
-        api_key: API key，默认从配置读取
-        model: 模型名称，默认从配置读取
+        base_url: API base URL
+        api_key: API key
+        model: 模型名称（传给 API 的 model 字段）
         temperature: 温度参数，默认 0.1
+        model_name: llm_config.yaml 中注册的 model id
+        role: 角色名（如 "agent", "news_filter"）
         **kwargs: 其他参数传递给 ChatOpenAI
 
     Returns:
         FixedIndexChatOpenAI 实例
-
-    Examples:
-        # 使用默认配置（主 LLM）
-        llm = create_llm_client()
-
-        # 使用 DeepSeek
-        llm = create_llm_client(
-            base_url="https://api.deepseek.com/v1",
-            api_key="your_key",
-            model="deepseek-chat"
-        )
-
-        # 使用本地 Ollama
-        llm = create_llm_client(
-            base_url="http://localhost:11434/v1",
-            api_key="ollama",
-            model="llama3"
-        )
     """
+    resolved_base_url = base_url
+    resolved_api_key = api_key
+    resolved_model = model
+    resolved_temp = temperature
+
+    # 尝试从 YAML 配置解析
+    if not (base_url and api_key and model):
+        from agent_trader.config.llm_config import get_llm_config_manager
+        try:
+            mgr = get_llm_config_manager()
+            resolved = None
+
+            if model_name:
+                resolved = mgr.resolve_model(model_name)
+            elif role:
+                resolved = mgr.resolve_role(role)
+            else:
+                # 默认使用 agent role
+                resolved = mgr.resolve_role("agent")
+
+            if resolved:
+                r_base_url, r_api_key, r_model_id, r_temp = resolved
+                resolved_base_url = resolved_base_url or r_base_url
+                resolved_api_key = resolved_api_key or r_api_key
+                resolved_model = resolved_model or r_model_id
+                resolved_temp = r_temp if temperature == 0.1 else temperature
+        except Exception as e:
+            logger.debug("Could not resolve LLM from YAML config: %s", e)
+
+    # 兜底：从 .env settings 读取
     return FixedIndexChatOpenAI(
-        base_url=base_url or settings.llm_base_url,
-        api_key=api_key or settings.llm_api_key,
-        model=model or settings.llm_model,
-        temperature=temperature,
+        base_url=resolved_base_url or settings.llm_base_url,
+        api_key=resolved_api_key or settings.llm_api_key,
+        model=resolved_model or settings.llm_model,
+        temperature=resolved_temp,
         **kwargs
     )
 
 
-def create_news_llm_client(temperature: float = 0.1, **kwargs) -> ChatOpenAI:
+def create_news_llm_client(temperature: float = 0.1, **kwargs) -> FixedIndexChatOpenAI:
     """
     创建新闻过滤 LLM 客户端
 
-    使用独立配置，可用便宜模型过滤新闻。
-    如果未配置，使用主 LLM。
+    优先从 llm_config.yaml 的 news_filter role 解析，
+    否则回退到 .env 中的 news_llm_* 字段。
 
     Args:
         temperature: 温度参数
         **kwargs: 其他参数
 
     Returns:
-        ChatOpenAI 实例
+        FixedIndexChatOpenAI 实例
     """
-    config = settings.get_news_llm_config()
+    # 先尝试从 YAML 配置
+    try:
+        return create_llm_client(role="news_filter", temperature=temperature, **kwargs)
+    except Exception:
+        pass
 
-    return ChatOpenAI(
+    # 回退到旧的 .env 配置
+    config = settings.get_news_llm_config()
+    return FixedIndexChatOpenAI(
         base_url=config["base_url"],
         api_key=config["api_key"],
         model=config["model"],
@@ -313,6 +342,25 @@ def create_news_llm_client(temperature: float = 0.1, **kwargs) -> ChatOpenAI:
 
 def get_llm_info() -> dict:
     """获取 LLM 配置信息"""
+    # 尝试从 YAML 获取信息
+    try:
+        from agent_trader.config.llm_config import get_llm_config_manager
+        mgr = get_llm_config_manager()
+        config = mgr.get_config()
+        models = mgr.get_all_model_names()
+        roles = mgr.get_roles()
+
+        return {
+            "config_source": "yaml",
+            "providers_count": len(config.providers),
+            "models_count": len(models),
+            "roles": roles,
+            "models": models,
+        }
+    except Exception:
+        pass
+
+    # 回退到旧格式
     news_config = settings.get_news_llm_config()
     news_uses_main = (
         news_config["base_url"] == settings.llm_base_url and
@@ -320,6 +368,7 @@ def get_llm_info() -> dict:
     )
 
     return {
+        "config_source": "env",
         "main_llm": {
             "base_url": settings.llm_base_url,
             "model": settings.llm_model,

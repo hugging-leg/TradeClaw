@@ -1,4 +1,4 @@
-# LLM Agent Trading System
+# TradeClaw — LLM Agent Trading System
 
 AI 驱动的自主交易系统，支持美股和 ETF 交易。
 
@@ -7,9 +7,13 @@ AI 驱动的自主交易系统，支持美股和 ETF 交易。
 - **LLM 驱动决策** - 使用 LangGraph ReAct Agent，无硬编码规则
 - **事件驱动架构** - 异步事件队列，组件完全解耦
 - **多 Workflow 支持** - 顺序执行、工具调用、Black-Litterman、认知套利等
-- **实时监控** - WebSocket 实时行情和新闻，LLM 评估重要性
-- **风险管理** - 止损止盈、仓位限制、每日损失限制
+- **灵活 LLM 配置** - 多 Provider/模型自由组合，按 Agent 独立配置，YAML 持久化
+- **实时监控** - WebSocket 实时行情 + 新闻轮询（AkShare/Tiingo/Finnhub），LLM 评估重要性
+- **可配置风险规则** - 止损止盈规则链（YAML），支持硬编码规则与 LLM 分析触发共存
+- **浏览器自动化** - Playwright 驱动，支持动态网页抓取和交互
+- **代码执行沙箱** - RestrictedPython 安全沙箱，Agent 可执行数据分析代码
 - **Telegram 控制** - 远程监控和命令执行
+- **现代 Web UI** - React + TypeScript + TailwindCSS 响应式前端
 
 ## 快速开始
 
@@ -38,7 +42,7 @@ ALPACA_SECRET_KEY=your_secret
 TIINGO_API_KEY=your_key
 FINNHUB_API_KEY=your_key
 
-# LLM (OpenAI 兼容格式，支持 OpenAI/DeepSeek/Ollama 等)
+# LLM (兜底配置，推荐使用 Web UI 的 LLM Providers 管理)
 LLM_BASE_URL=https://api.deepseek.com/v1
 LLM_API_KEY=your_key
 LLM_MODEL=deepseek-chat
@@ -77,6 +81,39 @@ docker-compose up -d
 | 实时数据 | `REALTIME_DATA_PROVIDER` | `finnhub` |
 | 消息 | `MESSAGE_PROVIDER` | `telegram` |
 
+### LLM 配置
+
+LLM 配置通过 `user_data/llm_config.yaml` 管理（也可通过 Web UI 的 LLM Providers 页面配置）：
+
+```yaml
+providers:
+  - name: deepseek
+    base_url: https://api.deepseek.com/v1
+    api_key: sk-xxx
+    models:
+      - name: deepseek-chat
+        model_id: deepseek-chat
+        description: 主力模型
+      - name: deepseek-reasoner
+        model_id: deepseek-reasoner
+        description: 推理模型
+
+  - name: openai
+    base_url: https://api.openai.com/v1
+    api_key: sk-xxx
+    models:
+      - name: gpt4o-mini
+        model_id: gpt-4o-mini
+        description: 快速便宜
+
+roles:
+  agent: deepseek-chat        # 主 Agent 使用的模型
+  news_filter: gpt4o-mini     # 新闻过滤使用便宜模型
+  memory_summary: gpt4o-mini  # 记忆摘要
+```
+
+每个 Agent 也可以在其独立配置中指定 `llm_model` 覆盖默认的 `agent` role。
+
 ### Workflow 类型
 
 | 类型 | 说明 |
@@ -109,17 +146,22 @@ docker-compose up -d
 
 #### 工具列表
 
-| 工具 | 功能 |
-|------|------|
-| `get_portfolio_status` | 获取组合状态（总资产、现金、持仓） |
-| `get_market_data` | 获取市场概况（SPY, QQQ 等指数） |
-| `get_latest_news` | 获取新闻（支持按股票/行业过滤） |
-| `get_latest_price` | 获取实时价格 |
-| `get_historical_prices` | 获取历史 K 线 |
-| `check_market_status` | 检查市场开盘状态 |
-| `adjust_position` | 调整单一持仓到目标比例 |
-| `rebalance_portfolio` | 全组合再平衡 |
-| `schedule_next_analysis` | 安排下次分析时间 |
+| 工具 | 分类 | 功能 |
+|------|------|------|
+| `get_portfolio_status` | data | 获取组合状态（总资产、现金、持仓） |
+| `get_market_data` | data | 获取市场概况（SPY, QQQ 等指数） |
+| `get_latest_news` | data | 获取新闻（支持按股票/行业过滤） |
+| `get_latest_price` | data | 获取实时价格 |
+| `get_historical_prices` | data | 获取历史 K 线 |
+| `check_market_status` | system | 检查市场开盘状态 |
+| `adjust_position` | trading | 调整单一持仓到目标比例 |
+| `schedule_next_analysis` | system | 安排下次分析时间 |
+| `web_search` | web_search | SearXNG 元搜索引擎搜索 |
+| `web_read` | web_search | 提取网页正文（Trafilatura） |
+| `browser_goto` | browser | 浏览器访问动态网页（Playwright） |
+| `browser_screenshot` | browser | 截取当前页面截图 |
+| `browser_action` | browser | 页面交互（点击、填写、执行JS） |
+| `execute_python` | sandbox | 安全沙箱执行 Python 代码 |
 
 #### 投资风格
 - 追踪主升趋势，避免炒作垃圾股
@@ -274,12 +316,38 @@ WORKFLOW_TYPE=cognitive_arbitrage
 
 ### 风险管理
 
+风险规则通过 `user_data/risk_rules.yaml` 配置，支持多规则集和 LLM 分析触发：
+
+```yaml
+active_rule_set: default
+rule_sets:
+  - name: default
+    description: 系统默认风险规则集
+    rules:
+      - id: default_stop_loss
+        name: 默认止损
+        type: stop_loss
+        threshold: 5.0       # 5% 止损
+        action: close_position
+      - id: default_take_profit
+        name: 默认止盈
+        type: take_profit
+        threshold: 15.0      # 15% 止盈
+        action: close_position
+      - id: concentration_llm
+        name: 仓位集中度 LLM 分析
+        type: position_concentration
+        threshold: 25.0      # 单仓位 > 25% 触发 LLM 分析
+        action: trigger_llm_analysis
+```
+
+规则动作类型：`close_position`（平仓）、`trigger_llm_analysis`（触发 LLM 分析）、`disable_trading`（禁用交易）
+
+也可通过 `.env` 设置基础参数：
 ```bash
 RISK_MANAGEMENT_ENABLED=true
 STOP_LOSS_PERCENTAGE=0.05
 TAKE_PROFIT_PERCENTAGE=0.15
-DAILY_LOSS_LIMIT_PERCENTAGE=0.10
-MAX_POSITION_CONCENTRATION=0.25
 ```
 
 ### 实时监控
@@ -293,26 +361,32 @@ REBALANCE_COOLDOWN_SECONDS=3600  # 冷却期 (秒)
 ## 架构
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   TradingSystem                      │
-├─────────────────────────────────────────────────────┤
-│  EventSystem    MessageManager    RealtimeMonitor   │
-│       │              │                  │           │
-│       ▼              ▼                  ▼           │
-│  ┌─────────┐   ┌──────────┐   ┌─────────────────┐  │
-│  │Workflow │   │ Telegram │   │ FinnhubRealtime │  │
-│  │ Factory │   │ Service  │   │    Adapter      │  │
-│  └────┬────┘   └──────────┘   └─────────────────┘  │
-│       │                                             │
-│       ▼                                             │
-│  ┌─────────────────────────────────────────────┐   │
-│  │              LLM Agent (LangGraph)           │   │
-│  │  ┌─────────────────────────────────────┐    │   │
-│  │  │ Tools: market_data, portfolio,      │    │   │
-│  │  │        news, trading, scheduling    │    │   │
-│  │  └─────────────────────────────────────┘    │   │
-│  └─────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                        TradingSystem                          │
+├──────────────────────────────────────────────────────────────┤
+│  SchedulerMixin   MessageManager   RealtimeMonitor           │
+│  RiskManager      NewsPolling      QueryHandler              │
+│       │                │                 │                   │
+│       ▼                ▼                 ▼                   │
+│  ┌──────────┐   ┌───────────┐   ┌──────────────────┐        │
+│  │ Workflow  │   │ Telegram  │   │  FinnhubRealtime │        │
+│  │ Factory   │   │ Service   │   │  + NewsPolling   │        │
+│  └────┬─────┘   └───────────┘   └──────────────────┘        │
+│       │                                                      │
+│       ▼                                                      │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │              LLM Agent (LangGraph ReAct)              │   │
+│  │  ┌──────────────────────────────────────────────┐    │   │
+│  │  │ Tools: data, trading, analysis, system,      │    │   │
+│  │  │        web_search, browser, sandbox           │    │   │
+│  │  └──────────────────────────────────────────────┘    │   │
+│  └──────────────────────────────────────────────────────┘   │
+│       │                                                      │
+│  ┌────┴─────────────────────────────────────────────┐       │
+│  │  Config Layer (YAML)                              │       │
+│  │  llm_config.yaml  agents/*.yaml  risk_rules.yaml  │       │
+│  └───────────────────────────────────────────────────┘       │
+└──────────────────────────────────────────────────────────────┘
                           │
           ┌───────────────┼───────────────┐
           ▼               ▼               ▼
@@ -364,26 +438,48 @@ class MyBrokerAdapter(BrokerAPI):
 ## 目录结构
 
 ```
-Agent-Trader/
-├── main.py                 # 入口
-├── config.py               # 配置
-├── src/
-│   ├── trading_system.py   # 核心系统
-│   ├── agents/             # Workflow 实现
-│   ├── adapters/           # 适配器
-│   │   ├── brokers/        # Broker 适配器
-│   │   ├── market_data/    # 行情适配器
-│   │   ├── news/           # 新闻适配器
-│   │   ├── realtime/       # 实时数据适配器
-│   │   └── transports/     # 消息传输适配器
-│   ├── interfaces/         # 抽象接口和工厂
-│   ├── services/           # 服务（风控、调度等）
-│   ├── models/             # 数据模型
-│   ├── db/                 # 数据库
-│   └── utils/              # 工具函数
-├── user_data/              # 数据目录（数据库、日志）
-├── docker-compose.yml      # Docker 部署
-└── requirements.txt        # 依赖
+TradeClaw/
+├── main.py                         # 入口
+├── config.py                       # 全局配置 (pydantic-settings)
+├── agent_trader/
+│   ├── trading_system.py           # 核心系统协调器
+│   ├── agents/                     # Workflow 实现
+│   │   ├── tools/                  # Agent Tools
+│   │   │   ├── data_tools.py       # 数据获取
+│   │   │   ├── trading_tools.py    # 交易执行
+│   │   │   ├── analysis_tools.py   # 分析工具
+│   │   │   ├── web_search_tools.py # SearXNG 搜索
+│   │   │   ├── browser_tools.py    # Playwright 浏览器自动化
+│   │   │   └── code_sandbox_tools.py # RestrictedPython 沙箱
+│   │   ├── workflow_base.py        # Workflow 基类
+│   │   └── workflow_factory.py     # Workflow 注册和发现
+│   ├── adapters/                   # 适配器
+│   │   ├── brokers/                # Broker 适配器 (Alpaca, IB)
+│   │   ├── market_data/            # 行情适配器 (Tiingo)
+│   │   ├── news/                   # 新闻适配器 (Tiingo, Finnhub, AkShare)
+│   │   ├── realtime/               # 实时数据适配器 (Finnhub)
+│   │   └── transports/             # 消息传输适配器 (Telegram)
+│   ├── config/                     # 配置管理
+│   │   ├── llm_config.py           # LLM Provider/Model 配置 (YAML)
+│   │   ├── agent_config.py         # Agent 独立配置 (YAML)
+│   │   └── risk_rules.py           # 风险规则配置 (YAML)
+│   ├── interfaces/                 # 抽象接口和工厂
+│   ├── services/                   # 服务
+│   │   ├── risk_manager.py         # 风险管理
+│   │   ├── news_polling.py         # 新闻轮询
+│   │   ├── realtime_monitor.py     # 实时监控
+│   │   └── scheduler_mixin.py      # APScheduler 混入
+│   ├── api/                        # FastAPI 后端
+│   ├── models/                     # 数据模型
+│   ├── db/                         # 数据库
+│   └── utils/                      # 工具函数
+├── frontend/                       # React + TypeScript 前端
+├── user_data/                      # 数据目录
+│   ├── llm_config.yaml             # LLM 配置
+│   ├── risk_rules.yaml             # 风险规则
+│   └── agents/                     # 各 Workflow 独立配置
+├── docker-compose.yml              # Docker 部署
+└── requirements.txt                # 依赖
 ```
 
 ## 注意事项

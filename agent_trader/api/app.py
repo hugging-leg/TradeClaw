@@ -27,6 +27,8 @@ from agent_trader.api.routes import (
     system,
     settings as settings_route,
     backtest,
+    llm,
+    risk,
 )
 from agent_trader.api.routes.agent import sse_router as agent_sse_router
 
@@ -69,6 +71,8 @@ def create_app() -> FastAPI:
         (scheduler.router, "scheduler"),
         (settings_route.router, "settings"),
         (backtest.router, "backtest"),
+        (llm.router, "llm"),
+        (risk.router, "risk"),
     ]
     for router, tag in protected:
         app.include_router(

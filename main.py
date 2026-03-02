@@ -65,7 +65,20 @@ async def main():
         logger.info(f"Timezone: {settings.trading_timezone}")
         logger.info(f"Exchange: {settings.exchange}")
         logger.info(f"Broker: {settings.broker_provider}")
-        logger.info(f"LLM: {settings.llm_model} @ {settings.llm_base_url}")
+        # LLM config info
+        try:
+            from agent_trader.config.llm_config import get_llm_config_manager
+            llm_mgr = get_llm_config_manager()
+            llm_cfg = llm_mgr.get_config()
+            n_providers = len(llm_cfg.providers)
+            n_models = sum(len(p.models) for p in llm_cfg.providers)
+            agent_role = llm_mgr.resolve_role("agent")
+            if agent_role:
+                logger.info(f"LLM: {agent_role[2]} @ {agent_role[0]} ({n_providers} providers, {n_models} models)")
+            else:
+                logger.info(f"LLM: (not configured) ({n_providers} providers, {n_models} models)")
+        except Exception:
+            logger.info(f"LLM: {settings.llm_model} @ {settings.llm_base_url} (legacy .env config)")
 
         # Display news provider information
         try:

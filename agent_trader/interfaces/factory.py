@@ -186,6 +186,7 @@ class NewsFactory:
             import agent_trader.adapters.news.tiingo_news_adapter
             import agent_trader.adapters.news.unusual_whales_adapter
             import agent_trader.adapters.news.finnhub_news_adapter
+            import agent_trader.adapters.news.akshare_news_adapter
         except ImportError as e:
             logger.debug(f"部分 News 适配器导入失败: {e}")
 
@@ -252,9 +253,13 @@ class RealtimeDataFactory:
 
     @classmethod
     def create_realtime_api(cls, provider: Optional[str] = None):
-        """创建实时数据 API"""
+        """Create realtime data API. Returns None if no provider is configured."""
         cls._ensure_initialized()
-        provider_name = (provider or settings.realtime_data_provider).lower()
+        provider_name = (provider or settings.realtime_data_provider).strip().lower()
+
+        if not provider_name:
+            logger.info("No realtime data provider configured (realtime_data_provider is empty)")
+            return None
 
         if provider_name not in cls._registry:
             raise ValueError(f"Unknown realtime provider: {provider_name}. Available: {list(cls._registry.keys())}")

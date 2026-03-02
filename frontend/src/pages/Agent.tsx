@@ -25,6 +25,7 @@ import {
   fetchChatQueue,
   cancelQueuedMessage,
   clearChatQueue,
+  fetchLLMModels,
 } from '@/api';
 import type { BacktestSummary, ExportFilter } from '@/api';
 import { useLiveExecution } from '@/api/useAgentEvents';
@@ -78,6 +79,7 @@ import type {
   WorkflowExecution,
   ExecutionStep,
   QueuedMessage,
+  LLMModelRef,
 } from '@/types';
 
 type Tab = 'execution' | 'tools' | 'config' | 'decisions' | 'analyses' | 'messages';
@@ -109,6 +111,9 @@ const TEXTAREA_FIELDS = new Set(['system_prompt']);
 /** Fields that should be rendered as password input */
 const PASSWORD_FIELDS = new Set(['llm_api_key']);
 
+/** Fields that should be rendered as model dropdown (references LLM config) */
+const MODEL_SELECT_FIELDS = new Set(['llm_model']);
+
 /** Fields that are read-only (shown but not editable) */
 const READONLY_FIELDS = new Set(['workflow_type', 'name']);
 
@@ -116,9 +121,10 @@ const READONLY_FIELDS = new Set(['workflow_type', 'name']);
 const HIDE_WHEN_NULL = new Set(['system_prompt']);
 
 /** Detect field type for rendering */
-function detectFieldType(key: string, value: unknown): 'textarea' | 'number' | 'array' | 'boolean' | 'password' | 'text' {
+function detectFieldType(key: string, value: unknown): 'textarea' | 'number' | 'array' | 'boolean' | 'password' | 'model_select' | 'text' {
   if (TEXTAREA_FIELDS.has(key)) return 'textarea';
   if (PASSWORD_FIELDS.has(key)) return 'password';
+  if (MODEL_SELECT_FIELDS.has(key)) return 'model_select';
   if (typeof value === 'number') return 'number';
   if (typeof value === 'boolean') return 'boolean';
   if (Array.isArray(value)) return 'array';
@@ -449,10 +455,12 @@ function ConfigEditor({
   config,
   onSave,
   saving,
+  allModels,
 }: {
   config: AgentConfig;
   onSave: (updates: Record<string, unknown>) => Promise<void>;
   saving: boolean;
+  allModels: LLMModelRef[];
 }) {
   const [draft, setDraft] = useState<Record<string, unknown>>({});
   const [editedKeys, setEditedKeys] = useState<Set<string>>(new Set());
@@ -580,6 +588,19 @@ function ConfigEditor({
                 />
               ) : type === 'password' ? (
                 <PasswordField value={value} onChange={(v) => handleChange(key, v)} />
+              ) : type === 'model_select' ? (
+                <select
+                  value={value != null ? String(value) : ''}
+                  onChange={(e) => handleChange(key, e.target.value)}
+                  className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent sm:max-w-sm"
+                >
+                  <option value="">— use default (role: agent) —</option>
+                  {allModels.map((m) => (
+                    <option key={m.id} value={m.id}>
+                      {m.name} ({m.provider_name} / {m.model_id})
+                    </option>
+                  ))}
+                </select>
               ) : (
                 <input
                   type="text"
@@ -614,7 +635,7 @@ function ConfigEditor({
         {editedKeys.size > 0 && (
           <span className="text-xs text-muted">
             {editedKeys.size} field{editedKeys.size > 1 ? 's' : ''} modified
-            <span className="hidden sm:inline"> (runtime only, not persisted to .env)</span>
+            <span className="hidden sm:inline"> (persisted to YAML)</span>
           </span>
         )}
       </div>
@@ -1341,6 +1362,7 @@ export default function Agent() {
   const [tools, setTools] = useState<AgentTool[]>([]);
   const [active, setActive] = useState<ActiveWorkflow | null>(null);
   const [config, setConfig] = useState<AgentConfig | null>(null);
+  const [allModels, setAllModels] = useState<LLMModelRef[]>([]);
   const [tab, setTab] = useState<Tab>('config');
   const [triggering, setTriggering] = useState(false);
   const [switching, setSwitching] = useState(false);
@@ -1359,7 +1381,8 @@ export default function Agent() {
       fetchWorkflowExecutions(PAGE_SIZE, executionsPage * PAGE_SIZE),
       fetchActiveWorkflow(),
       fetchAgentConfig(),
-    ]).then(([dResp, aResp, m, w, t, eResp, aw, cfg]) => {
+      fetchLLMModels(),
+    ]).then(([dResp, aResp, m, w, t, eResp, aw, cfg, models]) => {
       setDecisions(dResp.items);
       setDecisionsTotal(dResp.total);
       setAnalyses(aResp.items);
@@ -1371,6 +1394,7 @@ export default function Agent() {
       setExecutionsTotal(eResp.total);
       setActive(aw);
       setConfig(cfg);
+      setAllModels(models);
     }).catch(() => {
       toast('Failed to load agent data', 'error');
     });
@@ -1624,11 +1648,11 @@ export default function Agent() {
         <div className="space-y-4">
           <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
             <h2 className="text-base font-semibold text-foreground sm:text-lg">Workflow Configuration</h2>
-            <span className="text-xs text-muted">Changes are runtime-only and reset on restart</span>
+            <span className="text-xs text-muted">Changes are persisted to YAML config files</span>
           </div>
           {config ? (
             <Card>
-              <ConfigEditor config={config} onSave={handleSaveConfig} saving={saving} />
+              <ConfigEditor config={config} onSave={handleSaveConfig} saving={saving} allModels={allModels} />
             </Card>
           ) : (
             <Card>

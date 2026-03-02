@@ -282,8 +282,6 @@ export interface ChatResponse {
 export interface TradingSettings {
   // Trading
   paper_trading: boolean;
-  max_position_size: number;
-  max_positions: number;
   rebalance_time: string;
   eod_analysis_time: string;
   workflow_type: string;
@@ -318,10 +316,8 @@ export interface TradingSettings {
   // Endpoints / non-secret connection info
   alpaca_base_url: string;
   telegram_chat_id: string;
-  // LLM (agent-specific params like llm_model are in AgentConfig)
-  llm_base_url: string;
-  news_llm_base_url: string | null;
-  news_llm_model: string | null;
+  opensandbox_server_url: string;
+  // NOTE: LLM configuration is now managed via /api/llm/* endpoints
   // Execution
   rebalance_min_value_threshold: number;
   rebalance_min_pct_threshold: number;
@@ -338,6 +334,38 @@ export interface TradingSettings {
   log_to_file: boolean;
   // Index signature for dynamic access
   [key: string]: unknown;
+}
+
+// ========== LLM Configuration ==========
+
+export interface LLMModel {
+  id: string;
+  name: string;
+  model_id: string;
+  temperature: number;
+}
+
+export interface LLMProvider {
+  id: string;
+  name: string;
+  base_url: string;
+  api_key: string;
+  models: LLMModel[];
+}
+
+export interface LLMRoles {
+  agent: string;
+  news_filter: string;
+  memory_summary: string;
+  [key: string]: string;
+}
+
+export interface LLMModelRef {
+  id: string;
+  name: string;
+  provider_id: string;
+  provider_name: string;
+  model_id: string;
 }
 
 // ========== Backtest ==========

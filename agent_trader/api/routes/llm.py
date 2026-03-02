@@ -1,0 +1,137 @@
+"""
+LLM 配置 API — Provider/Model 管理、角色绑定、连通性测试
+"""
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from typing import Any, Dict, List, Optional
+
+from agent_trader.config.llm_config import (
+    LLMConfigFile,
+    get_llm_config_manager,
+)
+from agent_trader.utils.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+router = APIRouter()
+
+
+# ========== Providers ==========
+
+@router.get("/llm/providers")
+async def get_providers():
+    """获取所有 LLM Provider 和 Model 列表（api_key 脱敏）"""
+    mgr = get_llm_config_manager()
+    return {
+        "providers": mgr.get_providers_sanitized(),
+        "models": mgr.get_all_model_names(),
+    }
+
+
+class UpdateProvidersRequest(BaseModel):
+    """更新完整的 LLM 配置"""
+    providers: List[Dict[str, Any]]
+    roles: Optional[Dict[str, str]] = None
+
+
+@router.put("/llm/providers")
+async def update_providers(body: UpdateProvidersRequest):
+    """更新完整的 LLM Provider 配置（持久化到 YAML）"""
+    mgr = get_llm_config_manager()
+    current = mgr.get_config()
+
+    # 构建新配置
+    data: Dict[str, Any] = {"providers": body.providers}
+    if body.roles is not None:
+        data["roles"] = body.roles
+    else:
+        data["roles"] = current.roles.model_dump()
+
+    try:
+        config = mgr.update_config(data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid config: {e}")
+
+    return {
+        "providers": mgr.get_providers_sanitized(),
+        "models": mgr.get_all_model_names(),
+        "roles": config.roles.model_dump(),
+    }
+
+
+# ========== Roles ==========
+
+@router.get("/llm/roles")
+async def get_roles():
+    """获取角色绑定"""
+    mgr = get_llm_config_manager()
+    return mgr.get_roles()
+
+
+class UpdateRolesRequest(BaseModel):
+    """更新角色绑定"""
+    roles: Dict[str, str]
+
+
+@router.patch("/llm/roles")
+async def update_roles(body: UpdateRolesRequest):
+    """更新角色绑定（持久化到 YAML）"""
+    mgr = get_llm_config_manager()
+    result = mgr.update_roles(body.roles)
+    return result
+
+
+# ========== Model List (flat) ==========
+
+@router.get("/llm/models")
+async def get_models():
+    """获取所有已注册的 model 列表（扁平化，用于下拉选择）"""
+    mgr = get_llm_config_manager()
+    return mgr.get_all_model_names()
+
+
+# ========== Test Connectivity ==========
+
+class TestModelRequest(BaseModel):
+    model_name: str
+
+
+@router.post("/llm/test")
+async def test_model(body: TestModelRequest):
+    """测试指定 model name 的连通性"""
+    mgr = get_llm_config_manager()
+    resolved = mgr.resolve_model(body.model_name)
+    if resolved is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Model '{body.model_name}' not found in config"
+        )
+
+    base_url, api_key, model_id, temperature = resolved
+
+    try:
+        from agent_trader.utils.llm_utils import create_llm_client
+        llm = create_llm_client(
+            base_url=base_url,
+            api_key=api_key,
+            model=model_id,
+            temperature=temperature,
+        )
+        # 简单测试：发送一个短消息
+        response = await llm.ainvoke("Say 'OK' in one word.")
+        return {
+            "success": True,
+            "model_name": body.model_name,
+            "model_id": model_id,
+            "base_url": base_url,
+            "response": str(response.content)[:200],
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "model_name": body.model_name,
+            "model_id": model_id,
+            "base_url": base_url,
+            "error": str(e),
+        }

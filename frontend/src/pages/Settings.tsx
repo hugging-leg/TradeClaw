@@ -5,34 +5,35 @@ import { Button } from '@/components/ui/Button';
 import { useToast } from '@/components/ui/Toast';
 import { fetchSettings, updateSettings } from '@/api';
 import type { TradingSettings } from '@/types';
+import LLMSettings from '@/components/LLMSettings';
+import RiskRulesSettings from '@/components/RiskRulesSettings';
+import AutomationPipelines from '@/components/AutomationPipelines';
 import {
   Settings as SettingsIcon,
-  Shield,
+  ShieldAlert,
   Clock,
   Bot,
   Globe,
-  Database,
   Activity,
   Save,
   RotateCcw,
   Crosshair,
-  Server,
   KeyRound,
   Eye,
   EyeOff,
+  Workflow,
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 
 type SettingsTab =
   | 'trading'
-  | 'risk'
+  | 'risk_rules'
+  | 'automation'
   | 'scheduling'
-  | 'monitoring'
   | 'providers'
   | 'api_keys'
   | 'llm'
-  | 'execution'
-  | 'infra';
+  | 'execution';
 
 // ========== Field definitions ==========
 
@@ -63,8 +64,6 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
     subtitle: 'Core trading configuration',
     fields: [
       f({ key: 'paper_trading', label: 'Paper Trading', description: 'Use paper trading mode (no real money)', inputType: 'boolean' }),
-      f({ key: 'max_position_size', label: 'Max Position Size', description: 'Maximum allocation per position', isPercentage: true, step: 0.01 }),
-      f({ key: 'max_positions', label: 'Max Positions', description: 'Maximum number of concurrent positions', inputType: 'number', step: 1 }),
       f({ key: 'rebalance_time', label: 'Rebalance Time', description: 'Daily rebalance trigger time (trading timezone)', inputType: 'text' }),
       f({ key: 'eod_analysis_time', label: 'EOD Analysis Time', description: 'End-of-day analysis time', inputType: 'text' }),
       { key: 'workflow_type', label: 'Workflow Type', description: 'Switch via Agent page', editable: false },
@@ -72,18 +71,15 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
       f({ key: 'exchange', label: 'Exchange', description: 'e.g. XNYS, XNAS', inputType: 'text' }),
     ],
   },
-  risk: {
+  risk_rules: {
     title: 'Risk Management',
-    subtitle: 'Stop loss, take profit, and limits',
-    fields: [
-      f({ key: 'risk_management_enabled', label: 'Risk Management', description: 'Enable/disable risk management', inputType: 'boolean' }),
-      f({ key: 'stop_loss_percentage', label: 'Stop Loss', description: 'Per-position stop loss', isPercentage: true, step: 0.01 }),
-      f({ key: 'take_profit_percentage', label: 'Take Profit', description: 'Per-position take profit', isPercentage: true, step: 0.01 }),
-      f({ key: 'daily_loss_limit_percentage', label: 'Daily Loss Limit', description: 'Maximum daily portfolio loss', isPercentage: true, step: 0.01 }),
-      f({ key: 'max_position_concentration', label: 'Max Concentration', description: 'Maximum single position weight', isPercentage: true, step: 0.01 }),
-      f({ key: 'portfolio_pnl_alert_threshold', label: 'Portfolio P&L Alert', description: 'Alert when day P&L exceeds threshold', isPercentage: true, step: 0.01 }),
-      f({ key: 'position_loss_alert_threshold', label: 'Position Loss Alert', description: 'Alert when position unrealized loss exceeds threshold', isPercentage: true, step: 0.01 }),
-    ],
+    subtitle: 'Stop-loss, take-profit rules and alert thresholds',
+    fields: [], // Rendered by dedicated RiskRulesSettings component
+  },
+  automation: {
+    title: 'Automation Pipelines',
+    subtitle: 'Real-time news monitoring, price triggers, and LLM analysis flows',
+    fields: [], // Rendered by dedicated AutomationPipelines component
   },
   scheduling: {
     title: 'Scheduling',
@@ -97,16 +93,6 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
       f({ key: 'message_rate_limit', label: 'Message Rate Limit', description: 'Max messages per second', suffix: '/s', inputType: 'number', step: 0.1 }),
     ],
   },
-  monitoring: {
-    title: 'Realtime Monitoring',
-    subtitle: 'Price and volatility thresholds',
-    fields: [
-      f({ key: 'price_change_threshold', label: 'Price Change Threshold', description: 'Trigger workflow when price changes by this amount', suffix: '%', inputType: 'number', step: 0.5 }),
-      f({ key: 'volatility_threshold', label: 'Volatility Threshold', description: 'Trigger workflow when volatility exceeds this', suffix: '%', inputType: 'number', step: 0.5 }),
-      f({ key: 'rebalance_cooldown_seconds', label: 'Rebalance Cooldown', description: 'Minimum seconds between rebalances', suffix: 's', inputType: 'number', step: 60 }),
-      f({ key: 'market_etfs', label: 'Market ETFs', description: 'Comma-separated list of ETFs to monitor', inputType: 'text' }),
-    ],
-  },
   providers: {
     title: 'API Providers',
     subtitle: 'Broker, market data, and messaging providers',
@@ -114,10 +100,11 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
       f({ key: 'broker_provider', label: 'Broker', description: 'Trading broker API provider', inputType: 'select', options: ['alpaca', 'ibkr'] }),
       f({ key: 'alpaca_base_url', label: 'Alpaca Base URL', description: 'Paper: https://paper-api.alpaca.markets', inputType: 'text' }),
       f({ key: 'market_data_provider', label: 'Market Data', description: 'Market data provider', inputType: 'select', options: ['tiingo', 'alpaca', 'finnhub'] }),
-      f({ key: 'realtime_data_provider', label: 'Realtime Data', description: 'Realtime data provider', inputType: 'select', options: ['finnhub', 'alpaca'] }),
+      f({ key: 'realtime_data_provider', label: 'Realtime Data', description: 'Realtime WebSocket data provider (leave empty if not available)', inputType: 'select', options: ['', 'finnhub', 'alpaca'] }),
       f({ key: 'news_providers', label: 'News Providers', description: 'Comma-separated news sources', inputType: 'text' }),
       f({ key: 'message_provider', label: 'Message Provider', description: 'Notification provider', inputType: 'select', options: ['telegram', 'none'] }),
       f({ key: 'telegram_chat_id', label: 'Telegram Chat ID', description: 'Telegram chat/group ID for notifications', inputType: 'text' }),
+      f({ key: 'opensandbox_server_url', label: 'OpenSandbox Server', description: 'OpenSandbox server URL for Docker-based code/browser sandbox (e.g. localhost:8080). Leave empty to use local fallback.', inputType: 'text' }),
     ],
   },
   api_keys: {
@@ -129,17 +116,13 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
       f({ key: 'tiingo_api_key', label: 'Tiingo API Key', inputType: 'password', writeOnly: true }),
       f({ key: 'finnhub_api_key', label: 'Finnhub API Key', inputType: 'password', writeOnly: true }),
       f({ key: 'unusual_whales_api_key', label: 'Unusual Whales API Key', inputType: 'password', writeOnly: true }),
-      f({ key: 'news_llm_api_key', label: 'News LLM API Key', description: 'Separate key for news filtering (empty = use primary)', inputType: 'password', writeOnly: true }),
       f({ key: 'telegram_bot_token', label: 'Telegram Bot Token', inputType: 'password', writeOnly: true }),
     ],
   },
   llm: {
-    title: 'News LLM',
-    subtitle: 'Separate LLM for news filtering — primary LLM settings are on the Agent page',
-    fields: [
-      f({ key: 'news_llm_base_url', label: 'News LLM Base URL', description: 'Separate LLM for news filtering (empty = use primary)', inputType: 'text' }),
-      f({ key: 'news_llm_model', label: 'News LLM Model', description: 'Model for news filtering (empty = use primary)', inputType: 'text' }),
-    ],
+    title: 'LLM Providers',
+    subtitle: 'Manage API providers, models, and role assignments',
+    fields: [], // Rendered by dedicated LLMSettings component
   },
   execution: {
     title: 'Trade Execution',
@@ -153,30 +136,17 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
       f({ key: 'cash_keywords', label: 'Cash Keywords', description: 'Comma-separated keywords treated as cash', inputType: 'text' }),
     ],
   },
-  infra: {
-    title: 'Infrastructure',
-    subtitle: 'API server, logging, and environment',
-    fields: [
-      f({ key: 'api_cors_origins', label: 'CORS Origins', description: 'Comma-separated allowed origins', inputType: 'text' }),
-      f({ key: 'environment', label: 'Environment', description: 'development / production', inputType: 'select', options: ['development', 'production'] }),
-      f({ key: 'log_level', label: 'Log Level', description: 'Logging verbosity', inputType: 'select', options: ['DEBUG', 'INFO', 'WARNING', 'ERROR'] }),
-      f({ key: 'log_to_file', label: 'Log to File', description: 'Write logs to file', inputType: 'boolean' }),
-      { key: 'api_host', label: 'API Host', description: 'API server bind address (restart required)', editable: false },
-      { key: 'api_port', label: 'API Port', description: 'API server port (restart required)', editable: false },
-    ],
-  },
 };
 
 const tabs: { key: SettingsTab; label: string; icon: typeof SettingsIcon }[] = [
   { key: 'trading', label: 'Trading', icon: Activity },
-  { key: 'risk', label: 'Risk', icon: Shield },
+  { key: 'risk_rules', label: 'Risk', icon: ShieldAlert },
+  { key: 'automation', label: 'Automation', icon: Workflow },
   { key: 'scheduling', label: 'Scheduling', icon: Clock },
-  { key: 'monitoring', label: 'Monitoring', icon: Database },
   { key: 'providers', label: 'Providers', icon: Globe },
   { key: 'api_keys', label: 'API Keys', icon: KeyRound },
-  { key: 'llm', label: 'News LLM', icon: Bot },
+  { key: 'llm', label: 'LLM', icon: Bot },
   { key: 'execution', label: 'Execution', icon: Crosshair },
-  { key: 'infra', label: 'Infrastructure', icon: Server },
 ];
 
 // ========== Setting Row ==========
@@ -237,7 +207,7 @@ function SettingRow({
         >
           {field.options.map((opt) => (
             <option key={opt} value={opt}>
-              {opt}
+              {opt || '(none)'}
             </option>
           ))}
           {/* If current value is not in options, show it anyway */}
@@ -394,6 +364,9 @@ export default function Settings() {
 
   const group = FIELD_GROUPS[activeTab];
 
+  // Check if current tab is a custom-rendered tab
+  const isCustomTab = activeTab === 'llm' || activeTab === 'risk_rules' || activeTab === 'automation';
+
   return (
     <div className="animate-fade-in space-y-6">
       {/* Header */}
@@ -401,7 +374,7 @@ export default function Settings() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-foreground">Settings</h1>
           <p className="mt-1 text-sm text-muted">
-            System configuration — runtime changes reset on restart
+            System configuration — changes persist to YAML where applicable
           </p>
         </div>
         {editedCount > 0 && (
@@ -476,18 +449,39 @@ export default function Settings() {
 
         {/* Content */}
         <div className="min-w-0 flex-1">
-          <Card>
-            <CardHeader title={group.title} subtitle={group.subtitle} />
-            {group.fields.map((field) => (
-              <SettingRow
-                key={field.key}
-                field={field}
-                value={settings[field.key]}
-                editedValue={draft[field.key]}
-                onEdit={field.editable !== false ? (val) => handleEdit(field.key, val) : undefined}
-              />
-            ))}
-          </Card>
+          {activeTab === 'llm' ? (
+            <LLMSettings />
+          ) : activeTab === 'risk_rules' ? (
+            <RiskRulesSettings
+              riskEnabled={settings.risk_management_enabled as boolean | undefined}
+              alertThresholds={{
+                portfolio_pnl_alert_threshold: settings.portfolio_pnl_alert_threshold as number | undefined,
+                position_loss_alert_threshold: settings.position_loss_alert_threshold as number | undefined,
+              }}
+              onUpdateSetting={(key, val) => {
+                handleEdit(key, val);
+                // Auto-save alert threshold changes immediately
+                updateSettings({ [key]: val } as Partial<TradingSettings>)
+                  .then((updated) => setSettings(updated as unknown as Record<string, unknown>))
+                  .catch(() => toast('Failed to update setting', 'error'));
+              }}
+            />
+          ) : activeTab === 'automation' ? (
+            <AutomationPipelines settings={settings} onUpdateSetting={handleEdit} />
+          ) : isCustomTab ? null : (
+            <Card>
+              <CardHeader title={group.title} subtitle={group.subtitle} />
+              {group.fields.map((field) => (
+                <SettingRow
+                  key={field.key}
+                  field={field}
+                  value={settings[field.key]}
+                  editedValue={draft[field.key]}
+                  onEdit={field.editable !== false ? (val) => handleEdit(field.key, val) : undefined}
+                />
+              ))}
+            </Card>
+          )}
         </div>
       </div>
     </div>

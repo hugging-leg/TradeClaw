@@ -31,7 +31,6 @@ def mock_settings():
     settings.telegram_chat_id = "test_chat_id"
     settings.database_url = "sqlite:///./test_trading_agent.db"
 
-    settings.max_position_size = 0.1
     settings.stop_loss_percentage = 0.05
     settings.take_profit_percentage = 0.15
     settings.rebalance_time = "09:30"

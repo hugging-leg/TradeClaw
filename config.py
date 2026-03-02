@@ -39,14 +39,17 @@ class Settings(BaseSettings):
     # Finnhub
     finnhub_api_key: Optional[str] = None
 
-    # SearXNG (自建 Web 搜索引擎)
+    # SearXNG (self-hosted web search engine)
     searxng_base_url: Optional[str] = None  # e.g. http://searxng:8080 or http://localhost:8080
+
+    # OpenSandbox (Docker-based code/browser sandbox)
+    opensandbox_server_url: str = ""  # e.g. localhost:8080; empty = disabled (fallback to RestrictedPython)
 
     # === 提供商配置 ===
     broker_provider: str = "alpaca"
     market_data_provider: str = "tiingo"
-    realtime_data_provider: str = "finnhub"
-    news_providers: str = "tiingo,finnhub"
+    realtime_data_provider: str = ""  # empty = disabled; options: finnhub, alpaca
+    news_providers: str = "akshare"  # free, no API key; add alpaca/tiingo/finnhub as needed
     message_provider: str = "telegram"
 
     # === LLM 配置 (OpenAI 兼容格式) ===
@@ -76,8 +79,6 @@ class Settings(BaseSettings):
 
     # === 交易参数 ===
     paper_trading: bool = True
-    max_position_size: float = 0.1
-    max_positions: int = 10
     rebalance_time: str = "09:30"
     eod_analysis_time: str = "16:05"
     stop_loss_percentage: float = 0.05
@@ -106,6 +107,10 @@ class Settings(BaseSettings):
     scheduler_max_history: int = 200  # 调度器执行历史最大保留条数
     max_pending_llm_jobs: int = 5  # LLM 自主调度最大待执行任务数
     message_rate_limit: float = 1.0
+
+    # === 新闻轮询配置 ===
+    news_poll_interval_minutes: int = 5  # 新闻轮询间隔（分钟），0 = 禁用
+    news_poll_max_per_batch: int = 20  # 每次轮询最大新闻条数
 
     # === LLM Agent 配置 ===
     llm_recursion_limit: int = 64

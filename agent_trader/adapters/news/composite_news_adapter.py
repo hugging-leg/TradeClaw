@@ -33,6 +33,12 @@ def _check_api_key_configured(provider: str) -> bool:
     elif provider == "finnhub":
         key = settings.finnhub_api_key
         return bool(key)
+    elif provider == "akshare":
+        # AkShare is free, no API key needed
+        return True
+    elif provider == "alpaca":
+        key = settings.alpaca_api_key
+        return bool(key and key != "test_key")
     return False
 
 
@@ -53,9 +59,11 @@ class CompositeNewsAdapter(NewsAPI):
 
     # 提供商注册表
     PROVIDER_REGISTRY = {
-        "tiingo": "src.adapters.news.tiingo_news_adapter:TiingoNewsAdapter",
-        "unusual_whales": "src.adapters.news.unusual_whales_adapter:UnusualWhalesAdapter",
-        "finnhub": "src.adapters.news.finnhub_news_adapter:FinnhubNewsAdapter",
+        "tiingo": "agent_trader.adapters.news.tiingo_news_adapter:TiingoNewsAdapter",
+        "unusual_whales": "agent_trader.adapters.news.unusual_whales_adapter:UnusualWhalesAdapter",
+        "finnhub": "agent_trader.adapters.news.finnhub_news_adapter:FinnhubNewsAdapter",
+        "akshare": "agent_trader.adapters.news.akshare_news_adapter:AkShareNewsAdapter",
+        "alpaca": "agent_trader.adapters.news.alpaca_news_adapter:AlpacaNewsAdapter",
     }
 
     def __init__(self, providers: Optional[List[str]] = None):

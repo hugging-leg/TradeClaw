@@ -1,7 +1,7 @@
 /**
  * API Layer
  *
- * 所有页面通过此层获取数据，直接调用后端 API。
+ * All pages fetch data through this layer, directly calling the backend API.
  */
 
 import { api } from './client';
@@ -40,6 +40,9 @@ import type {
   JobFormData,
   ChatResponse,
   ChatQueueResponse,
+  LLMProvider,
+  LLMRoles,
+  LLMModelRef,
 } from '@/types';
 
 // ========== Portfolio ==========
@@ -365,13 +368,91 @@ export async function runBacktest(config: unknown): Promise<BacktestResult> {
   return api.post<BacktestResult>('/backtest', config);
 }
 
+// ========== LLM Configuration ==========
+
+export async function fetchLLMProviders(): Promise<{ providers: LLMProvider[]; models: LLMModelRef[] }> {
+  return api.get<{ providers: LLMProvider[]; models: LLMModelRef[] }>('/llm/providers');
+}
+
+export async function updateLLMProviders(
+  providers: LLMProvider[],
+  roles?: Record<string, string>,
+): Promise<{ providers: LLMProvider[]; models: LLMModelRef[]; roles: LLMRoles }> {
+  return api.put<{ providers: LLMProvider[]; models: LLMModelRef[]; roles: LLMRoles }>('/llm/providers', { providers, roles });
+}
+
+export async function fetchLLMRoles(): Promise<LLMRoles> {
+  return api.get<LLMRoles>('/llm/roles');
+}
+
+export async function updateLLMRoles(roles: Record<string, string>): Promise<LLMRoles> {
+  return api.patch<LLMRoles>('/llm/roles', { roles });
+}
+
+export async function fetchLLMModels(): Promise<LLMModelRef[]> {
+  return api.get<LLMModelRef[]>('/llm/models');
+}
+
+export async function testLLMModel(modelName: string): Promise<{ success: boolean; model_name: string; model_id: string; base_url: string; response?: string; error?: string }> {
+  return api.post('/llm/test', { model_name: modelName });
+}
+
+// ========== Risk Rules ==========
+
+export interface RiskRuleData {
+  name: string;
+  type: string;
+  enabled: boolean;
+  priority: number;
+  threshold: number;
+  action: string;
+  reduce_ratio: number;
+  symbols: string[] | null;
+  cooldown_seconds: number;
+  description: string | null;
+}
+
+export async function fetchRiskRules(): Promise<RiskRuleData[]> {
+  return api.get<RiskRuleData[]>('/risk/rules');
+}
+
+export async function createRiskRule(rule: RiskRuleData): Promise<RiskRuleData> {
+  return api.post<RiskRuleData>('/risk/rules', rule);
+}
+
+export async function updateRiskRule(name: string, updates: Partial<RiskRuleData>): Promise<RiskRuleData> {
+  return api.patch<RiskRuleData>(`/risk/rules/${name}`, updates);
+}
+
+export async function deleteRiskRule(name: string): Promise<{ success: boolean }> {
+  return api.delete<{ success: boolean }>(`/risk/rules/${name}`);
+}
+
+export async function replaceAllRiskRules(rules: RiskRuleData[]): Promise<{ success: boolean; count: number }> {
+  return api.put<{ success: boolean; count: number }>('/risk/rules', rules);
+}
+
+export async function fetchRiskSummary(): Promise<Record<string, unknown>> {
+  return api.get<Record<string, unknown>>('/risk/summary');
+}
+
+// ========== News Polling ==========
+
+export async function fetchNewsPollingStatus(): Promise<Record<string, unknown>> {
+  return api.get<Record<string, unknown>>('/system/news-polling/status');
+}
+
+export async function triggerNewsPoll(): Promise<Record<string, unknown>> {
+  return api.post<Record<string, unknown>>('/system/news-polling/trigger', {});
+}
+
 // ========== Helpers ==========
 
 /**
- * 将 AnalysisHistory DB 记录映射为前端 WorkflowExecution 格式
+ * Map an AnalysisHistory DB record to the frontend WorkflowExecution format.
  *
- * DB 中存储了 tool_calls（工具名称列表）和 output_response（LLM 回复文本），
- * 这里将它们还原为 ExecutionStep 列表，以便在 ExecutionCard 中展示。
+ * The DB stores tool_calls (list of tool names) and output_response (LLM reply text).
+ * This function reconstructs them into an ExecutionStep list for display in ExecutionCard.
  */
 function _analysisToExecution(a: AnalysisHistory): WorkflowExecution {
   const steps: WorkflowExecution['steps'] = [];
@@ -389,12 +470,12 @@ function _analysisToExecution(a: AnalysisHistory): WorkflowExecution {
     }
   }
 
-  // LLM thinking step（从 output_response 还原）
+  // LLM thinking step (reconstructed from output_response)
   if (a.output_response) {
     steps.push({
       id: `${a.id}-thinking`,
       type: 'llm_thinking',
-      name: 'Agent 思考结果',
+      name: 'Agent Reasoning',
       status: a.success ? 'completed' : 'failed',
       output: a.output_response,
       timestamp: a.created_at,

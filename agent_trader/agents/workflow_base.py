@@ -168,6 +168,8 @@ class WorkflowBase(ABC):
 
         # 可编辑配置（子类通过 _default_config 声明，运行时通过 update_config 修改）
         self._config: Dict[str, Any] = self._default_config()
+        # 从 YAML 加载持久化配置（覆盖 _default_config 的值）
+        self._load_persisted_config()
 
         # 状态
         self.is_running = False
@@ -442,6 +444,11 @@ class WorkflowBase(ABC):
         初始化 LLM + Tools + Agent。
 
         前提：子类已在 _default_config() 中声明 system_prompt。
+
+        LLM 解析优先级：
+        1. _config["llm_model"]（Agent YAML 中配置的 model name）
+        2. roles.agent（llm_config.yaml 中的默认 agent role）
+        3. .env 中的 llm_base_url/llm_api_key/llm_model（兜底）
         """
         from langchain.agents import create_agent
         from agent_trader.utils.llm_utils import create_llm_client
@@ -449,7 +456,13 @@ class WorkflowBase(ABC):
         from agent_trader.agents.tools.common import create_common_tools
 
         self.session_id = session_id
-        self.llm = create_llm_client()
+
+        # 使用 Agent 配置中的 llm_model，否则使用 agent role
+        model_name = self._config.get("llm_model", "")
+        if model_name:
+            self.llm = create_llm_client(model_name=model_name)
+        else:
+            self.llm = create_llm_client(role="agent")
 
         # Tools
         self.tool_registry = ToolRegistry()
@@ -840,9 +853,9 @@ class WorkflowBase(ABC):
         )
 
     def _get_recursion_limit(self) -> int:
-        """获取 Agent 递归限制"""
+        """获取 Agent 递归限制（优先从 Agent 配置，否则从全局 settings）"""
         from config import settings as _s
-        return _s.llm_recursion_limit
+        return self._config.get("llm_recursion_limit", _s.llm_recursion_limit)
 
     def _emit_token(self, step_id: str, token: str, accumulated: str) -> None:
         """
@@ -898,9 +911,8 @@ class WorkflowBase(ABC):
         logger.debug("Memory saved to store: %s (%d chars)", memory_id, len(summary))
 
     async def _generate_memory_summary(self, context_text: str) -> str:
-        """使用 LLM 生成本次分析的记忆摘要。"""
-        if self.llm is None:
-            return context_text[:500]
+        """使用 LLM 生成本次分析的记忆摘要（使用 memory_summary 角色）。"""
+        from agent_trader.utils.llm_utils import create_llm_client
 
         summary_prompt = f"""请将以下内容整合为简洁的投资历史摘要（限制500字以内）：
 
@@ -916,8 +928,9 @@ class WorkflowBase(ABC):
 只输出摘要内容，不要其他说明。"""
 
         try:
+            summary_llm = create_llm_client(role="memory_summary")
             response = await asyncio.to_thread(
-                lambda: self.llm.invoke(summary_prompt).content
+                lambda: summary_llm.invoke(summary_prompt).content
             )
             summary = response.strip()[:2000]
             logger.debug(f"Generated memory summary: {len(summary)} chars")
@@ -1008,14 +1021,48 @@ class WorkflowBase(ABC):
         meta = getattr(self, '_workflow_metadata', {})
         return meta.get('type', self.__class__.__name__.lower())
 
+    # ========== 配置持久化（YAML） ==========
+
+    def _load_persisted_config(self) -> None:
+        """
+        从 YAML 文件加载持久化配置，覆盖 _default_config() 的值。
+
+        调用时机：__init__() 中 _default_config() 之后。
+        """
+        try:
+            from agent_trader.config.agent_config import get_agent_config_manager
+            mgr = get_agent_config_manager()
+            wf_type = self.get_workflow_type()
+            self._config = mgr.load(wf_type, self._config)
+            logger.debug("Loaded persisted config for %s", wf_type)
+        except Exception as e:
+            logger.debug("No persisted config for workflow (will use defaults): %s", e)
+
+    def _persist_config(self) -> None:
+        """
+        将当前 _config 持久化到 YAML 文件。
+
+        调用时机：update_config() 成功更新后。
+        """
+        try:
+            from agent_trader.config.agent_config import get_agent_config_manager
+            mgr = get_agent_config_manager()
+            wf_type = self.get_workflow_type()
+            # 保存 _config + llm_model（如果有）
+            to_save = dict(self._config)
+            if hasattr(self, '_llm_model_name') and self._llm_model_name:
+                to_save["llm_model"] = self._llm_model_name
+            mgr.save(wf_type, to_save)
+        except Exception as e:
+            logger.warning("Failed to persist config for %s: %s", self.get_workflow_type(), e)
+
     # ========== 配置管理 ==========
     #
     # 子类只需 override _default_config() 声明可编辑参数及默认值。
     # get_config() / update_config() 由基类统一实现，子类通常不需要 override。
     #
     # _config 中的 key 会全部暴露给前端编辑器。
-    # 全局共享配置（llm_model, llm_recursion_limit）不属于 _config，
-    # 由基类在 get_config / update_config 中额外处理。
+    # llm_model 引用 llm_config.yaml 中的 model id。
 
     # 需要 rebuild agent 的 _config key（修改后自动触发 rebuild_agent）
     _REBUILD_KEYS = frozenset({"system_prompt"})
@@ -1027,7 +1074,8 @@ class WorkflowBase(ABC):
         结构：
         - workflow_type / name: 只读元数据
         - _config 中的所有 key: 可编辑
-        - llm_base_url / llm_api_key / llm_model / llm_recursion_limit: 全局共享的 LLM 配置
+        - llm_model: 该 Agent 使用的 LLM model name（引用 llm_config.yaml 中的 id）
+        - llm_recursion_limit: Agent 递归限制
         """
         from config import settings as _s
         meta = getattr(self, '_workflow_metadata', {})
@@ -1038,28 +1086,30 @@ class WorkflowBase(ABC):
         }
         # workflow 自身配置
         result.update(self._config)
-        # 全局 LLM 配置（仅当 workflow 使用了 Agent 时才展示）
-        if self.agent is not None:
-            result["llm_base_url"] = _s.llm_base_url
-            # API key 遮蔽：只显示前4位和后4位，中间用 * 代替
-            key = _s.llm_api_key or ""
-            result["llm_api_key"] = (
-                f"{key[:4]}{'*' * max(0, len(key) - 8)}{key[-4:]}"
-                if len(key) > 8 else "*" * len(key)
-            )
-            result["llm_model"] = _s.llm_model
+        # LLM model 配置（仅当 workflow 使用了 Agent 时才展示）
+        if self.agent is not None or "system_prompt" in self._config:
+            # 从 _config 中读取 llm_model（YAML 持久化的值），否则从 roles 获取默认值
+            llm_model = self._config.get("llm_model", "")
+            if not llm_model:
+                try:
+                    from agent_trader.config.llm_config import get_llm_config_manager
+                    roles = get_llm_config_manager().get_roles()
+                    llm_model = roles.get("agent", "")
+                except Exception:
+                    pass
+            result["llm_model"] = llm_model
             result["llm_recursion_limit"] = _s.llm_recursion_limit
         return result
 
     def update_config(self, updates: Dict[str, Any]) -> Dict[str, Any]:
         """
-        运行时更新配置。
+        运行时更新配置并持久化到 YAML。
 
         自动处理：
         - _config 中已有的 key：按原始类型做类型转换后写入
-        - llm_base_url / llm_api_key / llm_model：更新全局 settings + 重建 LLM 客户端
+        - llm_model：更新该 Agent 使用的 LLM model name + 重建 LLM 客户端
         - llm_recursion_limit：更新全局 settings
-        - 涉及 _REBUILD_KEYS 或 LLM 连接参数变更时自动 rebuild_agent
+        - 涉及 _REBUILD_KEYS 或 LLM 变更时自动 rebuild_agent
         """
         from config import settings as _s
 
@@ -1075,33 +1125,23 @@ class WorkflowBase(ABC):
                     need_rebuild = True
                 logger.info(f"Config updated: {key}")
 
-        # 2. 全局 LLM 配置
-        if "llm_base_url" in updates:
-            new_url = str(updates["llm_base_url"]).strip()
-            if new_url and new_url != _s.llm_base_url:
-                _s.llm_base_url = new_url
-                need_llm_rebuild = True
-                logger.info(f"LLM base URL updated: {new_url}")
-
-        if "llm_api_key" in updates:
-            new_key = str(updates["llm_api_key"]).strip()
-            # 忽略空值和遮蔽值（包含连续 * 的值）
-            if new_key and "***" not in new_key and new_key != _s.llm_api_key:
-                _s.llm_api_key = new_key
-                need_llm_rebuild = True
-                logger.info("LLM API key updated")
-
+        # 2. LLM model 选择（引用 llm_config.yaml 中的 model id）
         if "llm_model" in updates:
-            new_model = str(updates["llm_model"]).strip()
-            if new_model and new_model != _s.llm_model:
-                _s.llm_model = new_model
+            new_model_name = str(updates["llm_model"]).strip()
+            old_model_name = self._config.get("llm_model", "")
+            if new_model_name and new_model_name != old_model_name:
+                self._config["llm_model"] = new_model_name
                 need_llm_rebuild = True
-                logger.info(f"LLM model updated: {new_model}")
+                logger.info(f"Agent LLM model updated: {new_model_name}")
 
         if need_llm_rebuild and self.llm is not None:
             from agent_trader.utils.llm_utils import create_llm_client
-            self.llm = create_llm_client()
-            logger.info(f"LLM client rebuilt: model={_s.llm_model}, base_url={_s.llm_base_url}")
+            model_name = self._config.get("llm_model", "")
+            if model_name:
+                self.llm = create_llm_client(model_name=model_name)
+            else:
+                self.llm = create_llm_client(role="agent")
+            logger.info("LLM client rebuilt for model: %s", model_name or "(role: agent)")
             need_rebuild = True
 
         if "llm_recursion_limit" in updates:
@@ -1109,6 +1149,9 @@ class WorkflowBase(ABC):
 
         if need_rebuild:
             self.rebuild_agent()
+
+        # 3. 持久化到 YAML
+        self._persist_config()
 
         return self.get_config()
 

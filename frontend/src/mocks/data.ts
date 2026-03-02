@@ -641,8 +641,6 @@ export const mockWorkflows: Record<string, WorkflowInfo> = {
 export const mockSettings: TradingSettings = {
   // Trading
   paper_trading: true,
-  max_position_size: 0.1,
-  max_positions: 10,
   rebalance_time: '09:30',
   eod_analysis_time: '16:05',
   workflow_type: 'llm_portfolio',
@@ -671,12 +669,13 @@ export const mockSettings: TradingSettings = {
   // Providers
   broker_provider: 'alpaca',
   market_data_provider: 'tiingo',
-  realtime_data_provider: 'finnhub',
+  realtime_data_provider: '',
   news_providers: 'tiingo,finnhub',
   message_provider: 'telegram',
   // Endpoints / non-secret connection info
   alpaca_base_url: 'https://paper-api.alpaca.markets',
   telegram_chat_id: '123456789',
+  opensandbox_server_url: '',
   // LLM
   llm_base_url: 'https://api.openai.com/v1',
   news_llm_base_url: null,

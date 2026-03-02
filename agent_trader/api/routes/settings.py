@@ -14,7 +14,7 @@ router = APIRouter()
 # 密钥/Token 类字段不在此列表中 —— 只写不读，避免每次请求都传输密钥
 _READABLE_FIELDS = [
     # Trading
-    "paper_trading", "max_position_size", "max_positions",
+    "paper_trading",
     "rebalance_time", "eod_analysis_time",
     "workflow_type", "trading_timezone", "exchange",
     # Risk
@@ -35,9 +35,8 @@ _READABLE_FIELDS = [
     "news_providers", "message_provider",
     # Endpoints / non-secret connection info (readable)
     "alpaca_base_url", "telegram_chat_id",
-    # LLM endpoints (agent-specific params like llm_model are in /api/agent/config)
-    "llm_base_url",
-    "news_llm_base_url", "news_llm_model",
+    "opensandbox_server_url",
+    # NOTE: LLM configuration is now managed via /api/llm/* endpoints (llm_config.yaml)
     # Rebalance execution
     "rebalance_min_value_threshold", "rebalance_min_pct_threshold",
     "rebalance_buy_reserve_ratio", "rebalance_weight_diff_threshold",
@@ -50,11 +49,11 @@ _READABLE_FIELDS = [
 ]
 
 # 密钥字段 — 只写不读：PATCH 时接受明文新值，GET 时不返回
+# NOTE: LLM API keys are now managed via /api/llm/* endpoints (llm_config.yaml)
 _WRITE_ONLY_FIELDS = frozenset({
     "alpaca_api_key", "alpaca_secret_key",
     "tiingo_api_key", "finnhub_api_key",
     "unusual_whales_api_key",
-    "llm_api_key", "news_llm_api_key",
     "telegram_bot_token",
 })
 
@@ -77,8 +76,6 @@ class SettingsUpdate(BaseModel):
     """
     # Trading
     paper_trading: Optional[bool] = None
-    max_position_size: Optional[float] = None
-    max_positions: Optional[int] = None
     rebalance_time: Optional[str] = None
     eod_analysis_time: Optional[str] = None
     trading_timezone: Optional[str] = None
@@ -113,17 +110,13 @@ class SettingsUpdate(BaseModel):
     alpaca_api_key: Optional[str] = None
     alpaca_secret_key: Optional[str] = None
     alpaca_base_url: Optional[str] = None
+    opensandbox_server_url: Optional[str] = None
     tiingo_api_key: Optional[str] = None
     finnhub_api_key: Optional[str] = None
     unusual_whales_api_key: Optional[str] = None
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
-    # LLM (agent-specific params like llm_model are in /api/agent/config)
-    llm_base_url: Optional[str] = None
-    llm_api_key: Optional[str] = None
-    news_llm_base_url: Optional[str] = None
-    news_llm_api_key: Optional[str] = None
-    news_llm_model: Optional[str] = None
+    # NOTE: LLM configuration is now managed via /api/llm/* endpoints (llm_config.yaml)
     # Rebalance execution
     rebalance_min_value_threshold: Optional[float] = None
     rebalance_min_pct_threshold: Optional[float] = None

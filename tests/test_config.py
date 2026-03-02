@@ -24,7 +24,6 @@ class TestConfigurationLoading:
         
         assert settings is not None
         assert hasattr(settings, 'workflow_type')
-        assert hasattr(settings, 'llm_provider')
     
     def test_required_fields(self):
         """Test that required configuration fields exist"""
@@ -34,18 +33,19 @@ class TestConfigurationLoading:
         assert hasattr(settings, 'paper_trading')
         assert hasattr(settings, 'broker_provider')
         assert hasattr(settings, 'market_data_provider')
-        assert hasattr(settings, 'news_provider')
+        assert hasattr(settings, 'news_providers')
         
         # LLM configuration
-        assert hasattr(settings, 'llm_provider')
+        assert hasattr(settings, 'llm_base_url')
+        assert hasattr(settings, 'llm_api_key')
+        assert hasattr(settings, 'llm_model')
         assert hasattr(settings, 'workflow_type')
         
         # Schedule configuration
-        assert hasattr(settings, 'rebalance_time')  # Actual field name
+        assert hasattr(settings, 'rebalance_time')
     
     @patch.dict(os.environ, {
         'WORKFLOW_TYPE': 'llm_portfolio',
-        'LLM_PROVIDER': 'deepseek',
         'PAPER_TRADING': 'true'
     })
     def test_environment_variables(self):
@@ -55,7 +55,6 @@ class TestConfigurationLoading:
         reload(config)
         
         assert config.settings.workflow_type == 'llm_portfolio'
-        assert config.settings.llm_provider == 'deepseek'
         assert config.settings.paper_trading == True
     
     def test_broker_provider_options(self):
@@ -63,7 +62,7 @@ class TestConfigurationLoading:
         from config import settings
         
         # Should be alpaca by default or configured
-        assert settings.broker_provider.lower() in ['alpaca']
+        assert settings.broker_provider.lower() in ['alpaca', 'interactive_brokers']
     
     def test_market_data_provider_options(self):
         """Test market data provider configuration"""
@@ -72,38 +71,24 @@ class TestConfigurationLoading:
         # Should be tiingo by default or configured
         assert settings.market_data_provider.lower() in ['tiingo']
     
-    def test_news_provider_options(self):
-        """Test news provider configuration"""
-        from config import settings
-        
-        # Should be tiingo by default or configured
-        assert settings.news_provider.lower() in ['tiingo']
-    
-    def test_llm_provider_options(self):
-        """Test LLM provider configuration"""
-        from config import settings
-        
-        # Should be openai or deepseek
-        assert settings.llm_provider.lower() in ['openai', 'deepseek']
-    
     def test_workflow_type_options(self):
         """Test workflow type configuration"""
         from config import settings
         
         # Should be one of the valid workflow types
-        assert settings.workflow_type.lower() in [
+        valid_types = [
             'llm_portfolio',
-            'sequential',
-            'tool_calling',
-            'balanced_portfolio'
+            'black_litterman',
+            'cognitive_arbitrage',
         ]
+        assert settings.workflow_type.lower() in valid_types
     
     def test_schedule_time_format(self):
         """Test schedule time is in correct format"""
         from config import settings
         
         # Should be HH:MM format
-        schedule_time = settings.rebalance_time  # Actual field name
+        schedule_time = settings.rebalance_time
         assert isinstance(schedule_time, str)
         assert ':' in schedule_time
         
@@ -123,57 +108,44 @@ class TestConfigurationLoading:
         # Should default to True for safety
         assert isinstance(settings.paper_trading, bool)
     
-    def test_timezone_configuration(self):
-        """Test timezone configuration"""
-        from config import settings
-        
-        # Timezone may not be directly exposed, skip this test
-        # assert hasattr(settings, 'timezone')
-        # Or test that the system can work with timezones
-        assert settings is not None  # Basic check
-    
     def test_api_keys_are_strings(self):
         """Test that API keys are loaded as strings"""
         from config import settings
         
         # All API keys should be strings (even if empty)
-        if hasattr(settings, 'alpaca_api_key'):
-            assert isinstance(settings.alpaca_api_key, str)
-        if hasattr(settings, 'tiingo_api_key'):
-            assert isinstance(settings.tiingo_api_key, str)
-        if hasattr(settings, 'openai_api_key'):
-            assert isinstance(settings.openai_api_key, str)
-        if hasattr(settings, 'deepseek_api_key'):
-            assert isinstance(settings.deepseek_api_key, str)
+        assert isinstance(settings.alpaca_api_key, str)
+        assert isinstance(settings.tiingo_api_key, str)
+        assert isinstance(settings.llm_api_key, str)
 
 
 class TestConfigurationDefaults:
     """Test suite for configuration defaults"""
     
-    def test_default_max_position_size(self):
-        """Test default max position size"""
-        from config import settings
-        
-        if hasattr(settings, 'max_position_size'):
-            assert isinstance(settings.max_position_size, (int, float))
-            # max_position_size is absolute value, not percentage
-            assert settings.max_position_size > 0
-    
     def test_default_portfolio_check_interval(self):
         """Test default portfolio check interval"""
         from config import settings
         
-        if hasattr(settings, 'portfolio_check_interval'):
-            assert isinstance(settings.portfolio_check_interval, int)
-            assert settings.portfolio_check_interval > 0
+        assert isinstance(settings.portfolio_check_interval, int)
+        assert settings.portfolio_check_interval > 0
     
     def test_default_risk_check_interval(self):
         """Test default risk check interval"""
         from config import settings
         
-        if hasattr(settings, 'risk_check_interval'):
-            assert isinstance(settings.risk_check_interval, int)
-            assert settings.risk_check_interval > 0
+        assert isinstance(settings.risk_check_interval, int)
+        assert settings.risk_check_interval > 0
+
+    def test_news_polling_settings(self):
+        """Test news polling configuration defaults"""
+        from config import settings
+        
+        assert hasattr(settings, 'news_poll_interval_minutes')
+        assert isinstance(settings.news_poll_interval_minutes, int)
+        assert settings.news_poll_interval_minutes >= 0
+        
+        assert hasattr(settings, 'news_poll_max_per_batch')
+        assert isinstance(settings.news_poll_max_per_batch, int)
+        assert settings.news_poll_max_per_batch > 0
 
 
 class TestConfigurationValidation:
@@ -192,19 +164,13 @@ class TestConfigurationValidation:
         from config import settings
         
         # System should initialize even with missing keys
-        # (They'll be caught at runtime when actually needed)
         assert settings is not None
     
     def test_settings_immutability(self):
-        """Test that settings can be modified (Pydantic allows mutation by default)"""
+        """Test that settings can be accessed"""
         from config import settings
         
-        # Pydantic settings are mutable by default unless frozen
-        # This test just verifies settings exist and can be accessed
         original_value = settings.workflow_type
-        
-        # Settings can be modified in runtime (not frozen)
-        # This is actually okay for testing and development
         assert settings.workflow_type is not None
 
 
@@ -227,29 +193,60 @@ class TestProviderConfiguration:
         if settings.market_data_provider.lower() == 'tiingo':
             assert hasattr(settings, 'tiingo_api_key')
     
-    def test_openai_configuration(self):
-        """Test OpenAI configuration"""
+    def test_llm_configuration(self):
+        """Test LLM configuration fields"""
         from config import settings
         
-        if settings.llm_provider.lower() == 'openai':
-            assert hasattr(settings, 'openai_api_key')
-            assert hasattr(settings, 'openai_model')
-    
-    def test_deepseek_configuration(self):
-        """Test DeepSeek configuration"""
-        from config import settings
-        
-        if settings.llm_provider.lower() == 'deepseek':
-            assert hasattr(settings, 'deepseek_api_key')
-            assert hasattr(settings, 'deepseek_model')
+        assert hasattr(settings, 'llm_base_url')
+        assert hasattr(settings, 'llm_api_key')
+        assert hasattr(settings, 'llm_model')
     
     def test_telegram_configuration(self):
         """Test Telegram configuration"""
         from config import settings
         
-        if settings.message_provider.lower() == 'telegram':
-            assert hasattr(settings, 'telegram_bot_token')
-            assert hasattr(settings, 'telegram_chat_id')
+        assert hasattr(settings, 'telegram_bot_token')
+        assert hasattr(settings, 'telegram_chat_id')
+
+    def test_data_dir_configuration(self):
+        """Test data directory configuration"""
+        from config import settings
+
+        assert hasattr(settings, 'data_dir')
+        assert hasattr(settings, 'get_data_dir')
+        data_dir = settings.get_data_dir()
+        assert data_dir is not None
+
+
+class TestRiskConfiguration:
+    """Test suite for risk management configuration"""
+    
+    def test_risk_management_enabled(self):
+        """Test risk management enabled flag"""
+        from config import settings
+        
+        assert isinstance(settings.risk_management_enabled, bool)
+    
+    def test_stop_loss_percentage(self):
+        """Test stop loss percentage"""
+        from config import settings
+        
+        assert isinstance(settings.stop_loss_percentage, float)
+        assert 0 < settings.stop_loss_percentage < 1
+    
+    def test_take_profit_percentage(self):
+        """Test take profit percentage"""
+        from config import settings
+        
+        assert isinstance(settings.take_profit_percentage, float)
+        assert 0 < settings.take_profit_percentage < 1
+    
+    def test_daily_loss_limit(self):
+        """Test daily loss limit percentage"""
+        from config import settings
+        
+        assert isinstance(settings.daily_loss_limit_percentage, float)
+        assert 0 < settings.daily_loss_limit_percentage < 1
 
 
 if __name__ == "__main__":

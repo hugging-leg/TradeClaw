@@ -87,6 +87,9 @@ class BlackLittermanWorkflow(WorkflowBase):
         return {
             "system_prompt": BL_SYSTEM_PROMPT,
             "bl_risk_aversion": settings.bl_risk_aversion,
+            "bl_historical_days": settings.bl_historical_days,
+            "bl_base_variance": settings.bl_base_variance,
+            "bl_min_weight": settings.bl_min_weight,
             "bl_default_universe": settings.get_bl_default_universe(),
         }
 
@@ -140,7 +143,7 @@ class BlackLittermanWorkflow(WorkflowBase):
     async def _fetch_historical_prices(self, days: int = None) -> pd.DataFrame:
         """获取历史价格数据"""
         if days is None:
-            days = settings.bl_historical_days
+            days = self._config.get("bl_historical_days", 252)
         prices_dict = {}
         end_date = utc_now()
         start_date = end_date - timedelta(days=days + 30)
@@ -220,7 +223,7 @@ class BlackLittermanWorkflow(WorkflowBase):
                 P[i, asset_to_idx[symbol]] = 1.0
                 Q[i] = expected_return
 
-        base_variance = settings.bl_base_variance
+        base_variance = self._config.get("bl_base_variance", 0.05)
         omega_diag = []
         for symbol in views.keys():
             conf = confidences.get(symbol, 0.5)
@@ -359,7 +362,7 @@ class BlackLittermanWorkflow(WorkflowBase):
         weights_str = "\n".join([
             f"  • {sym}: {w * 100:.1f}%"
             for sym, w in sorted(optimal_weights.items(), key=lambda x: -x[1])
-            if w >= settings.bl_min_weight
+            if w >= self._config.get("bl_min_weight", 0.01)
         ])
 
         await self.message_manager.send_message(
@@ -429,7 +432,7 @@ class BlackLittermanWorkflow(WorkflowBase):
         target_allocations = {
             symbol: weight * 100
             for symbol, weight in target_weights.items()
-            if weight >= settings.bl_min_weight
+            if weight >= self._config.get("bl_min_weight", 0.01)
         }
 
         # 复用通用 rebalance 计算

@@ -236,7 +236,7 @@ class IBKRBrokerAdapter(BrokerAPI):
             return []
 
     async def get_portfolio(self) -> Optional[Portfolio]:
-        """获取投资组合"""
+        """Get portfolio information"""
         try:
             account = await self.get_account()
             if not account:
@@ -245,6 +245,10 @@ class IBKRBrokerAdapter(BrokerAPI):
             positions = await self.get_positions()
             total_pnl = sum(p.unrealized_pnl for p in positions)
 
+            # IBKR: try to get RealizedPnL + UnrealizedPnL for the day
+            # For now, use sum of position unrealized PnL as approximation
+            day_pnl = total_pnl
+
             return Portfolio(
                 equity=account['equity'],
                 cash=account['cash'],
@@ -252,11 +256,11 @@ class IBKRBrokerAdapter(BrokerAPI):
                 buying_power=account['buying_power'],
                 positions=positions,
                 total_pnl=total_pnl,
-                day_pnl=Decimal('0')
+                day_pnl=day_pnl,
             )
 
         except Exception as e:
-            logger.error(f"获取投资组合失败: {e}")
+            logger.error(f"Failed to get portfolio: {e}")
             return None
 
     async def submit_order(self, order: Order) -> Optional[str]:
