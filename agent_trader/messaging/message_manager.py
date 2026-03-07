@@ -69,7 +69,8 @@ class MessageManager:
         self.transport = transport
         self.is_processing = False
         self.processing_task = None
-        self.message_queue = asyncio.Queue()
+        self._max_queue_size = 1000
+        self.message_queue = asyncio.Queue(maxsize=self._max_queue_size)
         self.failed_messages = []
         self._max_failed_messages = 100
         self.transport_initialized = False
@@ -453,16 +454,38 @@ Trading analysis and execution workflow has completed successfully.
             logger.error(f"Error sending reasoning summary: {e}")
     
     async def _queue_message(self, message: str, message_type: str):
-        """Queue a message for processing."""
+        """Queue a message for processing.
+
+        If the queue is full (maxsize reached), the oldest message is
+        discarded to make room, preventing unbounded memory growth when
+        the transport is slow or down.
+        """
         message_data = {
             'text': message,
             'type': message_type,
             'timestamp': utc_now(),
             'retries': 0
         }
-        
-        # Add to queue
-        await self.message_queue.put(message_data)
+
+        # Add to queue — drop oldest on overflow
+        try:
+            self.message_queue.put_nowait(message_data)
+        except asyncio.QueueFull:
+            # Discard the oldest message to make room
+            try:
+                dropped = self.message_queue.get_nowait()
+                logger.warning(
+                    "Message queue full (%d), dropped oldest message (type=%s)",
+                    self._max_queue_size,
+                    dropped.get("type", "?"),
+                )
+            except asyncio.QueueEmpty:
+                pass
+            try:
+                self.message_queue.put_nowait(message_data)
+            except asyncio.QueueFull:
+                logger.error("Message queue still full after drop — message lost")
+
         self.stats['queue_size'] = self.message_queue.qsize()
         
         logger.debug(f"Message queued: {message_type}, Queue size: {self.stats['queue_size']}")

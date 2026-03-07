@@ -139,6 +139,42 @@ class RiskManager:
         if rule.cooldown_seconds > 0:
             self._cooldowns[(rule.name, symbol)] = utc_now()
 
+    def _prune_expired_cooldowns(self) -> None:
+        """Remove cooldown entries that have long expired.
+
+        Called at the start of each risk check cycle to prevent the
+        ``_cooldowns`` dict from growing without bound over months of
+        trading with many symbols.  An entry is pruned when it is at
+        least 2x older than the corresponding rule's cooldown_seconds.
+        """
+        if not self._cooldowns:
+            return
+
+        now = utc_now()
+        # Build a lookup: rule_name -> max cooldown_seconds
+        rule_cooldowns: Dict[str, float] = {}
+        for rule in self._rules_mgr.get_rules():
+            if rule.cooldown_seconds > 0:
+                existing = rule_cooldowns.get(rule.name, 0)
+                rule_cooldowns[rule.name] = max(existing, rule.cooldown_seconds)
+
+        to_remove = []
+        for (rule_name, symbol), ts in self._cooldowns.items():
+            max_cd = rule_cooldowns.get(rule_name, 0)
+            if max_cd <= 0:
+                # Rule no longer has a cooldown — safe to remove
+                to_remove.append((rule_name, symbol))
+                continue
+            elapsed = (now - ts).total_seconds()
+            if elapsed > max_cd * 2:
+                to_remove.append((rule_name, symbol))
+
+        for key in to_remove:
+            del self._cooldowns[key]
+
+        if to_remove:
+            logger.debug("Pruned %d expired cooldown entries", len(to_remove))
+
     def _rule_applies_to_symbol(self, rule: RiskRule, symbol: str) -> bool:
         """检查规则是否适用于指定股票"""
         if rule.symbols is None:
@@ -160,6 +196,7 @@ class RiskManager:
             风险检查结果
         """
         self.last_check = utc_now()
+        self._prune_expired_cooldowns()
         self._llm_triggered_symbols.clear()
 
         results: Dict[str, Any] = {
@@ -548,6 +585,48 @@ class RiskManager:
             "last_check": self.last_check.isoformat() if self.last_check else None,
             "recent_events": self.risk_events[-10:] if self.risk_events else [],
         }
+
+    def get_risk_events_flat(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Flatten raw risk check results into individual per-event records.
+
+        The frontend expects each event to have the shape::
+
+            { type, symbol, message, timestamp }
+
+        This method transforms the internal ``risk_events`` list (which
+        stores full risk check result dicts) into that flat format.
+        """
+        flat: List[Dict[str, Any]] = []
+
+        for result in self.risk_events:
+            ts = result.get("timestamp", "")
+
+            for item in result.get("stop_loss_triggered", []):
+                symbol = item if isinstance(item, str) else item.get("symbol", "unknown")
+                msg = item.get("message", f"Stop-loss triggered for {symbol}") if isinstance(item, dict) else f"Stop-loss triggered for {symbol}"
+                flat.append({"type": "stop_loss", "symbol": symbol, "message": msg, "timestamp": ts})
+
+            for item in result.get("take_profit_triggered", []):
+                symbol = item if isinstance(item, str) else item.get("symbol", "unknown")
+                msg = item.get("message", f"Take-profit triggered for {symbol}") if isinstance(item, dict) else f"Take-profit triggered for {symbol}"
+                flat.append({"type": "take_profit", "symbol": symbol, "message": msg, "timestamp": ts})
+
+            if result.get("daily_limit_breached"):
+                flat.append({
+                    "type": "daily_limit",
+                    "symbol": "__portfolio__",
+                    "message": "Daily loss limit breached",
+                    "timestamp": ts,
+                })
+
+            for item in result.get("concentration_warnings", []):
+                symbol = item if isinstance(item, str) else item.get("symbol", "unknown")
+                msg = item.get("message", f"Concentration warning for {symbol}") if isinstance(item, dict) else f"Concentration warning for {symbol}"
+                flat.append({"type": "concentration", "symbol": symbol, "message": msg, "timestamp": ts})
+
+        # Return most recent events first, capped at limit
+        flat.reverse()
+        return flat[:limit]
 
     def clear_events(self) -> None:
         """清除事件历史"""

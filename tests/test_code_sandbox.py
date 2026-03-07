@@ -1,15 +1,12 @@
 """
-Tests for Code Execution Sandbox
+Tests for Code Execution Sandbox (OpenSandbox-only mode)
 
 Tests the sandbox including:
-- Safe code execution (local fallback: RestrictedPython / simple exec)
-- Output capture
-- Variable collection
-- Security restrictions (blocked imports, dangerous patterns)
-- Timeout handling
-- Tool creation
-- OpenSandbox backend availability check
-- Backend selection logic
+- OpenSandbox backend singleton, availability checks, caching
+- Tool creation (execute_python + execute_terminal)
+- Both tools return unavailable error when OpenSandbox is not configured
+- Timeout clamping
+- reset_availability
 """
 
 import json
@@ -17,253 +14,14 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from agent_trader.agents.tools.code_sandbox_tools import (
-    execute_code,
-    _execute_code_local,
     create_code_sandbox_tools,
     OpenSandboxBackend,
-    _SAFE_MODULES,
+    _OPENSANDBOX_UNAVAILABLE_MSG,
 )
 
 
-class TestExecuteCode:
-    """Test the execute_code function"""
-
-    @pytest.mark.asyncio
-    async def test_simple_arithmetic(self):
-        """Test basic arithmetic"""
-        result = await execute_code("x = 1 + 2")
-        assert result["success"] is True
-        assert result["variables"]["x"] == 3
-
-    @pytest.mark.asyncio
-    async def test_print_output(self):
-        """Test stdout capture"""
-        result = await execute_code("print('Hello World')")
-        assert result["success"] is True
-        assert "Hello World" in result["output"]
-
-    @pytest.mark.asyncio
-    async def test_multiple_variables(self):
-        """Test collecting multiple variables"""
-        code = """
-a = 10
-b = 20
-total = a + b
-"""
-        result = await execute_code(code)
-        assert result["success"] is True
-        assert result["variables"]["a"] == 10
-        assert result["variables"]["b"] == 20
-        assert result["variables"]["total"] == 30
-
-    @pytest.mark.asyncio
-    async def test_safe_module_import_math(self):
-        """Test importing an allowed module (math)"""
-        code = """
-import math
-result = math.sqrt(16)
-"""
-        result = await execute_code(code)
-        assert result["success"] is True
-        assert result["variables"]["result"] == 4.0
-
-    @pytest.mark.asyncio
-    async def test_safe_module_import_json(self):
-        """Test importing json module"""
-        code = """
-import json
-data = json.dumps({"key": "value"})
-"""
-        result = await execute_code(code)
-        assert result["success"] is True
-        assert "key" in result["variables"]["data"]
-
-    @pytest.mark.asyncio
-    async def test_safe_module_import_datetime(self):
-        """Test importing datetime module"""
-        code = """
-import datetime
-today = str(datetime.date.today())
-"""
-        result = await execute_code(code)
-        # RestrictedPython may not be installed; in simple sandbox mode
-        # datetime import should still work via _safe_import whitelist
-        if result["success"]:
-            assert len(result["variables"]["today"]) == 10  # YYYY-MM-DD
-        else:
-            # In simple sandbox, __import__ may not be directly available
-            # This is acceptable - the module is in the whitelist
-            pytest.skip("datetime import not supported in simple sandbox fallback")
-
-    @pytest.mark.asyncio
-    async def test_blocked_import_os(self):
-        """Test that importing os is blocked"""
-        code = "import os"
-        result = await execute_code(code)
-        assert result["success"] is False
-        assert "not allowed" in result.get("error", "") or "error" in result
-
-    @pytest.mark.asyncio
-    async def test_blocked_import_subprocess(self):
-        """Test that importing subprocess is blocked"""
-        code = "import subprocess"
-        result = await execute_code(code)
-        assert result["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_syntax_error(self):
-        """Test code with syntax error"""
-        code = "def foo(:"
-        result = await execute_code(code)
-        assert result["success"] is False
-        assert "error" in result or "traceback" in result
-
-    @pytest.mark.asyncio
-    async def test_runtime_error(self):
-        """Test code that raises an exception"""
-        code = "x = 1 / 0"
-        result = await execute_code(code)
-        assert result["success"] is False
-        assert "error" in result
-
-    @pytest.mark.asyncio
-    async def test_timeout(self):
-        """Test that long-running code times out"""
-        code = """
-import time
-time.sleep(100)
-"""
-        # time is not in safe modules, so this should fail with import error
-        result = await execute_code(code, timeout_seconds=2)
-        assert result["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_output_truncation(self):
-        """Test that output is truncated"""
-        code = """
-for i in range(100000):
-    print(f"Line {i}")
-"""
-        result = await execute_code(code, max_output_chars=100)
-        assert result["success"] is True
-        assert len(result["output"]) <= 100
-
-    @pytest.mark.asyncio
-    async def test_list_comprehension(self):
-        """Test list comprehension works"""
-        code = """
-squares = [x**2 for x in range(5)]
-"""
-        result = await execute_code(code)
-        assert result["success"] is True
-        assert result["variables"]["squares"] == [0, 1, 4, 9, 16]
-
-    @pytest.mark.asyncio
-    async def test_dict_operations(self):
-        """Test dict operations work"""
-        code = """
-data = {"a": 1, "b": 2}
-total = sum(data.values())
-"""
-        result = await execute_code(code)
-        assert result["success"] is True
-        assert result["variables"]["total"] == 3
-
-    @pytest.mark.asyncio
-    async def test_string_operations(self):
-        """Test string operations work"""
-        code = """
-text = "hello world"
-upper = text.upper()
-words = text.split()
-"""
-        result = await execute_code(code)
-        assert result["success"] is True
-        assert result["variables"]["upper"] == "HELLO WORLD"
-        assert result["variables"]["words"] == ["hello", "world"]
-
-
-class TestCodeSandboxTools:
-    """Test the LangChain tool creation"""
-
-    @pytest.fixture
-    def mock_workflow(self):
-        """Create a mock workflow with message_manager"""
-        wf = MagicMock()
-        wf.message_manager = MagicMock()
-        wf.message_manager.send_message = AsyncMock()
-        wf.message_manager.send_error = AsyncMock()
-        return wf
-
-    def test_create_tools(self, mock_workflow):
-        """Test that tools are created"""
-        tools = create_code_sandbox_tools(mock_workflow)
-        assert len(tools) == 1
-        tool_obj, category = tools[0]
-        assert category == "sandbox"
-        assert tool_obj.name == "execute_python"
-
-    @pytest.mark.asyncio
-    async def test_tool_execution_success(self, mock_workflow):
-        """Test successful tool execution"""
-        tools = create_code_sandbox_tools(mock_workflow)
-        tool_obj, _ = tools[0]
-
-        result_str = await tool_obj.ainvoke({"code": "x = 42\nprint(x)", "timeout_seconds": 10})
-        result = json.loads(result_str)
-        assert result["success"] is True
-        assert "42" in result["output"]
-
-    @pytest.mark.asyncio
-    async def test_tool_blocks_dangerous_patterns(self, mock_workflow):
-        """Test that dangerous patterns are blocked by the tool"""
-        tools = create_code_sandbox_tools(mock_workflow)
-        tool_obj, _ = tools[0]
-
-        # os.system should be blocked
-        result_str = await tool_obj.ainvoke({"code": "os.system('ls')", "timeout_seconds": 5})
-        result = json.loads(result_str)
-        assert result["success"] is False
-        assert "not allowed" in result.get("error", "").lower() or "security" in result.get("error", "").lower()
-
-    @pytest.mark.asyncio
-    async def test_tool_blocks_open(self, mock_workflow):
-        """Test that open() is blocked"""
-        tools = create_code_sandbox_tools(mock_workflow)
-        tool_obj, _ = tools[0]
-
-        result_str = await tool_obj.ainvoke({"code": "f = open('test.txt', 'w')", "timeout_seconds": 5})
-        result = json.loads(result_str)
-        assert result["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_tool_blocks_exec(self, mock_workflow):
-        """Test that exec() is blocked"""
-        tools = create_code_sandbox_tools(mock_workflow)
-        tool_obj, _ = tools[0]
-
-        result_str = await tool_obj.ainvoke({"code": "exec('print(1)')", "timeout_seconds": 5})
-        result = json.loads(result_str)
-        assert result["success"] is False
-
-    @pytest.mark.asyncio
-    async def test_tool_timeout_clamped(self, mock_workflow):
-        """Test that timeout is clamped to [1, 120]"""
-        tools = create_code_sandbox_tools(mock_workflow)
-        tool_obj, _ = tools[0]
-
-        # Should not error even with extreme timeout values
-        result_str = await tool_obj.ainvoke({"code": "x = 1", "timeout_seconds": 0})
-        result = json.loads(result_str)
-        assert result["success"] is True
-
-        result_str = await tool_obj.ainvoke({"code": "x = 1", "timeout_seconds": 999})
-        result = json.loads(result_str)
-        assert result["success"] is True
-
-
 class TestOpenSandboxBackend:
-    """Test OpenSandbox backend detection and fallback logic"""
+    """Test OpenSandbox backend detection and lifecycle"""
 
     def setup_method(self):
         """Reset singleton between tests."""
@@ -275,11 +33,18 @@ class TestOpenSandboxBackend:
         b = OpenSandboxBackend.get_instance()
         assert a is b
 
+    def test_initial_state(self):
+        """Test initial backend state"""
+        backend = OpenSandboxBackend()
+        assert backend._sandbox is None
+        assert backend._initialized is False
+        assert backend._available is None
+        assert backend._python_bin_dir == ""
+
     @pytest.mark.asyncio
     async def test_unavailable_when_no_server_url(self):
         """Test that OpenSandbox is unavailable when server URL is empty"""
         backend = OpenSandboxBackend()
-        # Force re-check
         backend._available = None
         with patch("config.settings") as mock_settings:
             mock_settings.opensandbox_server_url = ""
@@ -296,7 +61,7 @@ class TestOpenSandboxBackend:
             # Simulate SDK not installed by making the import fail
             import sys
             original = sys.modules.get("opensandbox")
-            sys.modules["opensandbox"] = None
+            sys.modules["opensandbox"] = None  # type: ignore[assignment]
             try:
                 result = await backend.is_available()
                 assert result is False
@@ -319,36 +84,256 @@ class TestOpenSandboxBackend:
         assert result is True
 
     @pytest.mark.asyncio
-    async def test_execute_code_falls_back_to_local(self):
-        """Test that execute_code falls back to local when OpenSandbox is unavailable"""
-        # OpenSandbox should not be available in test env (no server running)
-        result = await execute_code("x = 42\nprint(x)")
-        assert result["success"] is True
-        assert "42" in result["output"]
-        # Backend should be local (restricted_python or simple_exec)
-        assert result.get("backend") in ("restricted_python", "simple_exec")
+    async def test_reset_availability(self):
+        """Test that reset_availability clears the cache"""
+        backend = OpenSandboxBackend()
+        backend._available = True
+        backend.reset_availability()
+        assert backend._available is None
 
     @pytest.mark.asyncio
-    async def test_local_execution_directly(self):
-        """Test _execute_code_local directly"""
-        result = await _execute_code_local("y = 10 + 5")
-        assert result["success"] is True
-        assert result["variables"]["y"] == 15
-        assert result.get("backend") in ("restricted_python", "simple_exec")
+    async def test_execute_raises_when_not_initialized(self):
+        """Test that execute raises RuntimeError when sandbox can't init"""
+        backend = OpenSandboxBackend()
+        backend._available = True  # pretend available
+        # _ensure_initialized will fail because no real server
+        with patch.object(backend, "_ensure_initialized", return_value=False):
+            with pytest.raises(RuntimeError, match="not available"):
+                await backend.execute("print(1)")
+
+    @pytest.mark.asyncio
+    async def test_run_command_raises_when_not_initialized(self):
+        """Test that run_command raises RuntimeError when sandbox can't init"""
+        backend = OpenSandboxBackend()
+        backend._available = True
+        with patch.object(backend, "_ensure_initialized", return_value=False):
+            with pytest.raises(RuntimeError, match="not available"):
+                await backend.run_command("ls")
+
+    @pytest.mark.asyncio
+    async def test_shutdown(self):
+        """Test that shutdown cleans up state"""
+        backend = OpenSandboxBackend()
+        backend._initialized = True
+        backend._sandbox = MagicMock()
+        backend._sandbox.kill = AsyncMock()
+        backend._sandbox.close = AsyncMock()
+
+        await backend.shutdown()
+
+        assert backend._initialized is False
+        assert backend._sandbox is None
 
 
-class TestSafeModules:
-    """Test safe module whitelist"""
+class TestCodeSandboxTools:
+    """Test the LangChain tool creation"""
 
-    def test_safe_modules_contain_expected(self):
-        """Test that expected modules are in safe list"""
-        expected = {"math", "json", "datetime", "re", "collections", "csv", "io"}
-        assert expected.issubset(_SAFE_MODULES)
+    @pytest.fixture
+    def mock_workflow(self):
+        """Create a mock workflow with message_manager"""
+        wf = MagicMock()
+        wf.message_manager = MagicMock()
+        wf.message_manager.send_message = AsyncMock()
+        wf.message_manager.send_error = AsyncMock()
+        return wf
 
-    def test_unsafe_modules_not_in_list(self):
-        """Test that unsafe modules are not in safe list"""
-        unsafe = {"os", "sys", "subprocess", "shutil", "socket", "http"}
-        assert not unsafe.intersection(_SAFE_MODULES)
+    def test_create_tools(self, mock_workflow):
+        """Test that tools are created"""
+        tools = create_code_sandbox_tools(mock_workflow)
+        assert len(tools) == 2
+        names = {t[0].name for t in tools}
+        assert names == {"execute_python", "execute_terminal"}
+        for _, category in tools:
+            assert category == "sandbox"
+
+    @pytest.mark.asyncio
+    async def test_execute_python_unavailable(self, mock_workflow):
+        """Test execute_python returns error when OpenSandbox is unavailable"""
+        # Reset singleton to ensure clean state
+        OpenSandboxBackend._instance = None
+        tools = create_code_sandbox_tools(mock_workflow)
+        tool_obj, _ = tools[0]  # execute_python
+
+        # Patch the backend to be unavailable
+        with patch.object(OpenSandboxBackend, "is_available", return_value=False):
+            result_str = await tool_obj.ainvoke({"code": "x = 42", "timeout_seconds": 10})
+            result = json.loads(result_str)
+            assert result["success"] is False
+            assert "not configured" in result["error"].lower() or "not available" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_execute_terminal_unavailable(self, mock_workflow):
+        """Test execute_terminal returns error when OpenSandbox is unavailable"""
+        OpenSandboxBackend._instance = None
+        tools = create_code_sandbox_tools(mock_workflow)
+        tool_obj, _ = tools[1]  # execute_terminal
+
+        with patch.object(OpenSandboxBackend, "is_available", return_value=False):
+            result_str = await tool_obj.ainvoke({"command": "ls", "timeout_seconds": 10})
+            result = json.loads(result_str)
+            assert result["success"] is False
+            assert "not configured" in result["error"].lower() or "not available" in result["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_execute_python_success(self, mock_workflow):
+        """Test execute_python dispatches to OpenSandbox when available"""
+        OpenSandboxBackend._instance = None
+        tools = create_code_sandbox_tools(mock_workflow)
+        tool_obj, _ = tools[0]
+
+        mock_result = {
+            "success": True,
+            "output": "42",
+            "stderr": "",
+            "variables": {"x": 42},
+            "backend": "opensandbox",
+        }
+
+        with patch.object(OpenSandboxBackend, "is_available", return_value=True), \
+             patch.object(OpenSandboxBackend, "execute", return_value=mock_result):
+            result_str = await tool_obj.ainvoke({"code": "x = 42\nprint(x)", "timeout_seconds": 10})
+            result = json.loads(result_str)
+            assert result["success"] is True
+            assert result["backend"] == "opensandbox"
+            assert "42" in result["output"]
+
+    @pytest.mark.asyncio
+    async def test_execute_terminal_success(self, mock_workflow):
+        """Test execute_terminal dispatches to OpenSandbox when available"""
+        OpenSandboxBackend._instance = None
+        tools = create_code_sandbox_tools(mock_workflow)
+        tool_obj, _ = tools[1]
+
+        mock_result = {
+            "success": True,
+            "exit_code": 0,
+            "stdout": "file1.txt\nfile2.txt",
+            "stderr": "",
+            "backend": "opensandbox",
+        }
+
+        with patch.object(OpenSandboxBackend, "is_available", return_value=True), \
+             patch.object(OpenSandboxBackend, "run_command", return_value=mock_result):
+            result_str = await tool_obj.ainvoke({"command": "ls", "timeout_seconds": 10})
+            result = json.loads(result_str)
+            assert result["success"] is True
+            assert result["backend"] == "opensandbox"
+            assert "file1.txt" in result["stdout"]
+
+    @pytest.mark.asyncio
+    async def test_timeout_clamped_python(self, mock_workflow):
+        """Test that execute_python timeout is clamped to [1, 120]"""
+        OpenSandboxBackend._instance = None
+        tools = create_code_sandbox_tools(mock_workflow)
+        tool_obj, _ = tools[0]
+
+        mock_result = {"success": True, "output": "", "stderr": "", "variables": {}, "backend": "opensandbox"}
+
+        with patch.object(OpenSandboxBackend, "is_available", return_value=True), \
+             patch.object(OpenSandboxBackend, "execute", return_value=mock_result) as mock_exec:
+            # timeout=0 should be clamped to 1
+            await tool_obj.ainvoke({"code": "x = 1", "timeout_seconds": 0})
+            call_kwargs = mock_exec.call_args
+            assert call_kwargs[1]["timeout_seconds"] == 1 or call_kwargs.kwargs.get("timeout_seconds") == 1
+
+            # timeout=999 should be clamped to 120
+            await tool_obj.ainvoke({"code": "x = 1", "timeout_seconds": 999})
+            call_kwargs = mock_exec.call_args
+            assert call_kwargs[1]["timeout_seconds"] == 120 or call_kwargs.kwargs.get("timeout_seconds") == 120
+
+    @pytest.mark.asyncio
+    async def test_timeout_clamped_terminal(self, mock_workflow):
+        """Test that execute_terminal timeout is clamped to [1, 300]"""
+        OpenSandboxBackend._instance = None
+        tools = create_code_sandbox_tools(mock_workflow)
+        tool_obj, _ = tools[1]
+
+        mock_result = {"success": True, "exit_code": 0, "stdout": "", "stderr": "", "backend": "opensandbox"}
+
+        with patch.object(OpenSandboxBackend, "is_available", return_value=True), \
+             patch.object(OpenSandboxBackend, "run_command", return_value=mock_result) as mock_cmd:
+            # timeout=0 should be clamped to 1
+            await tool_obj.ainvoke({"command": "echo hi", "timeout_seconds": 0})
+            call_kwargs = mock_cmd.call_args
+            assert call_kwargs[1]["timeout_seconds"] == 1 or call_kwargs.kwargs.get("timeout_seconds") == 1
+
+            # timeout=999 should be clamped to 300
+            await tool_obj.ainvoke({"command": "echo hi", "timeout_seconds": 999})
+            call_kwargs = mock_cmd.call_args
+            assert call_kwargs[1]["timeout_seconds"] == 300 or call_kwargs.kwargs.get("timeout_seconds") == 300
+
+    @pytest.mark.asyncio
+    async def test_execute_python_exception_handling(self, mock_workflow):
+        """Test that exceptions in execute_python are caught and returned as JSON"""
+        OpenSandboxBackend._instance = None
+        tools = create_code_sandbox_tools(mock_workflow)
+        tool_obj, _ = tools[0]
+
+        with patch.object(OpenSandboxBackend, "is_available", return_value=True), \
+             patch.object(OpenSandboxBackend, "execute", side_effect=Exception("boom")):
+            result_str = await tool_obj.ainvoke({"code": "x = 1", "timeout_seconds": 10})
+            result = json.loads(result_str)
+            assert result["success"] is False
+            assert "boom" in result["error"]
+
+
+class TestResolveExecdEndpoint:
+    """Test SDK-based endpoint resolution (replaces docker port CLI)"""
+
+    def setup_method(self):
+        OpenSandboxBackend._instance = None
+
+    @pytest.mark.asyncio
+    async def test_resolve_endpoint_success(self):
+        """get_sandbox_endpoint returns a valid direct endpoint string"""
+        backend = OpenSandboxBackend()
+        mock_sandbox = MagicMock()
+        mock_sandbox.id = "test-sandbox-id"
+        mock_ep = MagicMock()
+        mock_ep.endpoint = "172.17.0.5:44772"
+        mock_sandbox._sandbox_service.get_sandbox_endpoint = AsyncMock(return_value=mock_ep)
+
+        result = await backend._resolve_execd_endpoint(mock_sandbox)
+        assert result == "172.17.0.5:44772"
+        mock_sandbox._sandbox_service.get_sandbox_endpoint.assert_awaited_once_with(
+            "test-sandbox-id", 44772, use_server_proxy=False
+        )
+
+    @pytest.mark.asyncio
+    async def test_resolve_endpoint_failure(self):
+        """get_sandbox_endpoint raises → returns None"""
+        backend = OpenSandboxBackend()
+        mock_sandbox = MagicMock()
+        mock_sandbox.id = "test-sandbox-id"
+        mock_sandbox._sandbox_service.get_sandbox_endpoint = AsyncMock(
+            side_effect=Exception("not found")
+        )
+
+        result = await backend._resolve_execd_endpoint(mock_sandbox)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_endpoint_empty(self):
+        """get_sandbox_endpoint returns empty endpoint → returns None"""
+        backend = OpenSandboxBackend()
+        mock_sandbox = MagicMock()
+        mock_sandbox.id = "test-sandbox-id"
+        mock_ep = MagicMock()
+        mock_ep.endpoint = ""
+        mock_sandbox._sandbox_service.get_sandbox_endpoint = AsyncMock(return_value=mock_ep)
+
+        result = await backend._resolve_execd_endpoint(mock_sandbox)
+        assert result is None
+
+
+class TestUnavailableMessage:
+    """Test the unavailable message constant"""
+
+    def test_message_content(self):
+        """Test that the unavailable message is informative"""
+        assert "opensandbox_server_url" in _OPENSANDBOX_UNAVAILABLE_MSG.lower() or \
+               "opensandbox" in _OPENSANDBOX_UNAVAILABLE_MSG.lower()
+        assert "no local fallback" in _OPENSANDBOX_UNAVAILABLE_MSG.lower()
 
 
 if __name__ == "__main__":

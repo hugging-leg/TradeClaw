@@ -39,6 +39,7 @@ _READABLE_FIELDS = [
     # Endpoints / non-secret connection info (readable)
     "alpaca_base_url", "telegram_chat_id",
     "opensandbox_server_url",
+    "playwright_mcp_url",
     # NOTE: LLM configuration is now managed via /api/llm/* endpoints (llm_config.yaml)
     # Rebalance execution
     "rebalance_min_value_threshold", "rebalance_min_pct_threshold",
@@ -118,6 +119,7 @@ class SettingsUpdate(BaseModel):
     alpaca_secret_key: Optional[str] = None
     alpaca_base_url: Optional[str] = None
     opensandbox_server_url: Optional[str] = None
+    playwright_mcp_url: Optional[str] = None
     tiingo_api_key: Optional[str] = None
     finnhub_api_key: Optional[str] = None
     unusual_whales_api_key: Optional[str] = None
@@ -176,6 +178,22 @@ async def update_settings(update: SettingsUpdate):
             setattr(settings, field, value)
             # 密钥字段更新成功后只返回确认，不回显值
             updated[field] = "(updated)" if field in _WRITE_ONLY_FIELDS else value
+
+    # If opensandbox_server_url changed, reset sandbox availability cache
+    if "opensandbox_server_url" in updated:
+        try:
+            from agent_trader.agents.tools.code_sandbox_tools import OpenSandboxBackend
+            OpenSandboxBackend.get_instance().reset_availability()
+        except Exception:
+            pass
+
+    # If playwright_mcp_url changed, reset browser MCP availability cache
+    if "playwright_mcp_url" in updated:
+        try:
+            from agent_trader.agents.tools.browser_tools import PlaywrightMCPClient
+            PlaywrightMCPClient.get_instance().reset_availability()
+        except Exception:
+            pass
 
     return {
         "updated": updated,

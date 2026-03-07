@@ -59,15 +59,28 @@ class EventBroadcaster:
     后端 workflow 通过 emit() 发送事件，
     SSE endpoint 通过 subscribe() 获取事件流。
     支持多个并发订阅者。
+
+    Orphan protection: each subscriber tracks its last drain time.
+    ``sweep_stale()`` removes subscribers that have not been drained
+    within ``_STALE_TIMEOUT_SECONDS`` (default 5 minutes).  ``emit()``
+    calls ``sweep_stale()`` automatically every ``_SWEEP_INTERVAL``
+    emit calls to keep overhead low.
     """
+
+    _STALE_TIMEOUT_SECONDS: float = 300.0   # 5 minutes
+    _SWEEP_INTERVAL: int = 50               # sweep every N emits
 
     def __init__(self):
         self._subscribers: List[asyncio.Queue] = []
+        # Track last-drain time per queue (id(q) -> monotonic timestamp)
+        self._last_drain: Dict[int, float] = {}
+        self._emit_counter: int = 0
 
     def subscribe(self) -> asyncio.Queue:
         """创建一个新的订阅队列"""
         q: asyncio.Queue = asyncio.Queue(maxsize=256)
         self._subscribers.append(q)
+        self._last_drain[id(q)] = time.monotonic()
         return q
 
     def unsubscribe(self, q: asyncio.Queue) -> None:
@@ -76,9 +89,38 @@ class EventBroadcaster:
             self._subscribers.remove(q)
         except ValueError:
             pass
+        self._last_drain.pop(id(q), None)
+
+    def touch(self, q: asyncio.Queue) -> None:
+        """Mark a subscriber queue as recently drained (call from SSE consumer)."""
+        self._last_drain[id(q)] = time.monotonic()
+
+    def sweep_stale(self) -> int:
+        """Remove subscribers that have not been drained recently.
+
+        Returns:
+            Number of stale subscribers removed.
+        """
+        now = time.monotonic()
+        stale = [
+            q for q in self._subscribers
+            if (now - self._last_drain.get(id(q), 0)) > self._STALE_TIMEOUT_SECONDS
+        ]
+        for q in stale:
+            self._subscribers.remove(q)
+            self._last_drain.pop(id(q), None)
+        if stale:
+            logger.info("Swept %d stale SSE subscriber(s)", len(stale))
+        return len(stale)
 
     def emit(self, event: Dict[str, Any]) -> None:
         """向所有订阅者广播事件（非阻塞，队列满则丢弃旧事件）"""
+        # Periodic sweep to remove orphaned subscribers
+        self._emit_counter += 1
+        if self._emit_counter >= self._SWEEP_INTERVAL:
+            self._emit_counter = 0
+            self.sweep_stale()
+
         for q in self._subscribers:
             try:
                 q.put_nowait(event)

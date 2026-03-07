@@ -3,7 +3,7 @@
 # TradeClaw — One-Line Install Script
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/BryantSuen/Agent-Trader/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/hugging-leg/TradeClaw/main/install.sh | bash
 #
 # What this script does:
 #   1. Check prerequisites (Docker, docker compose)
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 # ---- Configuration ----
-REPO="BryantSuen/Agent-Trader"
+REPO="hugging-leg/TradeClaw"
 BRANCH="main"
 INSTALL_DIR="tradeclaw"
 RAW_BASE="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
@@ -99,6 +99,7 @@ mkdir -p user_data/logs
 mkdir -p user_data/agents
 mkdir -p user_data/postgres
 mkdir -p searxng
+mkdir -p opensandbox
 
 ok "Directory structure created"
 
@@ -123,6 +124,9 @@ download "env.template"             "env.template"
 
 # SearXNG configuration
 download "searxng/settings.yml"     "searxng/settings.yml"
+
+# OpenSandbox configuration
+download "opensandbox/config.toml"  "opensandbox/config.toml"
 
 ok "All files downloaded"
 
@@ -168,6 +172,8 @@ echo "  ├── .env                    ← Edit this!"
 echo "  ├── env.template"
 echo "  ├── searxng/"
 echo "  │   └── settings.yml"
+echo "  ├── opensandbox/"
+echo "  │   └── config.toml"
 echo "  └── user_data/"
 echo "      ├── agents/"
 echo "      ├── logs/"
@@ -200,6 +206,22 @@ read -rp "Start services now? (y/N) " start_answer
 if [[ "$start_answer" =~ ^[Yy]$ ]]; then
     info "Pulling Docker images (this may take a few minutes on first run)..."
     $COMPOSE_CMD pull
+
+    # Pre-pull Docker Socket Proxy
+    info "Pre-pulling Docker Socket Proxy image..."
+    docker pull tecnativa/docker-socket-proxy:latest || warn "Failed to pull docker-socket-proxy image"
+
+    # Pre-pull OpenSandbox runtime images (used by opensandbox-server to create sandbox containers)
+    info "Pre-pulling OpenSandbox runtime images..."
+    info "  ↓ opensandbox/code-interpreter:v1.0.1 (~14GB, may take a while)"
+    docker pull opensandbox/code-interpreter:v1.0.1 || warn "Failed to pull code-interpreter image (sandbox code execution may be slow on first use)"
+    info "  ↓ opensandbox/execd:v1.0.6"
+    docker pull opensandbox/execd:v1.0.6 || warn "Failed to pull execd image"
+
+    # Pre-pull Playwright MCP browser image
+    info "Pre-pulling Playwright MCP browser image..."
+    docker pull mcr.microsoft.com/playwright/mcp || warn "Failed to pull Playwright MCP image (browser tools may be slow on first use)"
+
     info "Starting services..."
     $COMPOSE_CMD up -d
     echo ""

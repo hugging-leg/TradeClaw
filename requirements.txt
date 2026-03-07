@@ -36,6 +36,11 @@ bcrypt>=4.0.0
 # ========== Web Search ==========
 trafilatura>=1.8.0  # 网页正文提取（SearXNG + Trafilatura 替代 Tavily/SerpAPI）
 
+# ========== Browser Automation ==========
+# Browser tools use a Playwright MCP Server sidecar (Docker container).
+# No local playwright installation required.
+# See docker-compose.yml → playwright-mcp service.
+
 # ========== Scheduling & Async ==========
 apscheduler>=3.10.0
 tenacity>=8.2.0
