@@ -30,7 +30,7 @@
 最快的方式是使用**一键安装脚本**：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BryantSuen/Agent-Trader/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hugging-leg/TradeClaw/main/install.sh | bash
 ```
 
 脚本会自动：
@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/BryantSuen/Agent-Trader/main/instal
 ### 手动 Docker 部署
 
 ```bash
-git clone https://github.com/BryantSuen/Agent-Trader.git tradeclaw
+git clone https://github.com/hugging-leg/TradeClaw.git tradeclaw
 cd tradeclaw
 cp env.template .env
 # 编辑 .env 填入 API Key
@@ -56,7 +56,7 @@ docker compose up -d
 ### 本地开发
 
 ```bash
-git clone https://github.com/BryantSuen/Agent-Trader.git tradeclaw
+git clone https://github.com/hugging-leg/TradeClaw.git tradeclaw
 cd tradeclaw
 pip install -r requirements.txt
 # 可选扩展

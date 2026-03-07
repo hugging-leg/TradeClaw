@@ -679,6 +679,7 @@ export const mockSettings: TradingSettings = {
   alpaca_base_url: 'https://paper-api.alpaca.markets',
   telegram_chat_id: '123456789',
   opensandbox_server_url: '',
+  playwright_mcp_url: '',
   // LLM
   llm_base_url: 'https://api.openai.com/v1',
   news_llm_base_url: null,

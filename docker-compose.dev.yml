@@ -1,4 +1,39 @@
+# Development docker-compose — only infrastructure services
+# The trading-agent itself runs locally (e.g. `python -m agent_trader.main`)
+#
+# Usage:
+#   docker compose -f docker-compose.dev.yml up -d
+#
+# Your .env should contain:
+#   OPENSANDBOX_SERVER_URL=http://localhost:8080
+#   SEARXNG_BASE_URL=http://localhost:8081  (note: searxng uses 8081 here to avoid port conflict with opensandbox)
+#   PLAYWRIGHT_MCP_URL=http://localhost:8931
+#   POSTGRES_URI=postgresql://trading:trading@localhost:5432/trading_memory
+
 services:
+  # Docker Socket Proxy — limits Docker API surface exposed to opensandbox
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: trading-docker-proxy-dev
+    restart: unless-stopped
+    privileged: true
+    environment:
+      CONTAINERS: 1
+      IMAGES: 1
+      NETWORKS: 1
+      POST: 1
+      INFO: 1
+      VERSION: 1
+      PING: 1
+      EVENTS: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:2375/version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
   postgres:
     image: postgres:16-alpine
     container_name: trading-postgres-dev
@@ -22,14 +57,52 @@ services:
     container_name: trading-searxng-dev
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "8081:8080"
     volumes:
       - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
-      - SEARXNG_BASE_URL=http://localhost:8080/
+      - SEARXNG_BASE_URL=http://localhost:8081/
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/healthz"]
       interval: 15s
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  opensandbox:
+    image: opensandbox/server:latest
+    container_name: trading-opensandbox-dev
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./opensandbox/config.toml:/etc/opensandbox/config.toml:ro
+    environment:
+      - SANDBOX_CONFIG_PATH=/etc/opensandbox/config.toml
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+    depends_on:
+      docker-socket-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  playwright-mcp:
+    image: mcr.microsoft.com/playwright/mcp
+    container_name: trading-playwright-mcp-dev
+    restart: unless-stopped
+    ports:
+      - "8931:8931"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    entrypoint: ["node", "cli.js", "--headless", "--browser", "chromium", "--no-sandbox", "--port", "8931", "--host", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8931/mcp').then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

@@ -791,9 +791,11 @@ export default function Scheduler() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 sm:shrink-0">
-                  <span className="text-xs text-muted-foreground">
-                    {formatDuration(rec.duration_ms / 1000)}
-                  </span>
+                  {rec.duration_ms != null && rec.duration_ms > 0 && (
+                    <span className="text-xs text-muted-foreground">
+                      {formatDuration(rec.duration_ms / 1000)}
+                    </span>
+                  )}
                   {rec.error && (
                     <Badge variant="loss">{rec.error}</Badge>
                   )}
@@ -814,8 +816,9 @@ export default function Scheduler() {
           ) : (
             <div className="space-y-2">
               {riskEvents.map((evt, idx) => {
-                const Icon = riskTypeIcon[evt.type] || Shield;
-                const variant = riskTypeVariant[evt.type] || 'info';
+                const evtType = evt.type ?? 'unknown';
+                const Icon = riskTypeIcon[evtType] || Shield;
+                const variant = riskTypeVariant[evtType] || 'info';
                 return (
                   <div
                     key={idx}
@@ -830,13 +833,13 @@ export default function Scheduler() {
                       })} />
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-semibold text-foreground">{evt.symbol}</span>
-                          <Badge variant={variant}>{evt.type.replace('_', ' ')}</Badge>
+                          <span className="text-sm font-semibold text-foreground">{evt.symbol ?? '—'}</span>
+                          <Badge variant={variant}>{evtType.replace('_', ' ')}</Badge>
                         </div>
-                        <p className="mt-0.5 text-xs text-muted-foreground">{evt.message}</p>
+                        <p className="mt-0.5 text-xs text-muted-foreground">{evt.message ?? ''}</p>
                       </div>
                     </div>
-                    <span className="text-xs text-muted">{formatRelative(evt.timestamp)}</span>
+                    <span className="text-xs text-muted">{evt.timestamp ? formatRelative(evt.timestamp) : '—'}</span>
                   </div>
                 );
               })}

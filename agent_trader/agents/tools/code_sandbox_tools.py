@@ -1,33 +1,38 @@
 """
-Code Execution Sandbox — OpenSandbox (Docker) with RestrictedPython fallback
+Code Execution Sandbox — OpenSandbox only (Docker-based isolation)
 
-Provides a secure Python code execution environment, allowing the Agent to:
+Provides secure Python code execution and terminal access via OpenSandbox,
+allowing the Agent to:
 - Execute data analysis code (pandas, numpy, etc.)
 - Perform mathematical calculations
 - Process and transform data
-- Generate simple visualization descriptions
+- Run arbitrary shell commands
+- Install packages on-the-fly
 
-Security strategy (layered):
-1. **OpenSandbox (preferred)**: Full Docker-based isolation via opensandbox-server.
-   Each execution runs in a disposable container with network/filesystem isolation.
-   Requires opensandbox-server running (locally or remote).
-2. **RestrictedPython (fallback)**: In-process restricted execution when OpenSandbox
-   is unavailable. Uses AST-level restrictions and whitelisted modules.
-   NOT suitable for untrusted arbitrary code.
-3. **Simple exec() (last resort)**: When neither OpenSandbox nor RestrictedPython
-   is installed. Minimal restrictions via manual builtins filtering.
+Security strategy:
+- **OpenSandbox (required)**: Full Docker-based isolation via opensandbox-server.
+  Each execution runs in a disposable container with network/filesystem isolation.
+  Requires opensandbox-server running (locally or remote).
+- No local fallback — if OpenSandbox is unavailable, tools report an error.
+
+Note on proxy workaround:
+  OpenSandbox Server (as of v0.1.x) has a known bug where its proxy endpoint
+  constructs an incorrect URL (host-mapped port + container IP).  We work around
+  this by:
+    1. Creating the sandbox with ``skip_health_check=True``
+    2. Using the SDK's ``get_endpoint(port, use_server_proxy=False)`` to obtain
+       the direct container_ip:port endpoint
+    3. Rebuilding the SDK's internal adapters with the corrected endpoint
+  This works in docker-compose (same Docker network) and local-dev (host network).
 
 Dependencies:
-- OpenSandbox: pip install opensandbox opensandbox-code-interpreter
-- RestrictedPython: pip install RestrictedPython
+- pip install opensandbox
+- opensandbox-server must be running and reachable
 """
 
 import asyncio
-import io
+import base64
 import json
-import math
-import traceback
-from contextlib import redirect_stdout, redirect_stderr
 from typing import Any, Dict, List, Optional, Tuple
 
 from langchain.tools import tool
@@ -43,10 +48,10 @@ logger = get_logger(__name__)
 
 class OpenSandboxBackend:
     """
-    Manages an OpenSandbox code interpreter container.
+    Manages an OpenSandbox container for code execution and terminal access.
 
     Lifecycle:
-    - On first code execution, creates a sandbox container + code interpreter.
+    - On first code execution, creates a sandbox container.
     - Reuses the same container for subsequent calls (session persistence).
     - Must be explicitly shut down via shutdown() to kill the container.
     """
@@ -55,11 +60,12 @@ class OpenSandboxBackend:
 
     def __init__(self):
         self._sandbox = None
-        self._interpreter = None
-        self._context = None
         self._initialized = False
         self._available: Optional[bool] = None  # None = not checked yet
         self._lock = asyncio.Lock()
+        self._python_bin_dir: str = ""
+        self._execd_fallback: Optional[str] = None
+        self._execd_resolved: Optional[str] = None
 
     @classmethod
     def get_instance(cls) -> "OpenSandboxBackend":
@@ -68,45 +74,158 @@ class OpenSandboxBackend:
         return cls._instance
 
     async def is_available(self) -> bool:
-        """Check if OpenSandbox server is reachable."""
+        """Check if OpenSandbox server is reachable (lightweight HTTP health check)."""
         if self._available is not None:
             return self._available
 
         try:
-            from opensandbox import Sandbox
-            from opensandbox.config.connection import ConnectionConfig
             from config import settings
+            import aiohttp
 
             server_url = getattr(settings, "opensandbox_server_url", "")
             if not server_url:
                 self._available = False
                 return False
 
-            # Try to connect by creating a minimal sandbox
-            conn = ConnectionConfig(domain=server_url)
-            sandbox = await Sandbox.create(
-                "opensandbox/code-interpreter:v1.0.1",
-                entrypoint=["/opt/opensandbox/code-interpreter.sh"],
-                env={"PYTHON_VERSION": "3.11"},
-                connection_config=conn,
-                skip_health_check=True,
-            )
-            await sandbox.kill()
-            await sandbox.close()
-            self._available = True
-            logger.info("OpenSandbox server is reachable at %s", server_url)
-            return True
+            # Lightweight health check — just hit /health endpoint
+            url = server_url if server_url.startswith("http") else f"http://{server_url}"
+            url = url.rstrip("/") + "/health"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    if resp.status == 200:
+                        self._available = True
+                        logger.info("OpenSandbox server is reachable at %s", server_url)
+                        return True
+                    else:
+                        self._available = False
+                        logger.info("OpenSandbox health check returned %d", resp.status)
+                        return False
+
         except ImportError:
             self._available = False
-            logger.info("opensandbox SDK not installed, OpenSandbox unavailable")
+            logger.info("aiohttp not installed, cannot check OpenSandbox availability")
             return False
         except Exception as e:
             self._available = False
             logger.info("OpenSandbox server not reachable: %s", e)
             return False
 
+    def reset_availability(self):
+        """Reset cached availability — forces re-check on next call."""
+        self._available = None
+
+    # ------------------------------------------------------------------
+    # Proxy-bug workaround helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_server_url(server_url: str) -> Tuple[str, str]:
+        """Extract (protocol, domain) from a URL like ``http://localhost:8080``."""
+        domain = server_url
+        protocol = "http"
+        if domain.startswith("https://"):
+            protocol = "https"
+            domain = domain[len("https://"):]
+        elif domain.startswith("http://"):
+            domain = domain[len("http://"):]
+        return protocol, domain.rstrip("/")
+
+    async def _resolve_execd_endpoint(self, sandbox) -> Optional[str]:
+        """Resolve the direct execd endpoint (host:port) via the SDK.
+
+        Calls the OpenSandbox API with ``use_server_proxy=False``.  The API
+        returns something like ``host.docker.internal:42711/proxy/44772`` — the
+        ``/proxy/…`` suffix is an OpenSandbox Server bug; the real execd is
+        listening directly on the mapped port.  We strip the suffix and return
+        just ``host:port``.
+
+        For local-dev (agent running on host), ``host.docker.internal`` may not
+        resolve, so we also try ``localhost`` as a fallback.
+
+        Returns the ``host:port`` string or None.
+        """
+        try:
+            ep = await sandbox._sandbox_service.get_sandbox_endpoint(
+                sandbox.id, 44772, use_server_proxy=False
+            )
+            if not ep or not ep.endpoint:
+                return None
+
+            raw = ep.endpoint
+            logger.debug("SDK get_endpoint (direct) raw: %s", raw)
+
+            # Strip the bogus /proxy/… suffix
+            host_port = raw.split("/proxy/")[0] if "/proxy/" in raw else raw
+            logger.debug("Resolved execd endpoint: %s", host_port)
+
+            # If the host is host.docker.internal, also prepare a localhost
+            # fallback for local-dev where the agent runs on the host directly.
+            if "host.docker.internal" in host_port:
+                self._execd_fallback = host_port.replace(
+                    "host.docker.internal", "localhost"
+                )
+            else:
+                self._execd_fallback = None
+
+            return host_port
+
+        except Exception as e:
+            logger.debug("SDK get_endpoint(44772, proxy=False) failed: %s", e)
+        return None
+
+    async def _wait_for_execd(self, endpoint: str, timeout: float = 60) -> bool:
+        """Poll ``http://<endpoint>/ping`` until execd is ready.
+
+        If the primary endpoint is unreachable and a localhost fallback was
+        stored by ``_resolve_execd_endpoint``, tries that too and updates
+        ``endpoint`` in-place (returned via the ``_execd_resolved`` attr).
+        """
+        import aiohttp
+
+        candidates = [endpoint]
+        fallback = getattr(self, "_execd_fallback", None)
+        if fallback and fallback != endpoint:
+            candidates.append(fallback)
+
+        deadline = asyncio.get_event_loop().time() + timeout
+        while asyncio.get_event_loop().time() < deadline:
+            for candidate in candidates:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(
+                            f"http://{candidate}/ping",
+                            timeout=aiohttp.ClientTimeout(total=2),
+                        ) as resp:
+                            if resp.status == 200:
+                                # Store the working endpoint
+                                self._execd_resolved = candidate
+                                return True
+                except Exception:
+                    pass
+            await asyncio.sleep(0.5)
+        return False
+
+    def _fix_sandbox_endpoint(self, sandbox, endpoint: str) -> None:
+        """Rebuild SDK adapters with the correct direct endpoint."""
+        from opensandbox.models.sandboxes import SandboxEndpoint
+        from opensandbox.adapters.command_adapter import CommandsAdapter
+        from opensandbox.adapters.health_adapter import HealthAdapter
+        from opensandbox.adapters.filesystem_adapter import FilesystemAdapter
+        from opensandbox.adapters.metrics_adapter import MetricsAdapter
+
+        correct_ep = SandboxEndpoint(endpoint=endpoint)
+        conn = sandbox.connection_config
+
+        sandbox._command_service = CommandsAdapter(conn, correct_ep)
+        sandbox._health_service = HealthAdapter(conn, correct_ep)
+        sandbox._filesystem_service = FilesystemAdapter(conn, correct_ep)
+        sandbox._metrics_service = MetricsAdapter(conn, correct_ep)
+
+    # ------------------------------------------------------------------
+
     async def _ensure_initialized(self) -> bool:
-        """Create sandbox container and code interpreter if not yet initialized."""
+        """Create sandbox container if not yet initialized."""
         if self._initialized and self._sandbox:
             return True
 
@@ -117,7 +236,6 @@ class OpenSandboxBackend:
             try:
                 from opensandbox import Sandbox
                 from opensandbox.config.connection import ConnectionConfig
-                from code_interpreter import CodeInterpreter, SupportedLanguage
                 from config import settings
                 from datetime import timedelta
 
@@ -125,23 +243,97 @@ class OpenSandboxBackend:
                 if not server_url:
                     return False
 
-                conn = ConnectionConfig(domain=server_url)
+                protocol, domain = self._parse_server_url(server_url)
 
+                conn = ConnectionConfig(
+                    domain=domain,
+                    protocol=protocol,
+                    use_server_proxy=True,
+                    request_timeout=timedelta(seconds=120),
+                )
+
+                # Create sandbox but skip the SDK's built-in health check
+                # (it uses the buggy proxy endpoint and will always time out).
+                # Sandbox lifetime: 24 hours — persistent across agent sessions.
                 self._sandbox = await Sandbox.create(
                     "opensandbox/code-interpreter:v1.0.1",
-                    entrypoint=["/opt/opensandbox/code-interpreter.sh"],
-                    env={"PYTHON_VERSION": "3.11"},
-                    timeout=timedelta(minutes=30),
+                    timeout=timedelta(hours=24),
+                    skip_health_check=True,
                     connection_config=conn,
                 )
+                logger.info("OpenSandbox container created: %s", self._sandbox.id)
 
-                self._interpreter = await CodeInterpreter.create(self._sandbox)
-                self._context = await self._interpreter.codes.create_context(
-                    SupportedLanguage.PYTHON
-                )
+                # Resolve the direct execd endpoint via SDK (no docker CLI needed)
+                execd_endpoint = await self._resolve_execd_endpoint(self._sandbox)
+                if not execd_endpoint:
+                    logger.error(
+                        "Could not resolve execd endpoint for sandbox %s.",
+                        self._sandbox.id,
+                    )
+                    await self._cleanup()
+                    return False
+
+                # Wait for execd to become ready inside the container
+                if not await self._wait_for_execd(execd_endpoint, timeout=60):
+                    logger.error(
+                        "Execd did not become ready at %s within 60s",
+                        execd_endpoint,
+                    )
+                    await self._cleanup()
+                    return False
+
+                # Use the endpoint that actually responded to /ping
+                working_endpoint = getattr(self, "_execd_resolved", execd_endpoint)
+
+                # Patch SDK adapters with the correct direct endpoint
+                self._fix_sandbox_endpoint(self._sandbox, working_endpoint)
+
+                # Discover the Python bin directory that contains pip so we can
+                # prepend it to PATH in every command.  The code-interpreter
+                # image installs multiple Python versions under /opt/python/;
+                # we pick the one matching the default ``python3``.
+                self._python_bin_dir = ""
+                try:
+                    probe = await asyncio.wait_for(
+                        self._sandbox.commands.run(
+                            # 1) Try to find pip alongside the default python3
+                            'PY=$(readlink -f $(which python3) 2>/dev/null) && '
+                            'PYDIR=$(dirname "$PY") && '
+                            'if [ -x "$PYDIR/pip" ]; then echo "$PYDIR"; exit 0; fi; '
+                            # 2) Fallback: find any pip under /opt/python
+                            'PIPPATH=$(find /opt/python -name pip -type f 2>/dev/null | head -1) && '
+                            'if [ -n "$PIPPATH" ]; then dirname "$PIPPATH"; fi'
+                        ),
+                        timeout=10,
+                    )
+                    stdout = "\n".join(m.text for m in probe.logs.stdout).strip()
+                    if stdout and "/" in stdout:
+                        # Take the last non-empty line
+                        self._python_bin_dir = stdout.strip().split("\n")[-1].strip()
+                        logger.debug("Sandbox Python bin dir: %s", self._python_bin_dir)
+                except Exception as e:
+                    logger.debug("Failed to probe Python bin dir: %s", e)
+
+                # Remove PEP 668 EXTERNALLY-MANAGED markers so that pip works
+                # without --break-system-packages.  The sandbox is disposable
+                # so there is no risk in doing this.
+                try:
+                    await asyncio.wait_for(
+                        self._sandbox.commands.run(
+                            'find / -name EXTERNALLY-MANAGED -delete 2>/dev/null; true'
+                        ),
+                        timeout=10,
+                    )
+                    logger.debug("Removed EXTERNALLY-MANAGED markers from sandbox")
+                except Exception:
+                    pass  # best-effort
 
                 self._initialized = True
-                logger.info("OpenSandbox code interpreter initialized")
+                logger.info(
+                    "OpenSandbox ready (id=%s, execd=%s, ttl=24h)",
+                    self._sandbox.id,
+                    working_endpoint,
+                )
                 return True
 
             except Exception as e:
@@ -156,17 +348,31 @@ class OpenSandboxBackend:
         timeout_seconds: int = 30,
         max_output_chars: int = 10000,
     ) -> Dict[str, Any]:
-        """Execute code in the OpenSandbox container."""
+        """Execute Python code in the OpenSandbox container.
+
+        Writes the code to a temp file inside the container and runs it with
+        ``python3``, collecting stdout/stderr.
+        """
         if not await self._ensure_initialized():
-            raise RuntimeError("OpenSandbox not initialized")
+            raise RuntimeError(
+                "OpenSandbox is not available. "
+                "Please configure opensandbox_server_url in Settings and ensure "
+                "the opensandbox-server is running."
+            )
 
         try:
+            # Encode code as base64 to avoid shell quoting issues
+            b64 = base64.b64encode(code.encode("utf-8")).decode("ascii")
+            cmd = self._with_path(
+                f"echo {b64} | base64 -d > /tmp/_exec.py && "
+                f"python3 /tmp/_exec.py"
+            )
+
             execution = await asyncio.wait_for(
-                self._interpreter.codes.run(code, context=self._context),
+                self._sandbox.commands.run(cmd),
                 timeout=timeout_seconds,
             )
 
-            # Collect stdout
             stdout_lines = [msg.text for msg in execution.logs.stdout]
             stderr_lines = [msg.text for msg in execution.logs.stderr]
             output = "\n".join(stdout_lines)[:max_output_chars]
@@ -182,17 +388,10 @@ class OpenSandboxBackend:
                     "backend": "opensandbox",
                 }
 
-            # Collect results
-            results = {}
-            for r in execution.result:
-                if r.text:
-                    results["result"] = r.text
-
             return {
                 "success": True,
                 "output": output,
                 "stderr": stderr,
-                "variables": results,
                 "backend": "opensandbox",
             }
 
@@ -203,11 +402,67 @@ class OpenSandboxBackend:
                 "backend": "opensandbox",
             }
 
+    def _with_path(self, command: str) -> str:
+        """Prepend the discovered Python bin dir to PATH if available."""
+        if self._python_bin_dir:
+            return f'export PATH="{self._python_bin_dir}:$PATH" && {command}'
+        return command
+
+    async def run_command(
+        self,
+        command: str,
+        *,
+        timeout_seconds: int = 60,
+        max_output_chars: int = 20000,
+    ) -> Dict[str, Any]:
+        """Execute an arbitrary shell command in the OpenSandbox container.
+
+        This gives the agent full terminal access (install packages, run
+        scripts, inspect the filesystem, etc.) inside the isolated sandbox.
+        """
+        if not await self._ensure_initialized():
+            raise RuntimeError(
+                "OpenSandbox is not available. "
+                "Please configure opensandbox_server_url in Settings and ensure "
+                "the opensandbox-server is running."
+            )
+
+        try:
+            result = await asyncio.wait_for(
+                self._sandbox.commands.run(self._with_path(command)),
+                timeout=timeout_seconds,
+            )
+
+            stdout_lines = [msg.text for msg in result.logs.stdout]
+            stderr_lines = [msg.text for msg in result.logs.stderr]
+            stdout = "\n".join(stdout_lines)[:max_output_chars]
+            stderr = "\n".join(stderr_lines)[:max_output_chars]
+            exit_code = getattr(result, "exit_code", None)
+
+            return {
+                "success": exit_code == 0 if exit_code is not None else True,
+                "exit_code": exit_code,
+                "stdout": stdout,
+                "stderr": stderr,
+                "backend": "opensandbox",
+            }
+
+        except asyncio.TimeoutError:
+            return {
+                "success": False,
+                "error": f"Command timed out after {timeout_seconds}s",
+                "backend": "opensandbox",
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "backend": "opensandbox",
+            }
+
     async def _cleanup(self):
         """Clean up sandbox resources."""
         self._initialized = False
-        self._context = None
-        self._interpreter = None
         if self._sandbox:
             try:
                 await self._sandbox.kill()
@@ -223,260 +478,19 @@ class OpenSandboxBackend:
 
 
 # ==================================================================
-# RestrictedPython fallback backend
-# ==================================================================
-
-# Whitelisted modules — only these modules can be imported by the Agent
-_SAFE_MODULES = {
-    "math",
-    "statistics",
-    "decimal",
-    "fractions",
-    "random",
-    "datetime",
-    "json",
-    "re",
-    "collections",
-    "itertools",
-    "functools",
-    "operator",
-    "string",
-    "textwrap",
-    "csv",
-    "io",
-}
-
-# Optional data analysis modules (if installed)
-_OPTIONAL_MODULES = {
-    "numpy",
-    "pandas",
-    "scipy",
-}
-
-
-def _safe_import(name, *args, **kwargs):
-    """Safe import function — only allows whitelisted modules."""
-    allowed = _SAFE_MODULES | _OPTIONAL_MODULES
-    # Allow submodules (e.g. numpy.linalg)
-    top_level = name.split(".")[0]
-    if top_level not in allowed:
-        raise ImportError(
-            f"Module '{name}' is not allowed in the sandbox. "
-            f"Allowed modules: {', '.join(sorted(allowed))}"
-        )
-    return __builtins__["__import__"](name, *args, **kwargs) if isinstance(__builtins__, dict) else __import__(name, *args, **kwargs)
-
-
-def _build_restricted_globals() -> Optional[Dict[str, Any]]:
-    """Build restricted global namespace using RestrictedPython."""
-    try:
-        from RestrictedPython import safe_globals, compile_restricted
-        from RestrictedPython.Eval import default_guarded_getattr
-        from RestrictedPython.Guards import (
-            guarded_unpack_sequence,
-            safer_getattr,
-        )
-
-        restricted = dict(safe_globals)
-
-        # Safe getattr
-        restricted["_getattr_"] = safer_getattr
-        restricted["_getiter_"] = iter
-        restricted["_getitem_"] = lambda obj, key: obj[key]
-
-        # Allow unpack
-        restricted["_iter_unpack_sequence_"] = guarded_unpack_sequence
-
-        # Safe import
-        restricted["__import__"] = _safe_import
-        restricted["__builtins__"]["__import__"] = _safe_import
-
-        # Common safe built-in functions
-        safe_builtins_extra = {
-            "abs", "all", "any", "bin", "bool", "bytes", "chr", "complex",
-            "dict", "dir", "divmod", "enumerate", "filter", "float",
-            "format", "frozenset", "hash", "hex", "id", "int", "isinstance",
-            "issubclass", "iter", "len", "list", "map", "max", "min",
-            "next", "oct", "ord", "pow", "print", "range", "repr",
-            "reversed", "round", "set", "slice", "sorted", "str", "sum",
-            "tuple", "type", "zip",
-        }
-        for name in safe_builtins_extra:
-            if name in dir(__builtins__) if isinstance(__builtins__, type) else name in __builtins__:
-                restricted["__builtins__"][name] = getattr(__builtins__, name) if not isinstance(__builtins__, dict) else __builtins__[name]
-
-        return restricted
-
-    except ImportError:
-        return None
-
-
-def _build_simple_globals() -> Dict[str, Any]:
-    """
-    Build simplified restricted global namespace (fallback when RestrictedPython is unavailable).
-
-    Uses exec() + manual restrictions. Lower security but functional.
-    """
-    safe_builtins = {
-        "abs": abs, "all": all, "any": any, "bin": bin, "bool": bool,
-        "bytes": bytes, "chr": chr, "complex": complex, "dict": dict,
-        "divmod": divmod, "enumerate": enumerate, "filter": filter,
-        "float": float, "format": format, "frozenset": frozenset,
-        "hash": hash, "hex": hex, "int": int, "isinstance": isinstance,
-        "issubclass": issubclass, "iter": iter, "len": len, "list": list,
-        "map": map, "max": max, "min": min, "next": next, "oct": oct,
-        "ord": ord, "pow": pow, "print": print, "range": range,
-        "repr": repr, "reversed": reversed, "round": round, "set": set,
-        "slice": slice, "sorted": sorted, "str": str, "sum": sum,
-        "tuple": tuple, "type": type, "zip": zip,
-        "True": True, "False": False, "None": None,
-        "__import__": _safe_import,
-    }
-
-    return {"__builtins__": safe_builtins}
-
-
-async def _execute_code_local(
-    code: str,
-    *,
-    timeout_seconds: int = 30,
-    max_output_chars: int = 10000,
-) -> Dict[str, Any]:
-    """
-    Execute Python code in a local restricted environment (RestrictedPython or simple exec).
-
-    Returns:
-        {"success": bool, "output": str, "error": str?, "variables": dict?, "backend": str}
-    """
-    use_restricted = True
-    try:
-        from RestrictedPython import compile_restricted
-    except ImportError:
-        use_restricted = False
-        logger.info("RestrictedPython not installed, using simple sandbox")
-
-    stdout_capture = io.StringIO()
-    stderr_capture = io.StringIO()
-
-    def _run():
-        if use_restricted:
-            from RestrictedPython import compile_restricted
-
-            restricted_globals = _build_restricted_globals()
-            if restricted_globals is None:
-                raise RuntimeError("Failed to build restricted globals")
-
-            byte_code = compile_restricted(
-                code,
-                filename="<sandbox>",
-                mode="exec",
-            )
-
-            if byte_code.errors:
-                return {
-                    "success": False,
-                    "error": "Compilation errors:\n" + "\n".join(byte_code.errors),
-                    "backend": "restricted_python",
-                }
-
-            local_vars: Dict[str, Any] = {}
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                exec(byte_code.code, restricted_globals, local_vars)
-
-        else:
-            simple_globals = _build_simple_globals()
-            local_vars: Dict[str, Any] = {}
-
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
-                exec(code, simple_globals, local_vars)
-
-        # Collect user-defined variables (exclude internal ones)
-        user_vars = {}
-        for k, v in local_vars.items():
-            if k.startswith("_"):
-                continue
-            try:
-                json.dumps(v, default=str)
-                user_vars[k] = v
-            except (TypeError, ValueError):
-                user_vars[k] = repr(v)[:500]
-
-        backend = "restricted_python" if use_restricted else "simple_exec"
-        return {
-            "success": True,
-            "output": stdout_capture.getvalue()[:max_output_chars],
-            "stderr": stderr_capture.getvalue()[:2000],
-            "variables": user_vars,
-            "backend": backend,
-        }
-
-    try:
-        loop = asyncio.get_event_loop()
-        result = await asyncio.wait_for(
-            loop.run_in_executor(None, _run),
-            timeout=timeout_seconds,
-        )
-        return result
-
-    except asyncio.TimeoutError:
-        return {
-            "success": False,
-            "error": f"Code execution timed out after {timeout_seconds} seconds",
-            "output": stdout_capture.getvalue()[:max_output_chars],
-            "backend": "local",
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "error": str(e),
-            "traceback": traceback.format_exc()[-2000:],
-            "output": stdout_capture.getvalue()[:max_output_chars],
-            "backend": "local",
-        }
-
-
-# ==================================================================
-# Unified execute_code dispatcher
-# ==================================================================
-
-async def execute_code(
-    code: str,
-    *,
-    timeout_seconds: int = 30,
-    max_output_chars: int = 10000,
-) -> Dict[str, Any]:
-    """
-    Execute Python code using the best available backend.
-
-    Priority: OpenSandbox (Docker) > RestrictedPython > simple exec.
-    """
-    # Try OpenSandbox first
-    backend = OpenSandboxBackend.get_instance()
-    if await backend.is_available():
-        try:
-            return await backend.execute(
-                code,
-                timeout_seconds=timeout_seconds,
-                max_output_chars=max_output_chars,
-            )
-        except Exception as e:
-            logger.warning("OpenSandbox execution failed, falling back to local: %s", e)
-
-    # Fallback to local execution
-    return await _execute_code_local(
-        code,
-        timeout_seconds=timeout_seconds,
-        max_output_chars=max_output_chars,
-    )
-
-
-# ==================================================================
 # LangChain Tools
 # ==================================================================
 
+_OPENSANDBOX_UNAVAILABLE_MSG = (
+    "OpenSandbox is not configured or not reachable. "
+    "Set opensandbox_server_url in Settings and ensure opensandbox-server is running. "
+    "Code execution requires OpenSandbox — no local fallback is available."
+)
+
+
 def create_code_sandbox_tools(workflow) -> List[Tuple[Any, str]]:
     """
-    Create code execution sandbox tools.
+    Create code execution sandbox tools (OpenSandbox only).
 
     Args:
         workflow: WorkflowBase subclass instance
@@ -487,9 +501,9 @@ def create_code_sandbox_tools(workflow) -> List[Tuple[Any, str]]:
     tools: List[Tuple[Any, str]] = []
 
     tools.append((_create_execute_python(workflow), "sandbox"))
+    tools.append((_create_execute_terminal(workflow), "sandbox"))
 
-    # Log which backend will be used
-    logger.info("Code sandbox tools registered (OpenSandbox > RestrictedPython > simple exec)")
+    logger.info("Code sandbox tools registered (OpenSandbox required)")
     return tools
 
 
@@ -500,33 +514,27 @@ def _create_execute_python(wf):
         timeout_seconds: int = 30,
     ) -> str:
         """
-        Execute Python code in a secure sandbox. Suitable for data analysis,
-        mathematical calculations, and data processing tasks.
+        Execute Python code in an isolated OpenSandbox Docker container.
 
-        When OpenSandbox is configured, code runs in an isolated Docker container
-        with full Python environment (including pip packages). Otherwise, falls back
-        to a restricted in-process sandbox.
-
-        Available modules (local fallback):
-        - Math: math, statistics, decimal, fractions, random
-        - Data: json, csv, collections, itertools, functools
-        - Text: re, string, textwrap
-        - Time: datetime
-        - Data analysis (if installed): numpy, pandas, scipy
+        The code runs in a secure, disposable container with full Python
+        environment (including pip packages like pandas, numpy, scipy, etc.).
+        The container is isolated from the host — no access to local files
+        or network resources.
 
         Use cases:
         - Calculate portfolio metrics (Sharpe ratio, volatility, correlation, etc.)
         - Process and analyze market data
         - Perform statistical calculations
         - Data format conversion
+        - Any Python computation
 
         Args:
             code: Python code to execute. Use print() for output.
                   Variables defined at the end are automatically returned.
-            timeout_seconds: Maximum execution time (seconds), default 30
+            timeout_seconds: Maximum execution time (seconds), default 30, max 120
 
         Returns:
-            JSON with execution results, including output (stdout) and variables (variable values)
+            JSON with execution results, including output (stdout) and variables
 
         Example:
             # Calculate Sharpe ratio
@@ -541,32 +549,24 @@ def _create_execute_python(wf):
             elif timeout_seconds > 120:
                 timeout_seconds = 120
 
-            # Basic security check (still useful even with OpenSandbox for early rejection)
-            dangerous_patterns = [
-                "os.system", "subprocess", "shutil", "__import__('os')",
-                "open(", "exec(", "eval(", "compile(",
-                "globals()", "locals()", "__class__",
-                "__subclasses__", "__bases__",
-            ]
-            code_lower = code.lower()
-            for pattern in dangerous_patterns:
-                if pattern.lower() in code_lower:
-                    return json.dumps({
-                        "success": False,
-                        "error": f"Security violation: '{pattern}' is not allowed in sandbox",
-                    }, ensure_ascii=False)
+            backend = OpenSandboxBackend.get_instance()
+            if not await backend.is_available():
+                return json.dumps({
+                    "success": False,
+                    "error": _OPENSANDBOX_UNAVAILABLE_MSG,
+                }, ensure_ascii=False)
 
             await wf.message_manager.send_message(
-                f"🔧 Executing Python code ({len(code)} chars)...",
+                f"🔧 Executing Python code ({len(code)} chars) in OpenSandbox...",
                 "info",
             )
 
-            result = await execute_code(
+            result = await backend.execute(
                 code,
                 timeout_seconds=timeout_seconds,
             )
 
-            backend_name = result.get("backend", "unknown")
+            backend_name = result.get("backend", "opensandbox")
             if result.get("success"):
                 output_preview = (result.get("output", "") or "")[:200]
                 var_count = len(result.get("variables", {}))
@@ -590,3 +590,86 @@ def _create_execute_python(wf):
             return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
     return execute_python
+
+
+def _create_execute_terminal(wf):
+    @tool
+    async def execute_terminal(
+        command: str,
+        timeout_seconds: int = 60,
+    ) -> str:
+        """
+        Execute a shell command in an isolated OpenSandbox container.
+
+        This tool provides full terminal access inside a secure Docker sandbox.
+        You can install packages, run scripts, inspect files, compile code, etc.
+
+        **Requires OpenSandbox to be configured** (opensandbox_server_url in
+        settings). If OpenSandbox is not available, this tool will return an
+        error.
+
+        Use cases:
+        - Install Python packages: ``pip install <package>`` (pip works directly)
+        - Install via uv (faster): ``uv pip install <package>``
+        - Run shell scripts or CLI tools
+        - Inspect filesystem, download data with curl/wget
+        - Compile and run programs in any language
+        - Chain multiple commands with && or ;
+
+        Note: The sandbox has a persistent container per session, so packages
+        installed in one call are available in subsequent calls.
+
+        Args:
+            command: Shell command to execute (e.g. "pip install pandas && python script.py")
+            timeout_seconds: Maximum execution time (seconds), default 60, max 300
+
+        Returns:
+            JSON with stdout, stderr, exit_code, and success status
+
+        Example:
+            pip install yfinance && python -c "import yfinance as yf; print(yf.download('AAPL', period='5d'))"
+        """
+        try:
+            if timeout_seconds < 1:
+                timeout_seconds = 1
+            elif timeout_seconds > 300:
+                timeout_seconds = 300
+
+            backend = OpenSandboxBackend.get_instance()
+            if not await backend.is_available():
+                return json.dumps({
+                    "success": False,
+                    "error": _OPENSANDBOX_UNAVAILABLE_MSG,
+                }, ensure_ascii=False)
+
+            await wf.message_manager.send_message(
+                f"🖥️ Running terminal command ({len(command)} chars) in OpenSandbox...",
+                "info",
+            )
+
+            result = await backend.run_command(
+                command,
+                timeout_seconds=timeout_seconds,
+            )
+
+            if result.get("success"):
+                stdout_preview = (result.get("stdout", "") or "")[:200]
+                await wf.message_manager.send_message(
+                    f"✅ Command completed (exit {result.get('exit_code', '?')})\n"
+                    f"Output: {stdout_preview or '(none)'}{'...' if len(result.get('stdout', '')) > 200 else ''}",
+                    "info",
+                )
+            else:
+                error_msg = result.get("error") or result.get("stderr", "")[:200]
+                await wf.message_manager.send_message(
+                    f"⚠️ Command failed (exit {result.get('exit_code', '?')}): {error_msg}",
+                    "warning",
+                )
+
+            return json.dumps(result, indent=2, ensure_ascii=False, default=str)
+
+        except Exception as e:
+            logger.error("execute_terminal failed: %s", e)
+            return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+    return execute_terminal

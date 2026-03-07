@@ -231,6 +231,7 @@ class RealtimeMarketMonitor:
         self.price_trackers: Dict[str, PriceTracker] = {}  # 仅持仓股票（价格监控）
         self.is_monitoring = False
         self.monitor_task = None
+        self._background_tasks: set = set()  # prevent fire-and-forget GC
 
         # 注册处理器
         if self.adapter:
@@ -238,6 +239,26 @@ class RealtimeMarketMonitor:
             self.adapter.register_news_handler(self._handle_news)
 
         logger.info("实时市场监控服务已初始化")
+
+    def _launch_background(self, coro) -> asyncio.Task:
+        """Create a tracked background task with error logging.
+
+        The task is stored in ``_background_tasks`` to prevent garbage
+        collection and ensure exceptions are logged.
+        """
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+
+        def _on_done(t: asyncio.Task):
+            self._background_tasks.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc:
+                logger.error("Background task failed: %s", exc, exc_info=exc)
+
+        task.add_done_callback(_on_done)
+        return task
 
     async def start(self, portfolio: Optional[Portfolio] = None):
         """启动监控服务"""
@@ -468,10 +489,10 @@ class RealtimeMarketMonitor:
             symbols_to_remove = monitored_symbols - current_symbols
 
             if symbols_to_add:
-                asyncio.create_task(self._subscribe_trades(list(symbols_to_add), portfolio))
+                self._launch_background(self._subscribe_trades(list(symbols_to_add), portfolio))
 
             if symbols_to_remove:
-                asyncio.create_task(self.unsubscribe_symbols(list(symbols_to_remove)))
+                self._launch_background(self.unsubscribe_symbols(list(symbols_to_remove)))
 
         except Exception as e:
             logger.error(f"更新组合持仓失败: {e}")

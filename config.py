@@ -42,8 +42,13 @@ class Settings(BaseSettings):
     # SearXNG (self-hosted web search engine)
     searxng_base_url: Optional[str] = None  # e.g. http://searxng:8080 or http://localhost:8080
 
-    # OpenSandbox (Docker-based code/browser sandbox)
-    opensandbox_server_url: str = ""  # e.g. localhost:8080; empty = disabled (fallback to RestrictedPython)
+    # OpenSandbox (Docker-based code sandbox — required for code execution)
+    # docker-compose prod: http://opensandbox:8080  |  local dev: http://localhost:8080
+    opensandbox_server_url: str = "http://localhost:8080"
+
+    # Playwright MCP Server (browser automation)
+    # docker-compose prod: http://playwright-mcp:8931  |  local dev: http://localhost:8931
+    playwright_mcp_url: str = "http://localhost:8931"
 
     # === 提供商配置 ===
     broker_provider: str = "alpaca"

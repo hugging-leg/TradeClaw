@@ -62,6 +62,8 @@ class FinnhubRealtimeAdapter(RealtimeDataAPI):
 
         # 心跳
         self._ping_task = None
+        # Reconnect task — tracked to prevent duplicate reconnect loops
+        self._reconnect_task: Optional[asyncio.Task] = None
 
         logger.info("Finnhub 实时适配器已初始化")
 
@@ -307,7 +309,10 @@ class FinnhubRealtimeAdapter(RealtimeDataAPI):
 
                 await self.subscribe_trades(trades)
                 await self.subscribe_news(news)
-                asyncio.create_task(self.start())
+                # Cancel any prior reconnect-spawned start() task
+                if self._reconnect_task and not self._reconnect_task.done():
+                    self._reconnect_task.cancel()
+                self._reconnect_task = asyncio.create_task(self.start())
         else:
             logger.error("达到最大重连次数")
 

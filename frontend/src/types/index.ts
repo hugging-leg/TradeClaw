@@ -128,12 +128,12 @@ export interface ExecutionRecord {
   job_id: string;
   executed_at: string;
   success: boolean;
-  duration_ms: number;
+  duration_ms?: number | null;
   error: string | null;
 }
 
 export interface RiskEvent {
-  type: 'stop_loss' | 'take_profit' | 'daily_limit' | 'concentration';
+  type: 'stop_loss' | 'take_profit' | 'daily_limit' | 'concentration' | string;
   symbol: string;
   message: string;
   timestamp: string;
@@ -321,6 +321,7 @@ export interface TradingSettings {
   alpaca_base_url: string;
   telegram_chat_id: string;
   opensandbox_server_url: string;
+  playwright_mcp_url: string;
   // NOTE: LLM configuration is now managed via /api/llm/* endpoints
   // Execution
   rebalance_min_value_threshold: number;

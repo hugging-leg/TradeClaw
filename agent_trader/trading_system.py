@@ -174,6 +174,7 @@ class TradingSystem(SchedulerMixin):
 
         # ---- Workflow 互斥 + 排队 ----
         self._workflow_lock = asyncio.Lock()
+        self._MAX_PENDING_TRIGGERS = 50
         self._pending_triggers: List[Dict[str, Any]] = []  # 排队中的触发
 
         # ---- 每日统计 ----
@@ -272,14 +273,12 @@ class TradingSystem(SchedulerMixin):
             # Memory Manager
             await self.memory_manager.close()
 
-            # Browser Manager (also cleans up OpenSandbox browser container if any)
+            # Playwright MCP Client (close HTTP session)
             try:
-                from agent_trader.agents.tools.browser_tools import BrowserManager
-                browser = BrowserManager.get_instance()
-                if browser._initialized:
-                    await browser.shutdown()
+                from agent_trader.agents.tools.browser_tools import PlaywrightMCPClient
+                await PlaywrightMCPClient.get_instance().shutdown()
             except Exception as e:
-                logger.debug("Browser cleanup: %s", e)
+                logger.debug("Playwright MCP cleanup: %s", e)
 
             # Code Sandbox (OpenSandbox container if any)
             try:
@@ -616,6 +615,14 @@ class TradingSystem(SchedulerMixin):
 
         # 如果 workflow 正在运行，排队而不是丢弃
         if self._workflow_lock.locked():
+            if len(self._pending_triggers) >= self._MAX_PENDING_TRIGGERS:
+                # Drop the oldest trigger to make room
+                dropped = self._pending_triggers.pop(0)
+                logger.warning(
+                    "Pending triggers at cap (%d), dropped oldest: %s",
+                    self._MAX_PENDING_TRIGGERS,
+                    dropped.get("trigger", "?"),
+                )
             entry = {"trigger": trigger, "context": context, "queued_at": utc_now().isoformat()}
             self._pending_triggers.append(entry)
             logger.info("Workflow busy, queued trigger: %s (queue size: %d)", trigger, len(self._pending_triggers))
@@ -821,10 +828,11 @@ class TradingSystem(SchedulerMixin):
         # 调度器详情
         state["scheduler"] = scheduler_status
 
-        # 风控
-        state["risk_events"] = (
-            getattr(self.risk_manager, "risk_events", []) if self.risk_manager else []
-        )
+        # 风控 — flatten to per-event records for frontend consumption
+        if self.risk_manager and hasattr(self.risk_manager, "get_risk_events_flat"):
+            state["risk_events"] = self.risk_manager.get_risk_events_flat()
+        else:
+            state["risk_events"] = []
 
         # 每日统计
         state["daily_stats"] = {

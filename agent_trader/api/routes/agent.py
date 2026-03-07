@@ -400,10 +400,12 @@ async def agent_events(
 
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    event_broadcaster.touch(queue)  # mark as alive for orphan sweep
                     event_type = event.get("event", "message")
                     data = json.dumps(event.get("data", event), ensure_ascii=False, default=str)
                     yield f"event: {event_type}\ndata: {data}\n\n"
                 except asyncio.TimeoutError:
+                    event_broadcaster.touch(queue)  # heartbeat also proves liveness
                     # 心跳
                     yield f"event: heartbeat\ndata: {{}}\n\n"
         finally:

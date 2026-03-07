@@ -420,6 +420,17 @@ class SchedulerMixin:
 
     def get_scheduler_status(self) -> Dict[str, Any]:
         """获取调度器完整状态"""
+        raw_history = list(self._job_history_cache)
+
+        # Normalise records for the frontend: ensure ``duration_ms`` exists
+        # and expose as ``execution_history`` (the key the frontend reads).
+        normalised = []
+        for rec in raw_history:
+            entry = dict(rec)
+            if "duration_ms" not in entry:
+                entry["duration_ms"] = 0
+            normalised.append(entry)
+
         return {
             "running": self._scheduler.running,
             "timezone": str(self._tz),
@@ -429,7 +440,8 @@ class SchedulerMixin:
             "is_market_open_now": self._check_market_open_sync(),
             "total_jobs": len(self._scheduler.get_jobs()),
             "jobs": self.get_all_jobs(),
-            "recent_executions": list(self._job_history_cache),
+            "recent_executions": raw_history,
+            "execution_history": normalised,
         }
 
     async def get_execution_history(

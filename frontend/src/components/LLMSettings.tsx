@@ -3,9 +3,10 @@
  *
  * Features:
  * - Manage multiple API Providers (base_url + api_key)
- * - Manage multiple Models per Provider (id + model_id + temperature)
+ * - Manage multiple Models per Provider (model_id + temperature)
  * - Role assignments (agent / news_filter / memory_summary -> model id)
  * - Connectivity testing
+ * - Provider ID and Model Unique Name are auto-generated (hidden from user)
  */
 
 import { useEffect, useState, useCallback } from 'react';
@@ -34,10 +35,27 @@ import {
   Loader2,
 } from 'lucide-react';
 
+// ========== Helpers ==========
+
+/** Generate a slug from a display name: "OpenAI Compatible" → "openai-compatible" */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'provider';
+}
+
+/** Generate model unique id from provider id + model_id: "openai" + "gpt-4o" → "openai/gpt-4o" */
+function makeModelUniqueId(providerId: string, modelId: string): string {
+  return `${providerId}/${modelId}`;
+}
+
 // ========== Provider Editor ==========
 
 function ModelRow({
   model,
+  providerId,
   onChange,
   onRemove,
   onTest,
@@ -45,24 +63,39 @@ function ModelRow({
   testResult,
 }: {
   model: LLMModel;
+  providerId: string;
   onChange: (m: LLMModel) => void;
   onRemove: () => void;
   onTest: () => void;
   testing: boolean;
   testResult?: { success: boolean; error?: string };
 }) {
+  // Auto-sync the hidden `id` field from provider + model_id
+  const expectedId = makeModelUniqueId(providerId, model.model_id);
+  if (model.id !== expectedId && model.model_id) {
+    onChange({ ...model, id: expectedId });
+  }
+
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border/50 bg-background/50 p-3 sm:flex-row sm:items-center sm:gap-3">
-      <div className="grid flex-1 gap-2 sm:grid-cols-4">
+      <div className="grid flex-1 gap-2 sm:grid-cols-3">
         <div>
           <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-muted">
-            Unique Name
+            Model ID (API)
           </label>
           <input
             type="text"
-            value={model.id}
-            onChange={(e) => onChange({ ...model, id: e.target.value })}
-            placeholder="e.g. gpt4o"
+            value={model.model_id}
+            onChange={(e) => {
+              const newModelId = e.target.value;
+              onChange({
+                ...model,
+                model_id: newModelId,
+                id: makeModelUniqueId(providerId, newModelId),
+                name: model.name || newModelId,
+              });
+            }}
+            placeholder="gpt-4o"
             className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent font-mono"
           />
         </div>
@@ -76,18 +109,6 @@ function ModelRow({
             onChange={(e) => onChange({ ...model, name: e.target.value })}
             placeholder="GPT-4o"
             className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
-          />
-        </div>
-        <div>
-          <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-muted">
-            Model ID (API)
-          </label>
-          <input
-            type="text"
-            value={model.model_id}
-            onChange={(e) => onChange({ ...model, model_id: e.target.value })}
-            placeholder="gpt-4o"
-            className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent font-mono"
           />
         </div>
         <div>
@@ -151,6 +172,17 @@ function ProviderCard({
   const [expanded, setExpanded] = useState(true);
   const [showKey, setShowKey] = useState(false);
 
+  // Auto-sync provider.id from provider.name
+  const handleNameChange = (newName: string) => {
+    const newId = slugify(newName);
+    // Also update all child model ids to reflect new provider id
+    const updatedModels = provider.models.map((m) => ({
+      ...m,
+      id: makeModelUniqueId(newId, m.model_id),
+    }));
+    onChange({ ...provider, name: newName, id: newId, models: updatedModels });
+  };
+
   return (
     <Card className="overflow-hidden">
       {/* Provider header */}
@@ -162,27 +194,15 @@ function ProviderCard({
           {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </button>
         <div className="min-w-0 flex-1">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-3">
             <div>
               <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-muted">
-                Provider ID
-              </label>
-              <input
-                type="text"
-                value={provider.id}
-                onChange={(e) => onChange({ ...provider, id: e.target.value })}
-                placeholder="openai"
-                className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent font-mono"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-[10px] font-medium uppercase tracking-wider text-muted">
-                Display Name
+                Provider Name
               </label>
               <input
                 type="text"
                 value={provider.name}
-                onChange={(e) => onChange({ ...provider, name: e.target.value })}
+                onChange={(e) => handleNameChange(e.target.value)}
                 placeholder="OpenAI"
                 className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent"
               />
@@ -260,6 +280,7 @@ function ProviderCard({
             <ModelRow
               key={mi}
               model={model}
+              providerId={provider.id}
               onChange={(m) => {
                 const models = [...provider.models];
                 models[mi] = m;
@@ -457,7 +478,7 @@ export default function LLMSettings() {
     setProviders([
       ...providers,
       {
-        id: `provider-${providers.length + 1}`,
+        id: `provider-${Date.now()}`,
         name: '',
         base_url: 'https://api.openai.com/v1',
         api_key: '',

@@ -1,4 +1,44 @@
 services:
+  # Docker Socket Proxy — limits Docker API surface exposed to opensandbox
+  # Only containers / images / networks / volumes / version endpoints are allowed;
+  # all destructive host-level operations are denied.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: trading-docker-proxy
+    restart: unless-stopped
+    privileged: true
+    environment:
+      # Grant (1) / Deny (0)
+      CONTAINERS: 1        # create / inspect / list / stop / remove sandbox containers
+      IMAGES: 1             # pull sandbox images
+      NETWORKS: 1           # inspect networks for container IP resolution
+      VOLUMES: 0
+      POST: 1               # opensandbox needs POST to create containers
+      BUILD: 0
+      COMMIT: 0
+      EXEC: 0               # deny exec into host containers
+      SWARM: 0
+      NODES: 0
+      SERVICES: 0
+      TASKS: 0
+      SECRETS: 0
+      CONFIGS: 0
+      PLUGINS: 0
+      SYSTEM: 0
+      DISTRIBUTION: 0
+      AUTH: 0
+      INFO: 1               # docker info
+      VERSION: 1            # docker version
+      PING: 1               # docker ping
+      EVENTS: 1             # opensandbox may watch container events
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://localhost:2375/version || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
   postgres:
     image: postgres:16-alpine
     container_name: trading-postgres
@@ -30,6 +70,40 @@ services:
       retries: 3
       start_period: 10s
 
+  opensandbox:
+    image: opensandbox/server:latest
+    container_name: trading-opensandbox
+    restart: unless-stopped
+    volumes:
+      - ./opensandbox/config.toml:/etc/opensandbox/config.toml:ro
+    environment:
+      - SANDBOX_CONFIG_PATH=/etc/opensandbox/config.toml
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+    depends_on:
+      docker-socket-proxy:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  playwright-mcp:
+    image: mcr.microsoft.com/playwright/mcp
+    container_name: trading-playwright-mcp
+    restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    entrypoint: ["node", "cli.js", "--headless", "--browser", "chromium", "--no-sandbox", "--port", "8931", "--host", "0.0.0.0"]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8931/mcp').then(()=>process.exit(0)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
   trading-agent:
     image: brerudike/trading-agent
     container_name: llm-trading-agent
@@ -42,6 +116,9 @@ services:
       - ENVIRONMENT=production
       - POSTGRES_URI=postgresql://${POSTGRES_USER:-trading}:${POSTGRES_PASSWORD:-trading}@postgres:5432/${POSTGRES_DB:-trading_memory}
       - SEARXNG_BASE_URL=http://searxng:8080
+      - OPENSANDBOX_SERVER_URL=http://opensandbox:8080
+      - OPEN_SANDBOX_DOMAIN=opensandbox:8080
+      - PLAYWRIGHT_MCP_URL=http://playwright-mcp:8931
     ports:
       - "8000:8000"
     volumes:
@@ -50,6 +127,10 @@ services:
       postgres:
         condition: service_healthy
       searxng:
+        condition: service_healthy
+      opensandbox:
+        condition: service_healthy
+      playwright-mcp:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/api/auth/status"]
@@ -66,4 +147,3 @@ services:
     depends_on:
       trading-agent:
         condition: service_healthy
-

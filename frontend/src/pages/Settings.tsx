@@ -104,7 +104,8 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
       f({ key: 'news_providers', label: 'News Providers', description: 'Comma-separated news sources', inputType: 'text' }),
       f({ key: 'message_provider', label: 'Message Provider', description: 'Notification provider', inputType: 'select', options: ['telegram', 'none'] }),
       f({ key: 'telegram_chat_id', label: 'Telegram Chat ID', description: 'Telegram chat/group ID for notifications', inputType: 'text' }),
-      f({ key: 'opensandbox_server_url', label: 'OpenSandbox Server', description: 'OpenSandbox server URL for Docker-based code/browser sandbox (e.g. localhost:8080). Leave empty to use local fallback.', inputType: 'text' }),
+      f({ key: 'opensandbox_server_url', label: 'OpenSandbox Server', description: 'OpenSandbox server URL for code sandbox (e.g. localhost:8080)', inputType: 'text' }),
+      f({ key: 'playwright_mcp_url', label: 'Playwright MCP URL', description: 'Playwright MCP server URL for browser automation (e.g. http://localhost:8931)', inputType: 'text' }),
     ],
   },
   api_keys: {

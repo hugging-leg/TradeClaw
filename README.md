@@ -30,7 +30,7 @@
 The fastest way to get started is the **one-line install script**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BryantSuen/Agent-Trader/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hugging-leg/TradeClaw/main/install.sh | bash
 ```
 
 This will:
@@ -46,7 +46,7 @@ After the script finishes, edit `tradeclaw/.env` with your API keys, then visit 
 ### Manual Docker Setup
 
 ```bash
-git clone https://github.com/BryantSuen/Agent-Trader.git tradeclaw
+git clone https://github.com/hugging-leg/TradeClaw.git tradeclaw
 cd tradeclaw
 cp env.template .env
 # Edit .env with your API keys
@@ -56,7 +56,7 @@ docker compose up -d
 ### Local Development
 
 ```bash
-git clone https://github.com/BryantSuen/Agent-Trader.git tradeclaw
+git clone https://github.com/hugging-leg/TradeClaw.git tradeclaw
 cd tradeclaw
 pip install -r requirements.txt
 # Optional extras
