@@ -49,7 +49,7 @@ from agent_trader.utils.time_utils import (
     is_trading_day as check_trading_day,
     XCALS_AVAILABLE,
 )
-from agent_trader.utils.timezone import utc_now
+from agent_trader.utils.timezone import utc_now, get_trading_timezone
 
 logger = get_logger(__name__)
 
@@ -171,7 +171,7 @@ class SchedulerMixin:
 
     def _init_scheduler(self) -> None:
         """初始化 APScheduler 实例（在 __init__ 中调用）"""
-        self._tz = pytz.timezone(settings.trading_timezone)
+        self._tz = get_trading_timezone()
         self._exchange: str = settings.exchange
 
         # APScheduler 3.x 的 SQLAlchemyJobStore 使用同步 engine，

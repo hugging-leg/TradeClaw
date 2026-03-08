@@ -183,6 +183,7 @@ export function useLiveExecution(onComplete?: () => void) {
         duration_ms: data.duration_ms,
         timestamp: data.timestamp,
         error: data.error,
+        parent_step_id: data.parent_step_id,
       };
       if (existingIndex >= 0) {
         // 已存在 — 用最新数据更新

@@ -78,6 +78,9 @@ class MessageManager:
         # 使用 aiolimiter 进行速率限制
         self._rate_limiter = MESSAGE_RATE_LIMITER
 
+        # 静默标志：为 True 时所有非 error 消息被跳过（用于子 Agent 执行期间）
+        self.muted: bool = False
+
         # Message statistics
         self.stats = {
             'total_sent': 0,
@@ -334,6 +337,11 @@ class MessageManager:
             message: Message text
             message_type: Type of message (info, warning, error, success)
         """
+        # 静默模式下跳过非 error/warning 消息（子 Agent 运行期间避免消息泛滥）
+        if self.muted and message_type not in ("error", "warning"):
+            logger.debug("Message muted (subagent active): %s", message[:80])
+            return
+
         try:
             # Send message immediately to queue for processing
             await self._queue_message(message, message_type)

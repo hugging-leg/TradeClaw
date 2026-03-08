@@ -660,7 +660,12 @@ export const mockSettings: TradingSettings = {
   min_workflow_interval_minutes: 30,
   scheduler_misfire_grace_time: 60,
   max_pending_llm_jobs: 5,
+  llm_min_interval_minutes: 5,
   message_rate_limit: 1.0,
+  // Subagent
+  subagent_max_depth: 2,
+  subagent_max_parallel: 5,
+  subagent_default_timeout: 120,
   // Monitoring
   news_poll_interval_minutes: 5,
   news_poll_max_per_batch: 20,

@@ -183,6 +183,8 @@ export interface ExecutionStep {
   duration_ms?: number;
   timestamp: string;
   error?: string;
+  /** If set, this step is a child of another step (used for subagent nesting) */
+  parent_step_id?: string;
 }
 
 export interface WorkflowExecution {
@@ -301,7 +303,12 @@ export interface TradingSettings {
   min_workflow_interval_minutes: number;
   scheduler_misfire_grace_time: number;
   max_pending_llm_jobs: number;
+  llm_min_interval_minutes: number;
   message_rate_limit: number;
+  // Subagent
+  subagent_max_depth: number;
+  subagent_max_parallel: number;
+  subagent_default_timeout: number;
   // News
   news_poll_interval_minutes: number;
   news_poll_max_per_batch: number;

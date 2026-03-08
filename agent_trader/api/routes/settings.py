@@ -26,7 +26,10 @@ _READABLE_FIELDS = [
     "portfolio_check_interval", "risk_check_interval",
     "min_workflow_interval_minutes",
     "scheduler_misfire_grace_time", "max_pending_llm_jobs",
+    "llm_min_interval_minutes",
     "message_rate_limit",
+    # Subagent
+    "subagent_max_depth", "subagent_max_parallel", "subagent_default_timeout",
     # Monitoring
     "price_change_threshold", "volatility_threshold",
     "rebalance_cooldown_seconds", "market_etfs",
@@ -101,7 +104,12 @@ class SettingsUpdate(BaseModel):
     min_workflow_interval_minutes: Optional[int] = None
     scheduler_misfire_grace_time: Optional[int] = None
     max_pending_llm_jobs: Optional[int] = None
+    llm_min_interval_minutes: Optional[int] = None
     message_rate_limit: Optional[float] = None
+    # Subagent
+    subagent_max_depth: Optional[int] = None
+    subagent_max_parallel: Optional[int] = None
+    subagent_default_timeout: Optional[int] = None
     # Monitoring
     price_change_threshold: Optional[float] = None
     volatility_threshold: Optional[float] = None
