@@ -713,7 +713,9 @@ class CognitiveArbitrageWorkflow(WorkflowBase):
 
         # 历史记忆
         history_context = ""
-        recalled = await self._recall_memories(limit=10)
+        user_msg = context.get("user_message", "")
+        recall_query = user_msg or "cognitive arbitrage news analysis"
+        recalled = await self._recall_memories(query=recall_query, limit=10)
         if recalled:
             history_context = f"""
 **历史上下文摘要（你之前的认知套利分析）：**

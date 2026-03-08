@@ -201,6 +201,15 @@ class TradingSystem(SchedulerMixin):
             # Memory Manager（必须在 workflow 创建之前初始化）
             await self.memory_manager.initialize()
 
+            # Backfill embeddings for existing memories (if semantic search just enabled)
+            if self.memory_manager.has_semantic_search:
+                try:
+                    count = await self.memory_manager.backfill_embeddings()
+                    if count > 0:
+                        logger.info("Backfilled embeddings for %d existing memories", count)
+                except Exception as e:
+                    logger.warning("Embedding backfill failed (non-fatal): %s", e)
+
             # 创建 workflow（注入持久化 memory）
             self._rebuild_workflow_with_memory()
 
