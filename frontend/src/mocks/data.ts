@@ -698,6 +698,11 @@ export const mockSettings: TradingSettings = {
   environment: 'development',
   log_level: 'INFO',
   log_to_file: true,
+  // Embedding
+  embedding_provider: '',
+  embedding_api_key: '',
+  embedding_base_url: '',
+  embedding_model: '',
 };
 
 // ========== Backtest Results ==========
