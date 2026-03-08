@@ -109,6 +109,8 @@ services:
     container_name: llm-trading-agent
     build: .
     restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     env_file:
       - .env
     environment:
