@@ -1359,7 +1359,7 @@ class WorkflowBase(ABC):
             return False
 
     async def send_notification(self, message: str, msg_type: str = "info"):
-        """发送通知"""
+        """发送通知（子 Agent 运行期间由 MessageManager.muted 自动静默）"""
         await self.message_manager.send_message(message, msg_type)
 
     def update_stats(self, success: bool, error: Optional[str] = None):

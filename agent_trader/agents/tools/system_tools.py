@@ -446,9 +446,11 @@ def _create_spawn_subagent(wf):
                 input_data=task,
             )
 
-            # 设置抑制标志：阻止主 Agent 的 _run_agent 流循环
-            # 将子 Agent 的 LLM token / tool call 发射为顶级步骤
+            # 设置抑制标志：
+            # 1. 阻止主 Agent 的 _run_agent 流循环将子 Agent token 发射为顶级步骤
+            # 2. 静默 Telegram 等通知，避免子 Agent 工具调用导致消息泛滥
             wf._subagent_running = True
+            wf.message_manager.muted = True
             try:
                 executor = SubAgentExecutor(
                     parent_workflow=wf, depth=1,
@@ -462,6 +464,7 @@ def _create_spawn_subagent(wf):
                 results = await executor.run_subagents([task_obj])
             finally:
                 wf._subagent_running = False
+                wf.message_manager.muted = False
 
             result = results[0]
 
@@ -487,6 +490,7 @@ def _create_spawn_subagent(wf):
         except Exception as e:
             logger.error(f"派生子 Agent 失败: {e}", exc_info=True)
             wf._subagent_running = False
+            wf.message_manager.muted = False
             return json.dumps({
                 "task": task,
                 "status": "failed",
@@ -527,9 +531,11 @@ def _create_spawn_parallel_subagents(wf):
                 input_data="\n".join(f"- {t[:80]}" for t in tasks),
             )
 
-            # 设置抑制标志：阻止主 Agent 的 _run_agent 流循环
-            # 将子 Agent 的 LLM token / tool call 发射为顶级步骤
+            # 设置抑制标志：
+            # 1. 阻止主 Agent 的 _run_agent 流循环将子 Agent token 发射为顶级步骤
+            # 2. 静默 Telegram 等通知，避免子 Agent 工具调用导致消息泛滥
             wf._subagent_running = True
+            wf.message_manager.muted = True
             try:
                 executor = SubAgentExecutor(
                     parent_workflow=wf, depth=1,
@@ -546,6 +552,7 @@ def _create_spawn_parallel_subagents(wf):
                 results = await executor.run_subagents(task_objs)
             finally:
                 wf._subagent_running = False
+                wf.message_manager.muted = False
 
             output = {
                 "total_tasks": len(tasks),
@@ -580,6 +587,7 @@ def _create_spawn_parallel_subagents(wf):
         except Exception as e:
             logger.error(f"并行派生子 Agent 失败: {e}", exc_info=True)
             wf._subagent_running = False
+            wf.message_manager.muted = False
             return json.dumps({
                 "status": "failed",
                 "error": str(e),
