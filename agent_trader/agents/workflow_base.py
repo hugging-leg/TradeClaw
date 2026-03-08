@@ -941,19 +941,64 @@ class WorkflowBase(ABC):
         """获取当前 workflow 的 store namespace"""
         return (_MEMORY_NS_PREFIX, self.get_workflow_type())
 
-    async def _recall_memories(self, limit: int = 10) -> str:
-        """从 store 中检索历史记忆，返回格式化的上下文字符串。"""
+    async def _recall_memories(
+        self,
+        query: str = "",
+        limit: int = 10,
+    ) -> str:
+        """
+        从 store 中检索历史记忆，返回格式化的上下文字符串。
+
+        支持混合召回策略（需要 embedding 配置）：
+        - 语义搜索 top-K（按相关性）
+        - 最近 top-K（按时间）
+        - 去重合并
+
+        如果未配置 embedding，则退化为纯时间排序。
+        """
         namespace = self._get_memory_namespace()
-        memories = await self.store.asearch(namespace, limit=limit)
-        if memories:
-            lines = []
-            for m in memories:
-                val = m.value
-                date = val.get("date", "unknown")
-                text = val.get("text", "")
-                lines.append(f"[{date}] {text}")
-            return "\n".join(lines)
-        return ""
+
+        # Check if semantic search is available
+        has_semantic = (
+            query
+            and self.store is not None
+            and getattr(self.store, "index_config", None) is not None
+        )
+
+        if has_semantic:
+            half = max(limit // 2, 1)
+            try:
+                # Semantic top-K
+                semantic = await self.store.asearch(
+                    namespace, query=query, limit=half,
+                )
+            except Exception as e:
+                logger.warning("Semantic search failed, falling back to time-based: %s", e)
+                semantic = []
+
+            # Recent top-K
+            recent = await self.store.asearch(namespace, limit=half)
+
+            # Deduplicate (semantic results take priority)
+            seen: set[str] = set()
+            memories = []
+            for m in list(semantic) + list(recent):
+                if m.key not in seen:
+                    seen.add(m.key)
+                    memories.append(m)
+        else:
+            memories = await self.store.asearch(namespace, limit=limit)
+
+        if not memories:
+            return ""
+
+        lines = []
+        for m in memories:
+            val = m.value
+            date = val.get("date", "unknown")
+            text = val.get("text", "")
+            lines.append(f"[{date}] {text}")
+        return "\n".join(lines)
 
     async def _save_memory(self, summary: str, trigger: str, workflow_id: str) -> None:
         """将本次分析摘要保存到 store（long-term memory）"""

@@ -89,6 +89,9 @@ const TOOL_CATEGORY_META: Record<string, { label: string; color: string; icon: t
   trading: { label: 'Trading', color: 'bg-emerald-500/15 text-emerald-400', icon: TrendingUp },
   analysis: { label: 'Analysis', color: 'bg-purple-500/15 text-purple-400', icon: Brain },
   system: { label: 'System', color: 'bg-amber-500/15 text-amber-400', icon: Settings2 },
+  web_search: { label: 'Web Search', color: 'bg-cyan-500/15 text-cyan-400', icon: Eye },
+  browser: { label: 'Browser', color: 'bg-pink-500/15 text-pink-400', icon: Eye },
+  sandbox: { label: 'Sandbox', color: 'bg-orange-500/15 text-orange-400', icon: Package },
 };
 
 const STEP_TYPE_META: Record<string, { label: string; color: string; icon: typeof Brain }> = {
@@ -1565,7 +1568,8 @@ export default function Agent() {
     tool: 'bg-warning-bg text-warning',
   };
 
-  const toolCategories = ['all', 'data', 'trading', 'analysis', 'system'];
+  // Dynamically compute categories from actual tools (no hardcoding)
+  const toolCategories = ['all', ...Array.from(new Set(tools.map((t) => t.category))).sort()];
 
   return (
     <div className="animate-fade-in space-y-4 sm:space-y-6">

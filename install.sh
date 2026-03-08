@@ -211,6 +211,10 @@ if [[ "$start_answer" =~ ^[Yy]$ ]]; then
     info "Pre-pulling Docker Socket Proxy image..."
     docker pull tecnativa/docker-socket-proxy:latest || warn "Failed to pull docker-socket-proxy image"
 
+    # Pre-pull pgvector PostgreSQL image (required for memory semantic search)
+    info "Pre-pulling pgvector PostgreSQL image..."
+    docker pull pgvector/pgvector:pg16 || warn "Failed to pull pgvector image"
+
     # Pre-pull OpenSandbox runtime images (used by opensandbox-server to create sandbox containers)
     info "Pre-pulling OpenSandbox runtime images..."
     info "  ↓ opensandbox/code-interpreter:v1.0.1 (~14GB, may take a while)"

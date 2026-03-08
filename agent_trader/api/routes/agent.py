@@ -331,6 +331,68 @@ async def get_workflow_stats(ts: TradingSystem = Depends(get_trading_system)):
     }
 
 
+# ========== Memories (Long-term Store) ==========
+
+@router.get("/agent/memories")
+async def list_memories(
+    namespace: Optional[str] = Query(default=None, description="Namespace filter, e.g. 'llm_portfolio_agent'"),
+    q: Optional[str] = Query(default=None, description="Semantic search query (requires embedding config)"),
+    limit: int = Query(default=50, ge=1, le=200),
+    ts: TradingSystem = Depends(get_trading_system),
+):
+    """
+    List long-term memories from the LangGraph store.
+
+    - Without `q`: returns memories sorted by time (most recent first).
+    - With `q`: returns semantically relevant memories (requires embedding config).
+    - With `namespace`: filters to a specific workflow's memories.
+    """
+    store = ts.memory_manager.store
+    ns_tuple = ("memories", namespace) if namespace else ("memories",)
+
+    try:
+        if q:
+            items = await store.asearch(ns_tuple, query=q, limit=limit)
+        else:
+            items = await store.asearch(ns_tuple, limit=limit)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Memory search failed: {e}")
+
+    return {
+        "items": [
+            {
+                "namespace": list(item.namespace),
+                "key": item.key,
+                "value": item.value,
+                "created_at": item.created_at.isoformat() if hasattr(item, 'created_at') and item.created_at else None,
+                "updated_at": item.updated_at.isoformat() if hasattr(item, 'updated_at') and item.updated_at else None,
+                "score": getattr(item, 'score', None),
+            }
+            for item in items
+        ],
+        "total": len(items),
+        "has_semantic_search": ts.memory_manager.has_semantic_search,
+    }
+
+
+@router.delete("/agent/memories/{key}")
+async def delete_memory(
+    key: str,
+    namespace: Optional[str] = Query(default=None, description="Namespace, e.g. 'llm_portfolio_agent'"),
+    ts: TradingSystem = Depends(get_trading_system),
+):
+    """Delete a specific memory by key."""
+    store = ts.memory_manager.store
+    ns_tuple = ("memories", namespace) if namespace else ("memories",)
+
+    try:
+        await store.adelete(ns_tuple, key)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete memory: {e}")
+
+    return {"success": True, "key": key}
+
+
 # ========== SSE — 实时事件流 ==========
 # 注意：此 endpoint 注册在 sse_router 上，不受 router 级别的 require_auth 保护。
 # 鉴权在 endpoint 内部通过 query param token 手动验证。

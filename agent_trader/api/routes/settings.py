@@ -40,6 +40,8 @@ _READABLE_FIELDS = [
     "alpaca_base_url", "telegram_chat_id",
     "opensandbox_server_url",
     "playwright_mcp_url",
+    # Embedding
+    "embedding_provider", "embedding_base_url", "embedding_model",
     # NOTE: LLM configuration is now managed via /api/llm/* endpoints (llm_config.yaml)
     # Rebalance execution
     "rebalance_min_value_threshold", "rebalance_min_pct_threshold",
@@ -59,6 +61,7 @@ _WRITE_ONLY_FIELDS = frozenset({
     "tiingo_api_key", "finnhub_api_key",
     "unusual_whales_api_key",
     "telegram_bot_token",
+    "embedding_api_key",
 })
 
 # 绝不可通过 API 修改的字段（可读但不可写）

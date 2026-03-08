@@ -152,6 +152,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 1440  # 24 小时
 
+    # === Embedding Configuration (Memory Semantic Search) ===
+    # Provider: "openai" uses any OpenAI-compatible embedding API (DashScope, DeepSeek, Ollama, etc.)
+    # If not set, memory search falls back to time-based retrieval (no semantic search)
+    embedding_provider: Optional[str] = None
+    embedding_api_key: Optional[str] = None
+    embedding_base_url: Optional[str] = None
+    embedding_model: Optional[str] = None   # e.g. "text-embedding-v3", "text-embedding-3-small"
+
     # === 环境配置 ===
     environment: str = "development"
     log_level: str = "INFO"

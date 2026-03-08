@@ -109,8 +109,8 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
     ],
   },
   api_keys: {
-    title: 'API Keys',
-    subtitle: 'Write-only — enter a new key to update, current values are never sent to the browser',
+    title: 'API Keys & Embedding',
+    subtitle: 'API keys (write-only) and embedding configuration for memory semantic search',
     fields: [
       f({ key: 'alpaca_api_key', label: 'Alpaca API Key', inputType: 'password', writeOnly: true }),
       f({ key: 'alpaca_secret_key', label: 'Alpaca Secret Key', inputType: 'password', writeOnly: true }),
@@ -118,6 +118,11 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
       f({ key: 'finnhub_api_key', label: 'Finnhub API Key', inputType: 'password', writeOnly: true }),
       f({ key: 'unusual_whales_api_key', label: 'Unusual Whales API Key', inputType: 'password', writeOnly: true }),
       f({ key: 'telegram_bot_token', label: 'Telegram Bot Token', inputType: 'password', writeOnly: true }),
+      // Embedding (Memory Semantic Search)
+      f({ key: 'embedding_provider', label: 'Embedding Provider', description: '"openai" for any OpenAI-compatible API (DashScope, DeepSeek, Ollama). Leave empty to disable semantic search.', inputType: 'select', options: ['', 'openai'] }),
+      f({ key: 'embedding_api_key', label: 'Embedding API Key', description: 'API key for the embedding provider', inputType: 'password', writeOnly: true }),
+      f({ key: 'embedding_base_url', label: 'Embedding Base URL', description: 'e.g. https://dashscope.aliyuncs.com/compatible-mode/v1', inputType: 'text' }),
+      f({ key: 'embedding_model', label: 'Embedding Model', description: 'e.g. text-embedding-v3, text-embedding-3-small. Dims are auto-detected.', inputType: 'text' }),
     ],
   },
   llm: {

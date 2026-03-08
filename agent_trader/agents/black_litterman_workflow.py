@@ -324,10 +324,11 @@ class BlackLittermanWorkflow(WorkflowBase):
         self._current_reasoning = ""
 
         # 1. LLM 分析生成观点（流式执行，自动 emit 每个步骤）
-        recalled = await self._recall_memories(limit=10)
+        user_message = context.get("user_message")
+        recall_query = user_message or "Black-Litterman market views optimization"
+        recalled = await self._recall_memories(query=recall_query, limit=10)
 
         # 如果是用户直接发消息（chat），使用用户消息作为主指令
-        user_message = context.get("user_message")
         if user_message:
             user_prompt = user_message
         else:

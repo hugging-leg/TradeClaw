@@ -164,7 +164,7 @@ export interface ToolParameter {
 export interface AgentTool {
   name: string;
   description: string;
-  category: 'data' | 'trading' | 'analysis' | 'system';
+  category: string;
   parameters: ToolParameter[];
   enabled: boolean;
 }
@@ -322,6 +322,11 @@ export interface TradingSettings {
   telegram_chat_id: string;
   opensandbox_server_url: string;
   playwright_mcp_url: string;
+  // Embedding
+  embedding_provider: string | null;
+  embedding_api_key: string | null;
+  embedding_base_url: string | null;
+  embedding_model: string | null;
   // NOTE: LLM configuration is now managed via /api/llm/* endpoints
   // Execution
   rebalance_min_value_threshold: number;

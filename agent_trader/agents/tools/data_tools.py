@@ -27,13 +27,19 @@ def create_data_tools(workflow) -> List[tuple]:
     Returns:
         [(tool_obj, "data"), ...] 可直接传给 ToolRegistry.register_many()
     """
-    return [
+    tools = [
         (_create_get_portfolio_status(workflow), "data"),
         (_create_get_market_data(workflow), "data"),
         (_create_get_latest_news(workflow), "data"),
         (_create_get_latest_price(workflow), "data"),
         (_create_get_historical_prices(workflow), "data"),
     ]
+
+    # Memory search tool — only available when store is configured
+    if getattr(workflow, "store", None) is not None:
+        tools.append((_create_search_memory(workflow), "data"))
+
+    return tools
 
 
 def _create_get_portfolio_status(wf):
@@ -279,3 +285,36 @@ def _create_get_historical_prices(wf):
             return error_msg
 
     return get_historical_prices
+
+
+def _create_search_memory(wf):
+    @tool
+    async def search_memory(query: str, limit: int = 5) -> str:
+        """
+        Search your long-term memory for past analyses, decisions, and observations.
+
+        Use this when you need to recall:
+        - Previous analysis conclusions for a specific stock or sector
+        - Past trading decisions and their reasoning
+        - Historical market observations you noted before
+        - Any prior context that may inform current decisions
+
+        Args:
+            query: Natural language search query, e.g. "NVDA earnings analysis",
+                   "Fed rate decision impact", "risk hedging strategy"
+            limit: Maximum number of memories to return (default 5, max 20)
+        """
+        try:
+            limit = max(1, min(limit, 20))
+            recalled = await wf._recall_memories(query=query, limit=limit)
+            if not recalled:
+                return "No relevant memories found for this query."
+
+            count = recalled.count("\n") + 1
+            logger.info(f"Memory search: query='{query[:50]}', found={count}")
+            return recalled
+        except Exception as e:
+            logger.error(f"Memory search failed: {e}")
+            return f"Memory search error: {str(e)}"
+
+    return search_memory
