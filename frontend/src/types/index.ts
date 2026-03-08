@@ -164,7 +164,7 @@ export interface ToolParameter {
 export interface AgentTool {
   name: string;
   description: string;
-  category: 'data' | 'trading' | 'analysis' | 'system';
+  category: string;
   parameters: ToolParameter[];
   enabled: boolean;
 }

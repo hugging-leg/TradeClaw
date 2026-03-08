@@ -39,10 +39,16 @@ export default function Dashboard() {
 
   useEffect(() => {
     // 各请求独立 catch，避免一个失败导致全部丢失
-    fetchPortfolio().then(setPortfolio).catch(() => {});
-    fetchPortfolioHistory(30).then(setSnapshots).catch(() => {});
-    fetchSystemStatus().then(setStatus).catch(() => {});
-    fetchAnalyses(5).then((resp) => setAnalyses(resp.items)).catch(() => {});
+    const load = () => {
+      fetchPortfolio().then(setPortfolio).catch(() => {});
+      fetchPortfolioHistory(30).then(setSnapshots).catch(() => {});
+      fetchSystemStatus().then(setStatus).catch(() => {});
+      fetchAnalyses(5).then((resp) => setAnalyses(resp.items)).catch(() => {});
+    };
+    load();
+    // Auto-refresh every 60 seconds to keep data current
+    const timer = setInterval(load, 60_000);
+    return () => clearInterval(timer);
   }, []);
 
   if (!portfolio || !status) {
@@ -61,12 +67,28 @@ export default function Dashboard() {
     ? ((portfolio.day_pnl / (portfolio.equity - portfolio.day_pnl)) * 100)
     : 0;
 
-  const chartData = snapshots
-    .filter((s) => s.equity != null)
-    .map((s) => ({
-      date: formatDate(s.timestamp),
-      value: s.equity!,
-    }));
+  // Build equity curve from history snapshots + append today's live point
+  const chartData = (() => {
+    const pts = snapshots
+      .filter((s) => s.equity != null)
+      .map((s) => ({
+        date: formatDate(s.timestamp),
+        value: s.equity!,
+      }));
+
+    // Append today's live equity if it differs from the last snapshot
+    if (portfolio) {
+      const todayLabel = formatDate(new Date().toISOString());
+      const last = pts[pts.length - 1];
+      if (!last || last.date !== todayLabel) {
+        pts.push({ date: todayLabel, value: portfolio.equity });
+      } else {
+        // Update the last point with live equity
+        last.value = portfolio.equity;
+      }
+    }
+    return pts;
+  })();
 
   // Smart Y-axis domain: zoom into actual data range so fluctuations are visible
   const chartYDomain: [number, number] | undefined = (() => {

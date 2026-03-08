@@ -33,11 +33,21 @@ export default function Portfolio() {
 
   useEffect(() => {
     fetchPortfolio().then(setPortfolio).catch(() => {});
+    // Auto-refresh portfolio every 60 seconds
+    const timer = setInterval(() => {
+      fetchPortfolio().then(setPortfolio).catch(() => {});
+    }, 60_000);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
     const days = range === '7d' ? 7 : range === '30d' ? 30 : 90;
     fetchPortfolioHistory(days).then(setSnapshots).catch(() => {});
+    // Auto-refresh history every 60 seconds
+    const timer = setInterval(() => {
+      fetchPortfolioHistory(days).then(setSnapshots).catch(() => {});
+    }, 60_000);
+    return () => clearInterval(timer);
   }, [range]);
 
   if (!portfolio) {
@@ -48,12 +58,26 @@ export default function Portfolio() {
     );
   }
 
-  const equityData = snapshots
-    .filter((s) => s.equity != null)
-    .map((s) => ({
-      date: formatDate(s.timestamp),
-      value: s.equity!,
-    }));
+  // Build equity curve from history snapshots + append today's live point
+  const equityData = (() => {
+    const pts = snapshots
+      .filter((s) => s.equity != null)
+      .map((s) => ({
+        date: formatDate(s.timestamp),
+        value: s.equity!,
+      }));
+
+    if (portfolio) {
+      const todayLabel = formatDate(new Date().toISOString());
+      const last = pts[pts.length - 1];
+      if (!last || last.date !== todayLabel) {
+        pts.push({ date: todayLabel, value: portfolio.equity });
+      } else {
+        last.value = portfolio.equity;
+      }
+    }
+    return pts;
+  })();
 
   // Smart Y-axis domain: zoom into actual data range so fluctuations are visible
   const equityYDomain: [number, number] | undefined = (() => {
@@ -66,12 +90,27 @@ export default function Portfolio() {
     return [Math.floor(minV - padding), Math.ceil(maxV + padding)];
   })();
 
-  const pnlData = snapshots
-    .filter((s) => s.profit_loss != null)
-    .map((s) => ({
-      date: formatDate(s.timestamp),
-      pnl: s.profit_loss!,
-    }));
+  // Build daily P&L bar chart + append today's live day_pnl
+  const pnlData = (() => {
+    const pts = snapshots
+      .filter((s) => s.profit_loss != null)
+      .map((s) => ({
+        date: formatDate(s.timestamp),
+        pnl: s.profit_loss!,
+      }));
+
+    if (portfolio) {
+      const todayLabel = formatDate(new Date().toISOString());
+      const last = pts[pts.length - 1];
+      if (!last || last.date !== todayLabel) {
+        pts.push({ date: todayLabel, pnl: portfolio.day_pnl });
+      } else {
+        // Update last bar with live day_pnl for consistency with Dashboard
+        last.pnl = portfolio.day_pnl;
+      }
+    }
+    return pts;
+  })();
 
   const treemapData = portfolio.positions.map((p, i) => ({
     name: p.symbol,

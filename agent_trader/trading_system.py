@@ -824,6 +824,7 @@ class TradingSystem(SchedulerMixin):
             "workflow_locked": self._workflow_lock.locked(),
             "scheduler_jobs": scheduler_status.get("total_jobs", 0),
             "uptime_seconds": uptime,
+            "event_queue_size": len(self._pending_triggers),
         }
 
         # 实时监控
