@@ -89,8 +89,13 @@ const FIELD_GROUPS: Record<SettingsTab, { title: string; subtitle: string; field
       f({ key: 'risk_check_interval', label: 'Risk Check Interval', description: 'How often to run risk checks', suffix: 'min', inputType: 'number', step: 1 }),
       f({ key: 'min_workflow_interval_minutes', label: 'Min Workflow Interval', description: 'Minimum time between workflow executions', suffix: 'min', inputType: 'number', step: 1 }),
       f({ key: 'scheduler_misfire_grace_time', label: 'Misfire Grace Time', description: 'APScheduler misfire grace time', suffix: 's', inputType: 'number', step: 1 }),
-      f({ key: 'max_pending_llm_jobs', label: 'Max Pending LLM Jobs', description: 'Maximum pending LLM-scheduled tasks', inputType: 'number', step: 1 }),
+      f({ key: 'max_pending_llm_jobs', label: 'Max Pending LLM Jobs', description: 'Maximum pending LLM-scheduled tasks (at/every/cron shared)', inputType: 'number', step: 1 }),
+      f({ key: 'llm_min_interval_minutes', label: 'LLM Min Interval', description: 'Minimum interval for LLM-created recurring schedules', suffix: 'min', inputType: 'number', step: 1 }),
       f({ key: 'message_rate_limit', label: 'Message Rate Limit', description: 'Max messages per second', suffix: '/s', inputType: 'number', step: 0.1 }),
+      // Subagent
+      f({ key: 'subagent_max_depth', label: 'SubAgent Max Depth', description: 'Max recursion depth for sub-agents', inputType: 'number', step: 1 }),
+      f({ key: 'subagent_max_parallel', label: 'SubAgent Max Parallel', description: 'Max concurrent sub-agents per spawn', inputType: 'number', step: 1 }),
+      f({ key: 'subagent_default_timeout', label: 'SubAgent Timeout', description: 'Default timeout for each sub-agent', suffix: 's', inputType: 'number', step: 10 }),
     ],
   },
   providers: {

@@ -110,7 +110,8 @@ class Settings(BaseSettings):
     min_workflow_interval_minutes: int = 30
     scheduler_misfire_grace_time: int = 60  # APScheduler misfire grace time (seconds)
     scheduler_max_history: int = 200  # 调度器执行历史最大保留条数
-    max_pending_llm_jobs: int = 5  # LLM 自主调度最大待执行任务数
+    max_pending_llm_jobs: int = 5  # LLM 自主调度最大待执行任务数（at/every/cron 共享）
+    llm_min_interval_minutes: int = 5  # LLM 创建 interval 调度的最小间隔（分钟）
     message_rate_limit: float = 1.0
 
     # === 新闻轮询配置 ===
@@ -122,6 +123,11 @@ class Settings(BaseSettings):
     llm_recursion_limit: int = 64
     llm_max_analysis_history: int = 50
     llm_max_summary_tokens: int = 1500
+
+    # === Subagent 配置 ===
+    subagent_max_depth: int = 2  # 子 Agent 递归深度限制（防止无限嵌套）
+    subagent_max_parallel: int = 5  # 单次最大并行子 Agent 数
+    subagent_default_timeout: int = 600  # 子 Agent 默认超时秒数
 
     # === 均衡组合策略配置 ===
     # === 交易执行配置 ===

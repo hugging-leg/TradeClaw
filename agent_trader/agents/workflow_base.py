@@ -248,6 +248,11 @@ class WorkflowBase(ABC):
         # 用户消息队列（运行中追加 prompt）
         self._user_message_queue: asyncio.Queue[str] = asyncio.Queue()
 
+        # SubAgent 抑制标志：当子 Agent 工具执行时为 True，
+        # 主 Agent 的 _run_agent 流循环跳过 messages/updates 步骤发射，
+        # 避免子 Agent 的 LLM token 和 tool call 泄漏到顶级步骤。
+        self._subagent_running: bool = False
+
         # 策略持仓管理：回测模式使用内存存储，实盘使用 DB
         # 由 backtest_runner 在创建 workflow 后设置 _backtest_mode = True
         self._backtest_mode: bool = False
@@ -392,24 +397,26 @@ class WorkflowBase(ABC):
         output_data: Optional[str] = None,
         error: Optional[str] = None,
         duration_ms: Optional[int] = None,
+        parent_step_id: Optional[str] = None,
     ) -> str:
         """
         发射一个执行步骤事件（实时推送到前端）。
 
         Args:
-            step_type: 步骤类型（任意字符串，常见: llm_thinking / tool_call / decision / notification / user_message）
+            step_type: 步骤类型（任意字符串，常见: llm_thinking / tool_call / decision / notification / user_message / subagent）
             name: 步骤名称（人类可读）
             status: 状态 (running / completed / failed)
             input_data: 输入摘要
             output_data: 输出摘要
             error: 错误信息
             duration_ms: 耗时（毫秒）
+            parent_step_id: 父步骤 ID（用于子 Agent 嵌套展示）
 
         Returns:
             step_id（用于后续更新同一 step 的状态）
         """
         step_id = f"{self.workflow_id}-{len(self._current_steps)}"
-        step = {
+        step: Dict[str, Any] = {
             "id": step_id,
             "type": step_type,
             "name": name,
@@ -420,6 +427,8 @@ class WorkflowBase(ABC):
             "error": error,
             "duration_ms": duration_ms,
         }
+        if parent_step_id is not None:
+            step["parent_step_id"] = parent_step_id
         self._current_steps.append(step)
 
         event_broadcaster.emit({
@@ -476,10 +485,16 @@ class WorkflowBase(ABC):
         """
         返回实际传给 Agent 的 system prompt。
 
-        默认直接返回 _config["system_prompt"]。
+        默认返回 _config["system_prompt"] + Skills 摘要。
         子类可 override 此方法来动态拼接额外上下文（如资产池列表）。
         """
-        return self._config.get("system_prompt", "")
+        base = self._config.get("system_prompt", "")
+        skills_prompt = ""
+        if hasattr(self, "_skill_loader") and self._skill_loader:
+            skills_prompt = self._skill_loader.build_skills_prompt()
+        if skills_prompt:
+            return f"{base}\n\n{skills_prompt}"
+        return base
 
     def _init_agent(self, session_id: str = "default") -> None:
         """
@@ -496,6 +511,7 @@ class WorkflowBase(ABC):
         from agent_trader.utils.llm_utils import create_llm_client
         from agent_trader.agents.tools.registry import ToolRegistry
         from agent_trader.agents.tools.common import create_common_tools
+        from agent_trader.agents.skills import SkillLoader
 
         self.session_id = session_id
 
@@ -506,9 +522,15 @@ class WorkflowBase(ABC):
         else:
             self.llm = create_llm_client(role="agent")
 
+        # Skills
+        self._skill_loader = SkillLoader()
+
         # Tools
         self.tool_registry = ToolRegistry()
         all_tools = create_common_tools(self)
+        # 注册 read_skill tool（归入 system 分类）
+        if self._skill_loader.skills:
+            all_tools.append((self._skill_loader.create_read_skill_tool(), "system"))
         self.tool_registry.register_many(all_tools)
         self.tools = self.tool_registry.get_enabled_tools()
 
@@ -716,6 +738,14 @@ class WorkflowBase(ABC):
                     ai_chunk, metadata = chunk
                     node = metadata.get("langgraph_node", "")
 
+                    # ── 抑制子 Agent 泄漏 ──
+                    # 当 _subagent_running 为 True 时，tools 节点内部的子 Agent
+                    # 会通过 LangGraph messages stream 泄漏 LLM token 和 tool call
+                    # 到父 graph 的 stream 中。此时跳过所有 messages 处理，
+                    # 子 Agent 的步骤由 SubAgentExecutor 独立发射。
+                    if self._subagent_running:
+                        continue
+
                     # 只处理 LLM node 的输出
                     if node in _model_nodes and isinstance(ai_chunk, AIMessageChunk):
                         # Reasoning token（reasoning model 的思考过程）
@@ -780,6 +810,12 @@ class WorkflowBase(ABC):
 
                     for node_name, update in chunk.items():
                         if node_name in _model_nodes:
+                            # ── 抑制子 Agent 泄漏 ──
+                            # 子 Agent 在 tools 节点内部运行时，其 LLM 完成事件
+                            # 可能被父 graph 的 updates stream 捕获并标记为模型节点。
+                            # 此时跳过，避免创建重复的顶级步骤。
+                            if self._subagent_running:
+                                continue
                             # LLM node 完成一轮思考
                             msgs = update.get("messages", [])
                             for msg in msgs:

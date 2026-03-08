@@ -98,6 +98,9 @@ const STEP_TYPE_META: Record<string, { label: string; color: string; icon: typeo
   llm_reasoning: { label: 'Reasoning', color: 'text-orange-400', icon: Sparkles },
   llm_thinking: { label: 'Thinking', color: 'text-purple-400', icon: Brain },
   tool_call: { label: 'Tool', color: 'text-blue-400', icon: Wrench },
+  subagent: { label: 'SubAgent', color: 'text-teal-400', icon: Zap },
+  subagent_thinking: { label: 'SA Thinking', color: 'text-teal-300/70', icon: Brain },
+  subagent_tool_call: { label: 'SA Tool', color: 'text-teal-300/70', icon: Wrench },
   decision: { label: 'Decision', color: 'text-emerald-400', icon: Zap },
   notification: { label: 'Info', color: 'text-amber-400', icon: Send },
   user_message: { label: 'User', color: 'text-sky-400', icon: User },
@@ -174,11 +177,20 @@ function ExecutionStepItem({
   step,
   isLast,
   streamingText,
+  childSteps,
+  allChildMap,
+  streamingTexts,
 }: {
   step: ExecutionStep;
   isLast: boolean;
   /** 实时 LLM token 流（仅 running 的 llm_thinking step 有值） */
   streamingText?: string;
+  /** 直接子步骤（仅 subagent 类型有值） */
+  childSteps?: ExecutionStep[];
+  /** 全局 parent→children 映射（用于递归嵌套） */
+  allChildMap?: Map<string, ExecutionStep[]>;
+  /** 所有 streaming texts map（传给子步骤用） */
+  streamingTexts?: Record<string, string>;
 }) {
   const [expanded, setExpanded] = useState(false);
   const meta = STEP_TYPE_META[step.type] || DEFAULT_STEP_META;
@@ -188,6 +200,8 @@ function ExecutionStepItem({
   // 自动展开正在运行的步骤
   const isRunning = step.status === 'running';
   const hasStreaming = !!streamingText;
+  const isSubagentGroup = step.type === 'subagent';
+  const hasChildren = childSteps && childSteps.length > 0;
 
   // 自动滚动到底部（streaming 时）
   useEffect(() => {
@@ -238,6 +252,9 @@ function ExecutionStepItem({
               ? meta.label
               : step.type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
           </Badge>
+          {hasChildren && (
+            <span className="text-xs text-muted">({childSteps.length} steps)</span>
+          )}
           {step.duration_ms !== undefined && (
             <span className="ml-auto text-xs text-muted">{step.duration_ms}ms</span>
           )}
@@ -259,7 +276,25 @@ function ExecutionStepItem({
           </div>
         )}
 
-        {showDetails && !hasStreaming && (
+        {/* SubAgent nested child steps */}
+        {isSubagentGroup && showDetails && hasChildren && (
+          <div className="mt-2 ml-2 border-l-2 border-teal-500/30 pl-3 space-y-0">
+            {childSteps.map((child, ci) => (
+              <SubAgentChildStep
+                key={child.id}
+                step={child}
+                isLast={ci === childSteps.length - 1}
+                streamingText={streamingTexts?.[child.id]}
+                childSteps={allChildMap?.get(child.id)}
+                allChildMap={allChildMap}
+                streamingTexts={streamingTexts}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Regular step details (input/output/error) */}
+        {showDetails && !hasStreaming && !isSubagentGroup && (
           <div className="mt-2 space-y-2 pl-5">
             {step.input && (
               <div className="rounded-lg bg-gray-900/50 p-3">
@@ -281,7 +316,153 @@ function ExecutionStepItem({
             )}
           </div>
         )}
+
+        {/* SubAgent group output (shown after children) */}
+        {isSubagentGroup && showDetails && step.output && (
+          <div className="mt-2 space-y-2 pl-5">
+            <div className="rounded-lg bg-gray-900/50 p-3">
+              <span className="mb-1 block text-xs font-medium text-muted">Result</span>
+              <pre className="overflow-x-auto whitespace-pre-wrap text-xs text-muted-foreground">{step.output}</pre>
+            </div>
+          </div>
+        )}
+        {isSubagentGroup && showDetails && step.error && (
+          <div className="mt-2 space-y-2 pl-5">
+            <div className="rounded-lg bg-red-950/30 p-3">
+              <span className="mb-1 block text-xs font-medium text-red-400">Error</span>
+              <pre className="overflow-x-auto text-xs text-red-300">{step.error}</pre>
+            </div>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+/** Compact child step inside a SubAgent group — supports recursive nesting */
+function SubAgentChildStep({
+  step,
+  isLast,
+  streamingText,
+  childSteps,
+  allChildMap,
+  streamingTexts,
+}: {
+  step: ExecutionStep;
+  isLast: boolean;
+  streamingText?: string;
+  childSteps?: ExecutionStep[];
+  allChildMap?: Map<string, ExecutionStep[]>;
+  streamingTexts?: Record<string, string>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const meta = STEP_TYPE_META[step.type] || DEFAULT_STEP_META;
+  const Icon = meta.icon;
+  const isRunning = step.status === 'running';
+  const hasStreaming = !!streamingText;
+  const isSubagentGroup = step.type === 'subagent';
+  const hasChildren = childSteps && childSteps.length > 0;
+  const showDetails = expanded || isRunning;
+
+  return (
+    <div className={cn('py-1', !isLast && 'border-b border-border/30')}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-1.5 text-left"
+      >
+        {isRunning ? (
+          <Loader2 className="h-3 w-3 shrink-0 animate-spin text-teal-400" />
+        ) : step.status === 'failed' ? (
+          <XCircle className="h-3 w-3 shrink-0 text-red-400" />
+        ) : (
+          <Icon className={cn('h-3 w-3 shrink-0', meta.color)} />
+        )}
+        {showDetails ? (
+          <ChevronDown className="h-2.5 w-2.5 shrink-0 text-muted" />
+        ) : (
+          <ChevronRight className="h-2.5 w-2.5 shrink-0 text-muted" />
+        )}
+        <span className="truncate text-xs text-muted-foreground">{step.name}</span>
+        <Badge variant="muted" className="text-[9px] px-1 py-0">
+          {meta.label}
+        </Badge>
+        {hasChildren && (
+          <span className="text-[9px] text-muted">({childSteps.length})</span>
+        )}
+        {step.duration_ms !== undefined && (
+          <span className="ml-auto text-[10px] text-muted">{step.duration_ms}ms</span>
+        )}
+        {isRunning && !step.duration_ms && (
+          <span className="ml-auto text-[10px] text-teal-400">running...</span>
+        )}
+      </button>
+
+      {hasStreaming && (
+        <div className="mt-1 max-h-32 overflow-y-auto rounded bg-gray-950/60 p-2">
+          <pre className="whitespace-pre-wrap text-[10px] leading-relaxed text-muted-foreground">
+            {streamingText}
+            <span className="inline-block h-3 w-1 animate-pulse bg-teal-400/60" />
+          </pre>
+        </div>
+      )}
+
+      {/* Recursive nested children (subagent group within a subagent group) */}
+      {isSubagentGroup && showDetails && hasChildren && (
+        <div className="mt-1 ml-2 border-l-2 border-teal-500/20 pl-2 space-y-0">
+          {childSteps.map((child, ci) => (
+            <SubAgentChildStep
+              key={child.id}
+              step={child}
+              isLast={ci === childSteps.length - 1}
+              streamingText={streamingTexts?.[child.id]}
+              childSteps={allChildMap?.get(child.id)}
+              allChildMap={allChildMap}
+              streamingTexts={streamingTexts}
+            />
+          ))}
+        </div>
+      )}
+
+      {showDetails && !hasStreaming && !isSubagentGroup && (step.input || step.output || step.error) && (
+        <div className="mt-1 space-y-1 pl-4">
+          {step.input && (
+            <div className="rounded bg-gray-900/40 p-2">
+              <span className="block text-[9px] font-medium text-muted">Input</span>
+              <pre className="overflow-x-auto text-[10px] text-muted-foreground">{step.input}</pre>
+            </div>
+          )}
+          {step.output && (
+            <div className="rounded bg-gray-900/40 p-2">
+              <span className="block text-[9px] font-medium text-muted">Output</span>
+              <pre className="overflow-x-auto whitespace-pre-wrap text-[10px] text-muted-foreground">{step.output}</pre>
+            </div>
+          )}
+          {step.error && (
+            <div className="rounded bg-red-950/20 p-2">
+              <span className="block text-[9px] font-medium text-red-400">Error</span>
+              <pre className="overflow-x-auto text-[10px] text-red-300">{step.error}</pre>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* SubAgent group output/error */}
+      {isSubagentGroup && showDetails && step.output && (
+        <div className="mt-1 pl-4">
+          <div className="rounded bg-gray-900/40 p-2">
+            <span className="block text-[9px] font-medium text-muted">Result</span>
+            <pre className="overflow-x-auto whitespace-pre-wrap text-[10px] text-muted-foreground">{step.output}</pre>
+          </div>
+        </div>
+      )}
+      {isSubagentGroup && showDetails && step.error && (
+        <div className="mt-1 pl-4">
+          <div className="rounded bg-red-950/20 p-2">
+            <span className="block text-[9px] font-medium text-red-400">Error</span>
+            <pre className="overflow-x-auto text-[10px] text-red-300">{step.error}</pre>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -365,14 +546,29 @@ function ExecutionCard({
       </button>
       {expanded && (
         <div className="mt-4 border-t border-border pt-4">
-          {execution.steps.map((step, i) => (
-            <ExecutionStepItem
-              key={step.id}
-              step={step}
-              isLast={i === execution.steps.length - 1}
-              streamingText={streamingTexts?.[step.id]}
-            />
-          ))}
+          {(() => {
+            // Separate top-level steps from child steps
+            const topLevel = execution.steps.filter((s) => !s.parent_step_id);
+            const childMap = new Map<string, ExecutionStep[]>();
+            for (const s of execution.steps) {
+              if (s.parent_step_id) {
+                const arr = childMap.get(s.parent_step_id) || [];
+                arr.push(s);
+                childMap.set(s.parent_step_id, arr);
+              }
+            }
+            return topLevel.map((step, i) => (
+              <ExecutionStepItem
+                key={step.id}
+                step={step}
+                isLast={i === topLevel.length - 1}
+                streamingText={streamingTexts?.[step.id]}
+                childSteps={childMap.get(step.id)}
+                allChildMap={childMap}
+                streamingTexts={streamingTexts}
+              />
+            ));
+          })()}
           {isLive && execution.steps.length === 0 && (
             <div className="flex items-center gap-2 py-4 text-sm text-muted">
               <Loader2 className="h-4 w-4 animate-spin" />

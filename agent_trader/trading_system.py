@@ -538,23 +538,12 @@ class TradingSystem(SchedulerMixin):
     # LLM 自主调度 job_id 前缀
     _LLM_JOB_PREFIX = "llm_scheduled_"
 
-    def schedule_llm_analysis(
-        self,
-        delay_seconds: float,
-        reason: str,
-    ) -> Dict[str, Any]:
+    def _check_llm_job_limit(self) -> Optional[Dict[str, Any]]:
         """
-        LLM 自主调度分析 — 带上限控制。
-
-        使用动态 job_id（基于时间戳），允许同时存在多个待执行的 LLM 调度。
-        通过 max_pending_llm_jobs 配置项限制最大待执行数量，防止 LLM 无限制创建任务。
-
-        Args:
-            delay_seconds: 延迟秒数
-            reason: 调度原因
+        检查 LLM 调度是否已达上限。
 
         Returns:
-            dict with "success", "job_id", "message"
+            None if under limit, otherwise a failure dict.
         """
         max_pending = settings.max_pending_llm_jobs
         current_count = self.count_jobs_by_prefix(self._LLM_JOB_PREFIX)
@@ -570,6 +559,29 @@ class TradingSystem(SchedulerMixin):
             )
             logger.warning(msg)
             return {"success": False, "job_id": None, "message": msg}
+        return None
+
+    def schedule_llm_analysis(
+        self,
+        delay_seconds: float,
+        reason: str,
+    ) -> Dict[str, Any]:
+        """
+        LLM 自主调度分析（一次性延迟） — 带上限控制。
+
+        使用动态 job_id（基于时间戳），允许同时存在多个待执行的 LLM 调度。
+        通过 max_pending_llm_jobs 配置项限制最大待执行数量，防止 LLM 无限制创建任务。
+
+        Args:
+            delay_seconds: 延迟秒数
+            reason: 调度原因
+
+        Returns:
+            dict with "success", "job_id", "message"
+        """
+        limit_err = self._check_llm_job_limit()
+        if limit_err:
+            return limit_err
 
         job_id = f"{self._LLM_JOB_PREFIX}{int(utc_now().timestamp() * 1000)}"
         success = self.add_delayed_job(
@@ -595,6 +607,126 @@ class TradingSystem(SchedulerMixin):
             }
         else:
             return {"success": False, "job_id": None, "message": "添加调度任务失败"}
+
+    def schedule_llm_recurring(
+        self,
+        schedule_kind: str,
+        reason: str,
+        *,
+        interval_minutes: float = 0,
+        cron_expr: str = "",
+        require_trading_day: bool = True,
+        require_market_open: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        LLM 自主调度重复分析（interval 或 cron） — 带上限控制。
+
+        与 schedule_llm_analysis 共享 max_pending_llm_jobs 上限。
+
+        Args:
+            schedule_kind: "interval" | "cron"
+            reason: 调度原因
+            interval_minutes: interval 模式的间隔分钟数
+            cron_expr: cron 模式的表达式，如 "*/15 9-16 * * mon-fri"
+            require_trading_day: 是否要求交易日
+            require_market_open: 是否要求市场开放
+
+        Returns:
+            dict with "success", "job_id", "message"
+        """
+        limit_err = self._check_llm_job_limit()
+        if limit_err:
+            return limit_err
+
+        job_id = f"{self._LLM_JOB_PREFIX}{int(utc_now().timestamp() * 1000)}"
+        job_kwargs = {
+            "trigger": "llm_scheduled",
+            "context": {
+                "reason": reason,
+                "scheduled_by": "llm_agent",
+                "job_id": job_id,
+                "schedule_kind": schedule_kind,
+            },
+            "fire_and_forget": False,
+        }
+
+        if schedule_kind == "interval":
+            min_interval = settings.llm_min_interval_minutes
+            if interval_minutes < min_interval:
+                return {
+                    "success": False,
+                    "job_id": None,
+                    "message": f"Interval 最小间隔为 {min_interval} 分钟，当前: {interval_minutes}",
+                }
+            hours = int(interval_minutes // 60) or None
+            minutes = int(interval_minutes % 60) or None
+            if not hours and not minutes:
+                minutes = int(interval_minutes) or 5
+            success = self.add_interval_job(
+                job_id=job_id,
+                func=_llm_scheduled_trigger,
+                minutes=minutes,
+                hours=hours,
+                require_trading_day=require_trading_day,
+                require_market_open=require_market_open,
+                kwargs=job_kwargs,
+            )
+            desc = f"每 {interval_minutes} 分钟"
+
+        elif schedule_kind == "cron":
+            if not cron_expr.strip():
+                return {
+                    "success": False,
+                    "job_id": None,
+                    "message": "cron 表达式不能为空",
+                }
+            # 解析 cron 表达式: "minute hour day month day_of_week"
+            try:
+                parts = cron_expr.strip().split()
+                if len(parts) < 5:
+                    return {
+                        "success": False,
+                        "job_id": None,
+                        "message": f"cron 表达式格式错误（需要 5 个字段: minute hour day month day_of_week）: {cron_expr}",
+                    }
+                from apscheduler.triggers.cron import CronTrigger
+                trigger = CronTrigger(
+                    minute=parts[0],
+                    hour=parts[1],
+                    day=parts[2],
+                    month=parts[3],
+                    day_of_week=parts[4],
+                    timezone=self._tz,
+                )
+            except Exception as e:
+                return {
+                    "success": False,
+                    "job_id": None,
+                    "message": f"cron 表达式解析失败: {e}",
+                }
+            success = self._add_job(
+                job_id, _llm_scheduled_trigger, trigger,
+                require_trading_day=require_trading_day,
+                require_market_open=require_market_open,
+                kwargs=job_kwargs,
+            )
+            desc = f"cron({cron_expr})"
+
+        else:
+            return {
+                "success": False,
+                "job_id": None,
+                "message": f"不支持的 schedule_kind: {schedule_kind}，可选: interval, cron",
+            }
+
+        if success:
+            return {
+                "success": True,
+                "job_id": job_id,
+                "message": f"已安排重复分析: {desc} (job: {job_id})",
+            }
+        else:
+            return {"success": False, "job_id": None, "message": "添加重复调度任务失败"}
 
     async def _guarded_workflow_execution(
         self,
