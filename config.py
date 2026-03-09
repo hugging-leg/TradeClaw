@@ -183,8 +183,18 @@ class Settings(BaseSettings):
         return path
 
     def get_database_url(self) -> str:
+        """返回同步数据库 URL（供 APScheduler / 通用 SQLAlchemy 使用）。
+
+        PostgreSQL URL 会被标准化为 ``postgresql+psycopg://`` dialect
+        """
         if self.database_url:
-            return self.database_url
+            url = self.database_url
+            # 标准化 PostgreSQL 方言为 psycopg v3
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql+psycopg://", 1)
+            elif url.startswith("postgresql://"):
+                url = url.replace("postgresql://", "postgresql+psycopg://", 1)
+            return url
         db_path = self.get_data_dir() / "trading_agent.db"
         return f"sqlite:///{db_path}"
 

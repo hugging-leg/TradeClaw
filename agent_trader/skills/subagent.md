@@ -43,7 +43,9 @@ spawn_subagent(
 - 拥有与你相同的**只读工具**（行情、新闻、搜索、代码执行、记忆等）
 - **不能执行交易**（rebalance_portfolio 等被排除）
 - **不能创建调度**（schedule_next_analysis 被排除）
-- **不能再派生子Agent**（防止递归）
+- **支持多层递归**：子 Agent 可以再派生子 Agent，受 `subagent_max_depth` 限制（默认 2 层）
+  - depth=0 为主 Agent，depth=1 为子 Agent，depth=2 为子子 Agent
+  - 当 depth+1 >= max_depth 时，子 Agent 不再拥有 spawn 工具
 
 ## 最佳实践
 
@@ -52,6 +54,7 @@ spawn_subagent(
 3. **汇总决策**：子 Agent 的结果返回后，由你做最终综合判断和交易决策
 4. **控制数量**：通常 2-5 个并行子 Agent 最优，过多会增加延迟
 5. **设置超时**：复杂分析可适当增加 timeout_seconds
+6. **谨慎递归**：仅在任务确实复杂、需要进一步分解时才让子 Agent 再派生子 Agent，避免不必要的 token 消耗
 
 ## 典型模式
 
