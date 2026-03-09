@@ -178,10 +178,28 @@ class SchedulerMixin:
         # 直接从 settings 获取同步 database URL。
         db_url = settings.get_database_url()
 
+        # SQLite: 设置 WAL 模式和 busy_timeout 以减少 "database is locked" 错误
+        engine_options: dict = {}
+        if "sqlite" in db_url:
+            from sqlalchemy import event as sa_event, create_engine as sa_create_engine
+
+            engine = sa_create_engine(db_url)
+
+            @sa_event.listens_for(engine, "connect")
+            def _set_sqlite_pragma(dbapi_conn, connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA busy_timeout=5000")
+                cursor.close()
+
+            jobstore = SQLAlchemyJobStore(engine=engine, tablename="apscheduler_jobs")
+        else:
+            jobstore = SQLAlchemyJobStore(url=db_url, tablename="apscheduler_jobs")
+
         self._scheduler = AsyncIOScheduler(
             timezone=self._tz,
             jobstores={
-                "default": SQLAlchemyJobStore(url=db_url, tablename="apscheduler_jobs"),
+                "default": jobstore,
             },
             job_defaults={
                 "coalesce": True,

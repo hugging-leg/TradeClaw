@@ -18,6 +18,7 @@ from agent_trader.agents.subagent import (
     SubAgentTask,
     SubAgentResult,
     _WRITE_TOOL_NAMES,
+    _SPAWN_TOOL_NAMES,
 )
 
 
@@ -77,8 +78,14 @@ class TestWriteToolExclusion:
         assert "rebalance_portfolio" in _WRITE_TOOL_NAMES
         assert "adjust_position" in _WRITE_TOOL_NAMES
         assert "schedule_next_analysis" in _WRITE_TOOL_NAMES
-        assert "spawn_subagent" in _WRITE_TOOL_NAMES
-        assert "spawn_parallel_subagents" in _WRITE_TOOL_NAMES
+        # spawn tools are now in _SPAWN_TOOL_NAMES (not _WRITE_TOOL_NAMES)
+        assert "spawn_subagent" not in _WRITE_TOOL_NAMES
+        assert "spawn_parallel_subagents" not in _WRITE_TOOL_NAMES
+
+    def test_spawn_tool_names_defined(self):
+        """Test that _SPAWN_TOOL_NAMES contains expected tools."""
+        assert "spawn_subagent" in _SPAWN_TOOL_NAMES
+        assert "spawn_parallel_subagents" in _SPAWN_TOOL_NAMES
 
     def test_readonly_tools_filter(self):
         """Test that SubAgentExecutor correctly filters out write tools."""
@@ -162,6 +169,67 @@ class TestSubAgentExecutorLimits:
 
         # Should only execute max_parallel tasks
         assert len(results) == 2
+
+
+class TestSubAgentRecursion:
+    """Test multi-level subagent recursion support."""
+
+    def _make_executor(self, depth=1, max_depth=3, max_parallel=5):
+        """Create a SubAgentExecutor with specified limits."""
+        wf = Mock()
+        wf.tools = []
+        wf.llm = Mock()
+        wf.store = Mock()
+        wf.emit_step = Mock(return_value="step-1")
+        wf.update_step = Mock()
+
+        with patch('agent_trader.agents.subagent.settings') as mock_s:
+            mock_s.subagent_max_depth = max_depth
+            mock_s.subagent_max_parallel = max_parallel
+            executor = SubAgentExecutor(parent_workflow=wf, depth=depth)
+
+        return executor
+
+    def test_child_spawn_tools_injected_when_depth_allows(self):
+        """When depth+1 < max_depth, child spawn tools should be created."""
+        executor = self._make_executor(depth=1, max_depth=3)
+        tools = executor._make_child_spawn_tools("parent-step-id")
+        tool_names = {t.name for t in tools}
+        assert "spawn_subagent" in tool_names
+        assert "spawn_parallel_subagents" in tool_names
+
+    def test_child_spawn_tools_empty_at_depth_limit(self):
+        """When depth+1 >= max_depth, no spawn tools should be created."""
+        executor = self._make_executor(depth=2, max_depth=3)
+        tools = executor._make_child_spawn_tools("parent-step-id")
+        assert len(tools) == 0
+
+    def test_child_spawn_tools_empty_at_max_depth_2(self):
+        """With default max_depth=2, depth=1 children cannot spawn."""
+        executor = self._make_executor(depth=1, max_depth=2)
+        tools = executor._make_child_spawn_tools("parent-step-id")
+        assert len(tools) == 0
+
+    def test_readonly_tools_exclude_spawn(self):
+        """Spawn tools from parent should be excluded from readonly tools."""
+        wf = Mock()
+        mock_tools = []
+        for name in ["get_market_data", "spawn_subagent", "spawn_parallel_subagents"]:
+            t = Mock()
+            t.name = name
+            mock_tools.append(t)
+        wf.tools = mock_tools
+
+        with patch('agent_trader.agents.subagent.settings') as mock_s:
+            mock_s.subagent_max_depth = 3
+            mock_s.subagent_max_parallel = 5
+            executor = SubAgentExecutor(parent_workflow=wf, depth=1)
+
+        readonly = executor._get_readonly_tools()
+        readonly_names = {t.name for t in readonly}
+        assert "get_market_data" in readonly_names
+        assert "spawn_subagent" not in readonly_names
+        assert "spawn_parallel_subagents" not in readonly_names
 
 
 class TestSubAgentConfig:

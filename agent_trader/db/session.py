@@ -27,20 +27,20 @@ _session_factory = None
 
 def _get_async_database_url() -> str:
     """
-    转换数据库 URL 为异步驱动格式
+    转换数据库 URL 为异步驱动格式。
 
-    sqlite:/// -> sqlite+aiosqlite:///
-    postgresql:// -> postgresql+asyncpg://
+    get_database_url() 已经标准化了 PostgreSQL dialect：
+      - SQLite:     sqlite:///...          -> sqlite+aiosqlite:///...
+      - PostgreSQL: postgresql+psycopg://.. -> postgresql+psycopg_async://..
     """
-    # 使用配置方法获取数据库 URL（支持 data_dir）
     url = settings.get_database_url()
 
-    if url.startswith('sqlite:'):
-        return url.replace('sqlite:', 'sqlite+aiosqlite:')
-    elif url.startswith('postgresql:'):
-        return url.replace('postgresql:', 'postgresql+asyncpg:')
-    elif url.startswith('postgres:'):
-        return url.replace('postgres:', 'postgresql+asyncpg:')
+    if url.startswith('sqlite'):
+        # sqlite:///... -> sqlite+aiosqlite:///...
+        return url.replace('sqlite:', 'sqlite+aiosqlite:', 1)
+    elif 'postgresql' in url or 'postgres' in url:
+        # postgresql+psycopg://... -> postgresql+psycopg_async://...
+        return url.replace('+psycopg://', '+psycopg_async://', 1)
 
     return url
 
@@ -56,12 +56,25 @@ async def init_db():
         db_url = _get_async_database_url()
         logger.info(f"初始化数据库: {db_url.split('@')[-1] if '@' in db_url else db_url}")
 
+        is_sqlite = 'sqlite' in db_url
+
         # 创建异步引擎
         _engine = create_async_engine(
             db_url,
             echo=False,
-            poolclass=NullPool if 'sqlite' in db_url else None
+            poolclass=NullPool if is_sqlite else None,
         )
+
+        # SQLite: 启用 WAL 模式以允许并发读写，减少 "database is locked" 错误
+        if is_sqlite:
+            from sqlalchemy import event, text
+
+            @event.listens_for(_engine.sync_engine, "connect")
+            def _set_sqlite_pragma(dbapi_conn, connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA busy_timeout=5000")
+                cursor.close()
 
         # 创建会话工厂
         _session_factory = async_sessionmaker(

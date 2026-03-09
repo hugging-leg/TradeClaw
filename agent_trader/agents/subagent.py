@@ -8,7 +8,7 @@ SubAgent 并行执行引擎
 设计决策：
 - 子 Agent 共享主 Agent 的 LLM client 和 store，但使用独立的 thread_id
 - 子 Agent 仅继承只读工具（排除交易执行类工具），交易决策由主 Agent 自行执行
-- 深度限制防止无限递归（子 Agent 不能再派生子 Agent）
+- 支持多层递归：子 Agent 可以再派生子 Agent，受 subagent_max_depth 限制
 - 每个子 Agent 有独立的 timeout 控制
 """
 
@@ -36,7 +36,10 @@ _WRITE_TOOL_NAMES = frozenset({
     # schedule tools — 子 Agent 不应创建调度
     "schedule_next_analysis",
     "cancel_scheduled_analysis",
-    # subagent tools — 防止递归
+})
+
+# spawn 工具名称 — 子 Agent 的 spawn 工具由 _make_child_spawn_tools 动态生成（带 depth+1）
+_SPAWN_TOOL_NAMES = frozenset({
     "spawn_subagent",
     "spawn_parallel_subagents",
 })
@@ -91,14 +94,116 @@ class SubAgentExecutor:
         """
         从主 Agent 的工具列表中过滤出只读工具。
 
-        排除交易执行类工具和子 Agent 工具（防止递归）。
+        排除交易执行类工具和 spawn 工具（spawn 工具由 _make_child_spawn_tools 动态生成）。
         """
         readonly = []
         for tool_obj in self.parent.tools:
             name = getattr(tool_obj, "name", "")
-            if name not in _WRITE_TOOL_NAMES:
+            if name not in _WRITE_TOOL_NAMES and name not in _SPAWN_TOOL_NAMES:
                 readonly.append(tool_obj)
         return readonly
+
+    def _make_child_spawn_tools(self, child_group_step_id: str) -> List[Any]:
+        """
+        为子 Agent 创建 depth-aware 的 spawn 工具。
+
+        如果当前 depth+1 >= max_depth，不注入 spawn 工具（子 Agent 无法再递归）。
+        否则注入带有 depth+1 的 spawn_subagent / spawn_parallel_subagents。
+        """
+        import json as _json
+        from langchain.tools import tool as _tool
+
+        child_depth = self._depth + 1
+        if child_depth >= self._max_depth:
+            return []  # 到达深度上限，不注入 spawn 工具
+
+        parent_wf = self.parent
+
+        @_tool
+        async def spawn_subagent(task: str, timeout_seconds: int = 600) -> str:
+            """
+            派生一个子 Agent 执行特定分析任务（递归）。
+
+            子 Agent 拥有与你相同的只读工具，但不能执行交易操作。
+            适用于需要独立深入分析的子任务。
+
+            Args:
+                task: 子 Agent 要执行的任务描述（自然语言，越具体越好）
+                timeout_seconds: 超时时间（秒），默认 600
+
+            Returns:
+                子 Agent 的分析结果文本
+            """
+            sub_executor = SubAgentExecutor(
+                parent_workflow=parent_wf,
+                depth=child_depth,
+                group_parent_step_id=child_group_step_id,
+            )
+            task_obj = SubAgentTask(
+                task_id=uuid.uuid4().hex[:8],
+                task=task,
+                timeout_seconds=timeout_seconds,
+            )
+            results = await sub_executor.run_subagents([task_obj])
+            r = results[0]
+            return _json.dumps({
+                "task": task,
+                "status": r.status,
+                "output": r.output or "(无输出)",
+                "tool_calls": r.tool_calls,
+                "duration_ms": r.duration_ms,
+                "error": r.error,
+            }, indent=2, ensure_ascii=False)
+
+        @_tool
+        async def spawn_parallel_subagents(tasks: List[str], timeout_seconds: int = 600) -> str:
+            """
+            并行派生多个子 Agent 执行不同的分析任务（递归）。
+
+            每个子 Agent 拥有与你相同的只读工具，但不能执行交易操作。
+            适用于需要多角度分析同一问题的场景。
+
+            Args:
+                tasks: 任务描述列表，每个字符串对应一个子 Agent
+                timeout_seconds: 每个子 Agent 的超时时间（秒），默认 600
+
+            Returns:
+                所有子 Agent 的分析结果汇总
+            """
+            sub_executor = SubAgentExecutor(
+                parent_workflow=parent_wf,
+                depth=child_depth,
+                group_parent_step_id=child_group_step_id,
+            )
+            task_objs = [
+                SubAgentTask(
+                    task_id=uuid.uuid4().hex[:8],
+                    task=t,
+                    timeout_seconds=timeout_seconds,
+                )
+                for t in tasks
+            ]
+            results = await sub_executor.run_subagents(task_objs)
+            output = {
+                "total_tasks": len(tasks),
+                "completed": sum(1 for r in results if r.status == "success"),
+                "failed": sum(1 for r in results if r.status == "failed"),
+                "timeout": sum(1 for r in results if r.status == "timeout"),
+                "results": [
+                    {
+                        "task_id": r.task_id,
+                        "status": r.status,
+                        "output": r.output or "(无输出)",
+                        "tool_calls": r.tool_calls,
+                        "duration_ms": r.duration_ms,
+                        "error": r.error,
+                    }
+                    for r in results
+                ],
+            }
+            return _json.dumps(output, indent=2, ensure_ascii=False)
+
+        return [spawn_subagent, spawn_parallel_subagents]
 
     async def run_subagents(
         self,
@@ -177,19 +282,33 @@ class SubAgentExecutor:
         )
 
         try:
-            # 创建独立的子 Agent（共享 LLM + 只读工具）
+            # 创建独立的子 Agent（共享 LLM + 只读工具 + 可能的 spawn 工具）
             readonly_tools = self._get_readonly_tools()
+            child_spawn_tools = self._make_child_spawn_tools(group_step_id)
+            all_tools = readonly_tools + child_spawn_tools
+
+            # 构建 system prompt
+            can_spawn = len(child_spawn_tools) > 0
+            remaining_depth = self._max_depth - self._depth - 1
+            spawn_hint = ""
+            if can_spawn:
+                spawn_hint = (
+                    f"\n\n你可以使用 spawn_subagent / spawn_parallel_subagents 工具"
+                    f"将子任务委托给更深层的子 Agent（剩余可递归层数: {remaining_depth}）。"
+                    f"仅在任务确实复杂、需要进一步分解时才使用，避免不必要的递归。"
+                )
             system_prompt = (
                 f"你是一个专注的分析助手。你的唯一任务是:\n\n"
                 f"{task.task}\n\n"
                 f"请使用可用的工具收集信息，然后给出简洁、具体的分析结论。"
                 f"不要执行任何交易操作，只做分析。"
                 f"完成分析后直接输出结论。"
+                f"{spawn_hint}"
             )
 
             sub_agent = create_agent(
                 self.parent.llm,
-                readonly_tools,
+                all_tools,
                 system_prompt=system_prompt,
                 checkpointer=None,
                 store=self.parent.store,
