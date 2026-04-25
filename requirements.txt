@@ -1,5 +1,5 @@
 # ========== Core Trading ==========
-alpaca-py>=0.21.0
+alpaca-py>=0.43.3
 python-telegram-bot>=20.0
 requests>=2.31.0
 
